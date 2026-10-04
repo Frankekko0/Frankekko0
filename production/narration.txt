@@ -1,0 +1,124 @@
+## ACT0 COLD OPEN
+Enron wasn't destroyed because it ran out of customers.
+In 2001, its pipelines were still moving gas. Its traders were still making deals.
+The real problem had started almost a decade earlier, with a decision about how to count money.
+In 1992, Enron got permission to use an accounting method that could turn profits expected in the future... into profits reported today.
+The cash didn't have to arrive yet. But on paper, Enron could look spectacular.
+And as Wall Street fell in love with the company, keeping that picture alive became critical.
+By 2000, Enron was worth nearly seventy billion dollars.
+Then, in less than two months, it was gone.
+Billions in savings. Thousands of jobs. One of America's most admired companies.
+To understand how, you need one accounting idea that changed everything.
+
+## ACT1 THE PERFECT COMPANY
+Houston, Texas. 1985.
+Two natural gas pipeline companies merge into what soon becomes Enron, led by Kenneth Lay.
+At first, Enron moves gas. Steady. Predictable. A little boring.
+Then Lay brings in a sharp McKinsey consultant named Jeffrey Skilling.
+Skilling's big idea was a "Gas Bank." Enron wouldn't just move energy. It would trade it, the way a bank trades money.
+It worked. By the late nineties, Enron was trading natural gas, electricity, even internet bandwidth.
+Fortune magazine named it "America's Most Innovative Company" six years in a row.
+In 2000, Enron reported revenue of about one hundred billion dollars. That August, its stock hit an all-time high. More than ninety dollars a share.
+Enron looked like the future.
+But underneath that success was a question almost nobody was asking.
+How much of that profit had actually arrived as cash?
+
+## ACT2 THE ACCOUNTING MACHINE
+To answer that, we have to go back to 1992.
+Skilling wanted Enron to use mark-to-market accounting. In January 1992, the Securities and Exchange Commission approved it for Enron's natural gas contracts.
+Imagine Enron signs a ten-year contract it expects to earn one hundred million dollars in profit.
+Under traditional accounting, that profit shows up gradually, as the gas is delivered and the money comes in.
+Under mark-to-market, Enron could estimate what the whole contract was worth today, and book that value as profit now.
+Year one. One giant number.
+Now, mark-to-market isn't fraud. It's widely used for things with clear market prices.
+The danger is in one word. Estimate.
+Many of Enron's long-term deals had no market price to check against. Their value rested on Enron's own assumptions.
+Make those assumptions a little more optimistic, and the profit gets bigger. Instantly.
+And here's the crucial part. The profit is reported now. The cash might arrive years later. Or never match the estimate at all.
+Accounting profit is what the financial statements say you earned. Cash flow is the money that actually comes through the door.
+At Enron, the two drifted far apart.
+One real example: in July 2000, Enron announced a twenty-year deal with Blockbuster for movies on demand.
+It never got beyond small pilot tests, and it ended in March 2001.
+But Enron had already booked about one hundred and eleven million dollars in profit from it, based largely on projected future earnings.
+And once you've reported a contract's future profit today, you can't report it again tomorrow.
+So to keep growing, Enron needed more deals. Bigger deals. Every single quarter.
+The accounting had built a treadmill. And it was speeding up.
+
+## ACT3 EXPECTATIONS KEEP RISING
+In 1999, Enron's stock rose fifty-six percent. In 2000, another eighty-seven percent.
+Stock tickers were installed in the lobbies and elevators. Executives were paid heavily in stock options.
+The share price wasn't just a number. It was the scoreboard.
+Analysts expected Enron to hit its targets every quarter. And Enron delivered. Again. And again.
+But every success raised the bar for the next one.
+Meanwhile, some of its biggest bets, like overseas power plants and a broadband network, were struggling.
+The machine needed constant growth. And real growth was getting harder to find.
+So where do you put the losses, and the debt, when your story can't afford them?
+
+## ACT4 HIDING THE PROBLEMS
+Enter Andrew Fastow, Enron's chief financial officer from 1998.
+His specialty: special-purpose entities.
+Basically, a separate company created for one specific job. Companies use them legitimately all the time.
+Under the rules back then, an outside investor with as little as three percent of the capital at risk could make the entity count as independent.
+And that mattered. Because its assets, and its debt, could stay off Enron's balance sheet.
+Enron used them again and again. Chewco. LJM. And the Raptors, named after the dinosaurs in Jurassic Park.
+But in several cases, the outside money wasn't really outside.
+Chewco, it later emerged, didn't meet the three percent rule at all.
+The Raptors made Enron's investment losses look hedged, covered by someone else. But that someone else was effectively backed by Enron's own stock.
+A later investigation for Enron's board found these deals inflated reported earnings by almost one billion dollars, in just over a year.
+Then there was the conflict of interest.
+Fastow didn't just design the LJM partnerships. He ran them, while serving as C.F.O. Enron's board approved it, as an exception to its own code of conduct.
+The investigation found Fastow was involved on both sides of these deals, and made more than thirty million dollars from them.
+On paper, Enron looked stronger than ever.
+In reality, risk was piling up in places investors could barely see.
+
+## ACT5 THE WARNING SIGNS
+But some people started looking.
+March 2001. In Fortune, the same magazine that kept calling Enron innovative, reporter Bethany McLean asked: "Is Enron Overpriced?"
+The real question: how exactly does Enron make its money?
+The financial statements were nearly impossible to decode. The debt was growing. And the cash didn't seem to line up with the profits.
+In August, just six months after becoming C.E.O., Jeffrey Skilling resigned, citing personal reasons.
+Kenneth Lay took the job back, and assured the market: no change in performance or outlook.
+The next day, a vice president named Sherron Watkins sent Lay an anonymous letter.
+One line would become famous.
+"I am incredibly nervous that we will implode in a wave of accounting scandals."
+By the end of August, the stock was below thirty-five dollars.
+The cracks were no longer invisible.
+
+## ACT6 THE COLLAPSE
+October sixteenth, 2001.
+Enron reports a third-quarter loss of six hundred and eighteen million dollars, after one point zero one billion in charges.
+It also reveals a one point two billion dollar cut to shareholders' equity, tied to partnerships run by its own C.F.O.
+October twenty-second. The S.E.C. starts asking questions. The stock falls to around twenty dollars.
+October twenty-fourth. Fastow is out.
+November eighth. Enron restates its results all the way back to 1997. Hundreds of millions in reported profit, erased. Hundreds of millions in debt, suddenly back on the books.
+And a trading company runs on trust. Partners have to believe you'll pay.
+That trust was vanishing.
+November ninth. A lifeline. Dynegy, a Houston rival, agrees to buy Enron.
+But the more Dynegy looked, the worse it got.
+November twenty-eighth. Credit agencies cut Enron to junk. Dynegy walks away.
+That day, Enron's stock closes at sixty-one cents.
+December second, 2001. Enron files for Chapter 11 bankruptcy protection.
+With sixty-three point four billion dollars in assets, it was the largest bankruptcy in American history at the time.
+From more than ninety dollars a share, to under one dollar. In about fifteen months.
+
+## ACT7 HUMAN CONSEQUENCES
+But Enron was never just a stock chart.
+Within days of the filing, about four thousand employees in Houston were laid off.
+Many had built their retirement on Enron stock. It made up roughly sixty percent of the company's 401(k) plan.
+Employees lost more than a billion dollars in retirement savings.
+Investors lost tens of billions of dollars in market value.
+And Enron's auditor, Arthur Andersen, one of the five biggest accounting firms in the world, went down with it.
+Its staff had shredded Enron documents. In June 2002, the firm was convicted of obstruction of justice, and its business collapsed.
+The Supreme Court later overturned the conviction. By then, almost nothing was left.
+Fastow pleaded guilty. Skilling was convicted and sentenced to twenty-four years, later reduced. Lay was convicted too, but died before sentencing.
+
+## ACT8 THE FINAL REVEAL
+So what really destroyed Enron?
+Not one accounting method. Not one partnership. Not one executive.
+It was a combination. Aggressive estimates that pulled future profits into the present. Debt and losses moved where investors could barely see them. A C.F.O. on both sides of the deal. Disclosures almost no one could understand. And relentless pressure to keep the numbers climbing.
+Mark-to-market didn't destroy Enron on its own. But it helped open the gap at the center of this story.
+The gap between looking profitable, and actually generating cash.
+Enron spent years showing Wall Street what it wanted to see.
+But accounting could only delay the moment when expectations collided with reality.
+And once investors stopped believing the numbers, Enron didn't have years left.
+It had weeks.

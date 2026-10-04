@@ -1,0 +1,4 @@
+production/build/
+production/assets/music/*.mp3
+__pycache__/
+*.pyc

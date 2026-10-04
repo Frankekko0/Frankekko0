@@ -1,0 +1,75 @@
+TITLE OPTIONS
+1. Enron: How America's "Most Innovative Company" Collapsed in Under Seven Weeks
+2. The Accounting Idea That Helped Bring Down Enron
+3. How Enron Looked Profitable Without the Cash
+
+DESCRIPTION
+In 1992, Enron got permission to use mark-to-market accounting for its natural gas contracts — a method that could turn estimated future profits into profits reported today. This documentary explains, in plain language, how aggressive estimates, special-purpose entities, conflicts of interest and opaque reporting combined until investors and lenders stopped believing the numbers — and Enron went from roughly $70 billion in market value to bankruptcy.
+
+CHAPTERS
+0:00 Cold open: the profit that wasn't cash
+0:53 Part 1 — The perfect company
+1:49 Part 2 — The accounting machine (mark-to-market explained)
+3:40 Part 3 — Expectations keep rising
+4:22 Part 4 — Hiding the problems (SPEs & Fastow)
+5:52 Part 5 — The warning signs
+6:48 Part 6 — The collapse
+8:09 Part 7 — The human cost
+9:07 Part 8 — The gap
+
+KEY SOURCES
+• Report of Investigation by the Special Investigative Committee of the Board of Directors of Enron Corp. ("Powers Report"), Feb. 1, 2002
+• Enron Corp. press release, Oct. 16, 2001: "Enron Reports Recurring Third Quarter Earnings of $0.43 per Diluted Share; Reports Non-Recurring Charges of $1.01 Billion After-Tax…"
+• U.S. SEC, complaint in SEC v. Kevin A. Howard and Michael W. Krautz (Enron Broadband "Braveheart"/Blockbuster transaction) — https://www.sec.gov/litigation/complaints/comp18030.htm
+• Bethany McLean, "Is Enron Overpriced?", Fortune, March 5, 2001; Bethany McLean & Peter Elkind, "The Smartest Guys in the Room" (2003)
+• U.S. House Committee on Energy and Commerce hearings (2002): "The Financial Collapse of Enron"; "Destruction of Enron-Related Documents by Andersen Personnel"
+• Arthur Andersen LLP v. United States, 544 U.S. 696 (2005)
+• Economic Policy Institute, "No More Enrons: Protecting 401(k) Plans for a Safe Retirement" (401(k) figures)
+• Enron (ENE) daily historical share prices, 1998–2001 — Famous Trials, UMKC School of Law — https://famous-trials.com/enron/1791-stockchart
+• Wikipedia, "Enron scandal" (cross-check of dates)
+
+Notes: the 10-year contract and the profit/cash curves are simplified illustrations, labelled as such on screen. Mark-to-market accounting is legitimate and widely used; the controversy concerned how Enron applied aggressive assumptions and combined them with other structures and misleading disclosures.
+
+CREDITS
+Narration: AI-generated voice (Kokoro-82M, Apache-2.0).
+Music:
+• "Echoes of Time v2" — Kevin MacLeod (incompetech.com), licensed under Creative Commons: By Attribution 4.0 — https://creativecommons.org/licenses/by/4.0/
+• "Inspired" — Kevin MacLeod (incompetech.com), licensed under Creative Commons: By Attribution 4.0 — https://creativecommons.org/licenses/by/4.0/
+• "Impact Prelude" — Kevin MacLeod (incompetech.com), licensed under Creative Commons: By Attribution 4.0 — https://creativecommons.org/licenses/by/4.0/
+• "Rising Tide" — Kevin MacLeod (incompetech.com), licensed under Creative Commons: By Attribution 4.0 — https://creativecommons.org/licenses/by/4.0/
+• "Static Motion" — Kevin MacLeod (incompetech.com), licensed under Creative Commons: By Attribution 4.0 — https://creativecommons.org/licenses/by/4.0/
+• "Lightless Dawn" — Kevin MacLeod (incompetech.com), licensed under Creative Commons: By Attribution 4.0 — https://creativecommons.org/licenses/by/4.0/
+• "Interloper" — Kevin MacLeod (incompetech.com), licensed under Creative Commons: By Attribution 4.0 — https://creativecommons.org/licenses/by/4.0/
+• "Heartbreaking" — Kevin MacLeod (incompetech.com), licensed under Creative Commons: By Attribution 4.0 — https://creativecommons.org/licenses/by/4.0/
+• "Despair and Triumph" — Kevin MacLeod (incompetech.com), licensed under Creative Commons: By Attribution 4.0 — https://creativecommons.org/licenses/by/4.0/
+Photos and documents:
+• Arthur Andersen witnesses at a House hearing, Jan. 24, 2002 — unknown author, Public domain — https://commons.wikimedia.org/wiki/File:Arthur_Andersen_Witnesses.jpg
+• A Blockbuster Video store sign (2018) — Jon Konrath from Oakland, USA, CC BY 2.0 — https://commons.wikimedia.org/w/index.php?curid=74569517
+• Bob Casey Federal Courthouse, Houston — unknown author, Public domain — https://commons.wikimedia.org/wiki/File:CaseyFederalCourthouseHoustonTX.JPG
+• Chicago Stock Exchange quotation board — tziralis, CC BY 2.0 — https://live.staticflickr.com/3204/2664857467_0428b16be5_b.jpg
+• Enron Code of Ethics (July 2000) — Enron Corporation, Public domain — https://commons.wikimedia.org/wiki/File:Enron_Code_of_Ethics_cover.jpg
+• The Enron-backed Dabhol power plant, India (photo: 2010) — Amrutamjoglekar, CC BY-SA 3.0 — https://commons.wikimedia.org/w/index.php?curid=12689846
+• Enron's former headquarters complex, Houston (2008) — Alex, CC BY 2.0 — https://commons.wikimedia.org/wiki/File:Enron_Complex.jpg
+• Skybridge at Enron's former downtown complex, Houston — Chanilim714, CC BY-SA 3.0 — https://commons.wikimedia.org/w/index.php?curid=52570685
+• Enron Field, Houston — Carol M. Highsmith, Public domain — https://commons.wikimedia.org/wiki/File:Enron_Stadium,_Houston,_Texas_LCCN2011631609.tif
+• An Enron corporate jet — contri from Yonezawa, Yamagata, Japan, CC BY-SA 2.0 — https://commons.wikimedia.org/wiki/File:Enron_Corporation_Dassault_Falcon_900_(N5733-39)_(16382424096).jpg
+• enron_logo — Paul Rand, Public domain — https://commons.wikimedia.org/wiki/File:Logo_of_Enron_Corporation_(1997).svg
+• Fiber-optic cable reels — Robert Ashworth from Bellingham, WA., USA, CC BY 2.0 — https://commons.wikimedia.org/w/index.php?curid=66741523
+• hearing_doc_shredding — U.S. House Committee on Energy and Commerce, Public domain
+• Downtown Houston at night — Gabor Eszes (UED77), CC BY-SA 3.0 — https://commons.wikimedia.org/wiki/File:JPMorgan_Chase_Tower_with_Houston_Skyline_at_night.jpg
+• Houston, seen from the International Space Station — NASA, Public domain — https://commons.wikimedia.org/wiki/File:ISS-39_Houston,_Texas.jpg
+• Houston, January 2002 — billjacobus1, CC BY 2.0 — https://commons.wikimedia.org/wiki/File:Houston_sunrise.jpg
+• Kenneth Lay (2004) — United States Marshals Service, Public domain — https://commons.wikimedia.org/wiki/File:Ken_Lay.jpg
+• Bethany McLean (2018) — slowking4, CC BY-SA 2.5 — https://commons.wikimedia.org/wiki/File:Bethany_McLean_9160060.jpg
+• New York Stock Exchange trading floor — The original uploader was Asy arch at English Wikipedia., CC BY-SA 3.0 — https://commons.wikimedia.org/wiki/File:NYSE_Advanced_Trading_Floor.jpg
+• Natural gas pipeline construction — Ulrichulrich, CC BY 3.0 — https://commons.wikimedia.org/wiki/File:Pipline_Erdgas_800.JPG
+• A bank trading floor — ralvin, CC BY 2.0 — https://live.staticflickr.com/2754/4483127291_ce4229d0d3_b.jpg
+• Paper shredder — Raimond Spekking, CC BY-SA 4.0 — https://commons.wikimedia.org/wiki/File:Paper_shredder_-_detail-9831.jpg
+• Jeffrey Skilling (2004) — United States Marshals Service, Public domain — https://commons.wikimedia.org/wiki/File:Jeffrey_Skilling_mug_shot.jpg
+• U.S. Supreme Court — Jeff Kubina, Public domain — https://commons.wikimedia.org/wiki/File:United_states_supreme_court_building.png
+• Wall Street, circa 2000 — Thermidor2, CC BY-SA 4.0 — https://commons.wikimedia.org/wiki/File:Wall_Street_Sign_-_with_Stop_Sign_-_Circa_2000.jpg
+• Sherron Watkins (later years) — Regina Kühne, CC BY-SA 4.0 — https://commons.wikimedia.org/w/index.php?curid=145343876
+Fonts: Inter, Oswald, Playfair Display, IBM Plex Mono, Courier Prime (SIL Open Font License).
+
+TAGS
+Enron, Enron scandal, mark-to-market accounting, corporate fraud, business documentary, Jeffrey Skilling, Kenneth Lay, Andrew Fastow, Arthur Andersen, special purpose entities, accounting scandal, stock market collapse, finance explained
