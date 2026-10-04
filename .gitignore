@@ -3,3 +3,4 @@ production/assets/music/*.mp3
 __pycache__/
 *.pyc
 production/deliverables/*.mp4
+production/deliverables/parts/
