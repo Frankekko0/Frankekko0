@@ -528,10 +528,10 @@ els.append(T("$100M", 340, 180, cls="cap-m gold shadow", at=yb + 0.7, anim="pop"
 els.append(T("BOOKED AS PROFIT NOW", 470, 420, cls="label-l gold", at=w("ACT2_05", "now") - 0.1, anchor="l"))
 els.append(T("Simplified illustration: in practice, the expected future cash flows were estimated and discounted to a present value.", 960, 1010, cls="label",
              at=yb + 0.8, style={"fontSize": "17px", "letterSpacing": "0.08em", "textTransform": "none"}))
-shot(s, DARK, els, cam=[[0, 1.0, 0, 0], [E("ACT2_05") - s, 1.0, 0, 0], [E("ACT2_06") - s, 1.22, 460, 120]])
+shot(s, DARK, els, cam=[[0, 1.0, 0, 0], [E("ACT2_05") - s, 1.0, 0, 0], [E("ACT2_06") - s, 1.15, 330, 90]])
 sfx(yb + 0.25, "whoosh", -6)
-caption("YEAR ONE.", L("ACT2_06"), w("ACT2_06", "one", 2) - 0.05, pos=(1180, 780), cls="cap-xl shadow")
-caption("ONE **GIANT** NUMBER.", w("ACT2_06", "one", 2), E("ACT2_06") + 0.4, pos=(1180, 780), cls="cap-l shadow")
+caption("YEAR ONE.", L("ACT2_06"), w("ACT2_06", "one", 2) - 0.05, pos=(1180, 620), cls="cap-xl shadow")
+caption("ONE **GIANT** NUMBER.", w("ACT2_06", "one", 2), E("ACT2_06") + 0.4, pos=(1180, 620), cls="cap-l shadow")
 sfx(L("ACT2_06"), "hit", -6)
 s = L("ACT2_07")
 shot(s, PH("chicago_floor", "in", dim=0.35), [])
