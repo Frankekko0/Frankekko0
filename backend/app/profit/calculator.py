@@ -22,6 +22,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.core.money import CENT, ZERO, floor_money, money
+from app.schemas.common import Money
 
 D = Decimal
 
@@ -29,21 +30,21 @@ D = Decimal
 class CostProfile(BaseModel):
     """User-configurable cost model. Defaults reflect buying and reselling on Vinted Italy."""
 
-    buyer_protection_fixed: Decimal = Field(default=D("0.70"), ge=0, le=100)
-    buyer_protection_pct: Decimal = Field(default=D("0.05"), ge=0, le=1)
-    shipping_in: Decimal = Field(default=D("3.49"), ge=0, le=200, description="Default inbound shipping")
+    buyer_protection_fixed: Money = Field(default=D("0.70"), ge=0, le=100)
+    buyer_protection_pct: Money = Field(default=D("0.05"), ge=0, le=1)
+    shipping_in: Money = Field(default=D("3.49"), ge=0, le=200, description="Default inbound shipping")
     use_listing_shipping: bool = Field(
         default=True, description="Prefer the shipping fee shown on the listing"
     )
-    other_acquisition: Decimal = Field(default=ZERO, ge=0, le=1000)
-    selling_fee_fixed: Decimal = Field(default=ZERO, ge=0, le=100)
-    selling_fee_pct: Decimal = Field(default=ZERO, ge=0, le=1)
-    shipping_out: Decimal = Field(default=ZERO, ge=0, le=200, description="Shipping paid by you when selling")
-    packaging: Decimal = Field(default=D("0.50"), ge=0, le=100)
-    advertising: Decimal = Field(default=ZERO, ge=0, le=500, description="Bumps / promoted listings")
-    payment_fee_fixed: Decimal = Field(default=ZERO, ge=0, le=100)
-    payment_fee_pct: Decimal = Field(default=ZERO, ge=0, le=1)
-    other_sale: Decimal = Field(default=ZERO, ge=0, le=1000)
+    other_acquisition: Money = Field(default=ZERO, ge=0, le=1000)
+    selling_fee_fixed: Money = Field(default=ZERO, ge=0, le=100)
+    selling_fee_pct: Money = Field(default=ZERO, ge=0, le=1)
+    shipping_out: Money = Field(default=ZERO, ge=0, le=200, description="Shipping paid by you when selling")
+    packaging: Money = Field(default=D("0.50"), ge=0, le=100)
+    advertising: Money = Field(default=ZERO, ge=0, le=500, description="Bumps / promoted listings")
+    payment_fee_fixed: Money = Field(default=ZERO, ge=0, le=100)
+    payment_fee_pct: Money = Field(default=ZERO, ge=0, le=1)
+    other_sale: Money = Field(default=ZERO, ge=0, le=1000)
 
     def acquisition_fixed(self, listing_shipping: Decimal | None = None) -> Decimal:
         return self.buyer_protection_fixed + self.shipping(listing_shipping) + self.other_acquisition

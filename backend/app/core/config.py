@@ -73,10 +73,11 @@ class Settings(BaseSettings):
 
     # --- AI ------------------------------------------------------------------------------
     ai_api_key: SecretStr | None = None
-    ai_model: str = "claude-sonnet-5-5"
+    ai_model: str = "claude-opus-5-5"
+    ai_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     ai_vision_enabled: bool = True
     ai_auto_analyze_min_flip_score: float = 80.0
-    ai_timeout_seconds: float = 30.0
+    ai_timeout_seconds: float = 90.0
 
     # --- Notifications -------------------------------------------------------------------
     telegram_bot_token: SecretStr | None = None

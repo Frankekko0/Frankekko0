@@ -67,7 +67,7 @@ class RateLimitedError(AppError):
 
 
 class InsufficientDataError(AppError):
-    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    status_code = 422
     code = "insufficient_data"
     message = "Non ci sono abbastanza dati per stimare con affidabilità il prezzo di mercato."
 
@@ -121,7 +121,7 @@ def install_exception_handlers(app: FastAPI) -> None:
                 {"field": loc, "message": _VALIDATION_MESSAGES.get(err.get("type", ""), err.get("msg"))}
             )
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,
             content=_payload(
                 "validation_error", "Alcuni campi non sono validi.", fields, _request_id(request)
             ),

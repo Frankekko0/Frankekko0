@@ -16,12 +16,13 @@ from decimal import Decimal
 from pydantic import BaseModel, Field
 
 from app.domain.enums import Verdict
+from app.schemas.common import Money
 
 
 class ScenarioSummary(BaseModel):
     name: str
-    sale_price: Decimal
-    net_profit: Decimal
+    sale_price: Money
+    net_profit: Money
     roi: Decimal
 
 
@@ -34,14 +35,14 @@ class DealContext(BaseModel):
     model: str | None = None
     condition: str
     size: str | None = None
-    listing_price: Decimal
-    total_acquisition_cost: Decimal
-    fair_market_value: Decimal | None = None
+    listing_price: Money
+    total_acquisition_cost: Money
+    fair_market_value: Money | None = None
     discount_vs_market: float | None = None
     scenarios: list[ScenarioSummary] = Field(default_factory=list)
-    max_buy_price: Decimal | None = None
-    good_buy_price: Decimal | None = None
-    suggested_offer: Decimal | None = None
+    max_buy_price: Money | None = None
+    good_buy_price: Money | None = None
+    suggested_offer: Money | None = None
     demand_level: str
     sell_through_rate: float
     estimated_days_to_sell: float
@@ -68,8 +69,8 @@ class DealAnalysis(BaseModel):
     pros: list[str] = Field(default_factory=list)
     cons: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
-    recommended_resale_price: Decimal | None = None
-    suggested_max_offer: Decimal | None = None
+    recommended_resale_price: Money | None = None
+    suggested_max_offer: Money | None = None
     provider: str = "rules"
     model: str | None = None
 
