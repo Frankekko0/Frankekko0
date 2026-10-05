@@ -6,6 +6,7 @@ Run with ``python -m app.seed`` (the Docker entrypoint does it after migrations)
 from __future__ import annotations
 
 import asyncio
+import secrets
 from datetime import UTC, datetime
 from decimal import Decimal as D
 from typing import Any
@@ -106,11 +107,9 @@ async def seed_demo_user(session: AsyncSession) -> None:
     user = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if user is not None:
         return
-    user = User(
-        email=email,
-        password_hash=hash_password(settings.demo_user_password.get_secret_value()),
-        display_name="Demo Reseller",
-    )
+    configured = settings.demo_user_password
+    password = configured.get_secret_value() if configured else secrets.token_urlsafe(32)
+    user = User(email=email, password_hash=hash_password(password), display_name="Demo Reseller")
     session.add(user)
     await session.flush()
     await ensure_user_defaults(session, user)

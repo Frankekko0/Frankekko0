@@ -13,6 +13,9 @@ from app.identification.taxonomy import fold
 # would notify for every overpriced Nike item.
 WATCHLIST_DEFAULT_MIN_FLIP = 60
 PRICE_DROP_MIN_RATIO = Decimal("0.05")
+# Opportunity alerts are about acting fast: never alert on listings published long ago
+# (e.g. the historical backfill). A price drop is a fresh event at any listing age.
+FRESH_LISTING_MAX_HOURS = 72.0
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,7 @@ class AlertCandidate:
     risk: int
     is_ultra: bool
     is_new: bool
+    listing_age_hours: float | None = None  # since publication; None = unknown
 
 
 @dataclass(frozen=True)
@@ -148,13 +152,15 @@ def decide_alerts(
     price_drop_enabled: bool = True,
     watchlist_enabled: bool = True,
     new_opportunity_enabled: bool = True,
+    max_listing_age_hours: float = FRESH_LISTING_MAX_HOURS,
 ) -> list[AlertDecision]:
     """Which alerts a user should get for this analysis (at most one per type/watchlist)."""
     decisions: list[AlertDecision] = []
     root = c.root_listing_id
     line = summary_line(c)
+    fresh = c.listing_age_hours is None or c.listing_age_hours <= max_listing_age_hours
 
-    if ultra_enabled and c.is_ultra:
+    if ultra_enabled and fresh and c.is_ultra:
         decisions.append(
             AlertDecision(
                 AlertType.ULTRA_DEAL,
@@ -182,7 +188,7 @@ def decide_alerts(
         )
 
     already_ultra = any(d.type == AlertType.ULTRA_DEAL for d in decisions)
-    if watchlist_enabled:
+    if watchlist_enabled and fresh:
         for w in watchlists:
             if matches_watchlist(c, w):
                 decisions.append(
@@ -196,7 +202,13 @@ def decide_alerts(
                     )
                 )
 
-    if new_opportunity_enabled and not already_ultra and c.is_new and passes_thresholds(c, thresholds):
+    if (
+        new_opportunity_enabled
+        and fresh
+        and not already_ultra
+        and c.is_new
+        and passes_thresholds(c, thresholds)
+    ):
         decisions.append(
             AlertDecision(
                 AlertType.NEW_OPPORTUNITY,

@@ -40,6 +40,9 @@ WAIST_CATEGORIES = {"jeans", "trousers"}
 def normalize_condition(raw: str | None) -> Condition:
     if not raw:
         return Condition.UNKNOWN
+    canonical = raw.strip().lower().replace(" ", "_").replace("-", "_")
+    if canonical in Condition._value2member_map_:
+        return Condition(canonical)
     text = fold(raw)
     for value, phrases in CONDITION_PHRASES:
         for phrase in phrases:

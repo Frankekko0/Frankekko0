@@ -112,6 +112,19 @@ def test_price_drop_alert() -> None:
     assert decide_alerts(c, THRESHOLDS, [], price_drop_enabled=False) == []
 
 
+def test_no_opportunity_alerts_for_old_listings_but_price_drops_still_fire() -> None:
+    old_ultra = cand(is_ultra=True, flip_score=95, listing_age_hours=24 * 40)
+    assert decide_alerts(old_ultra, THRESHOLDS, []) == []  # e.g. the historical backfill
+    assert decide_alerts(cand(listing_age_hours=24 * 40), THRESHOLDS, []) == []
+    assert [d.type for d in decide_alerts(cand(listing_age_hours=5), THRESHOLDS, [])] == [
+        AlertType.NEW_OPPORTUNITY
+    ]
+    dropped = cand(
+        previous_price=D("45"), price=D("27"), is_new=False, flip_score=86, listing_age_hours=24 * 40
+    )
+    assert [d.type for d in decide_alerts(dropped, THRESHOLDS, [])] == [AlertType.PRICE_DROP]
+
+
 def flip(brand: str, roi: str, profit: str = "10") -> FlipRecord:
     return FlipRecord(
         brand=brand,
@@ -217,3 +230,56 @@ def test_rule_based_analyst(profit: D, expected: Verdict) -> None:
     assert a.summary
     if expected == Verdict.BUY:
         assert "sotto la mediana" in a.summary and a.pros
+
+
+def test_client_ip_ignores_forged_forwarded_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    from starlette.requests import Request
+
+    from app.core.config import get_settings
+    from app.core.rate_limit import client_ip
+
+    def request(xff: str | None) -> Request:
+        headers = [(b"x-forwarded-for", xff.encode())] if xff else []
+        return Request({"type": "http", "headers": headers, "client": ("10.0.0.5", 1234)})
+
+    settings = get_settings()
+    # The Next.js proxy appends the real peer address after whatever the client sent.
+    assert client_ip(request("6.6.6.6, 203.0.113.9")) == "203.0.113.9"
+    assert client_ip(request("203.0.113.9")) == "203.0.113.9"
+    assert client_ip(request(None)) == "10.0.0.5"
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 2)  # nginx in front of Next.js
+    assert client_ip(request("6.6.6.6, 203.0.113.9, 172.18.0.4")) == "203.0.113.9"
+    monkeypatch.setattr(settings, "trust_proxy_headers", False)
+    assert client_ip(request("203.0.113.9")) == "10.0.0.5"
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("http://localhost:3000", ["http://localhost:3000"]),
+        ("https://a.example, https://b.example", ["https://a.example", "https://b.example"]),
+        ('["https://c.example"]', ["https://c.example"]),
+    ],
+)
+def test_cors_origins_from_environment(
+    raw: str, expected: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.core.config import Settings
+
+    monkeypatch.setenv("CORS_ORIGINS", raw)
+    assert Settings().cors_origins == expected
+
+
+def test_generated_vapid_keys_are_usable_by_webpush() -> None:
+    from cryptography.hazmat.primitives import serialization
+    from py_vapid import Vapid
+    from py_vapid.utils import b64urlencode
+
+    from app.tools.vapid import generate
+
+    public_key, private_key = generate()
+    restored = Vapid.from_string(private_key=private_key)  # what pywebpush does with the env value
+    derived = restored.public_key.public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint
+    )
+    assert b64urlencode(derived) == public_key

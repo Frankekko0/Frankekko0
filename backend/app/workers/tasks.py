@@ -26,6 +26,7 @@ from app.core.cache import NS_FEED, cache
 from app.core.config import get_settings
 from app.core.errors import ProviderUnavailableError
 from app.core.logging import get_logger
+from app.core.redis import redis_lock
 from app.db.models import AnalysisJob, Listing, MarketStatistic, Opportunity, OpportunityScore, SystemState
 from app.db.session import session_scope
 from app.domain.enums import JobStatus, ListingStatus
@@ -40,6 +41,7 @@ log = get_logger(__name__)
 VISION_MIN_FLIP = 60
 MAX_PAGES_PER_SCAN = 200
 LIFECYCLE_BATCH = 1500
+SCAN_LOCK_TTL_SECONDS = 900  # > the scan job timeout (600 s)
 
 
 async def _set_state(key: str, value: dict[str, Any]) -> None:
@@ -113,7 +115,19 @@ async def _apply_status_changes(result: IngestResult) -> None:
 
 
 async def scan_new_listings(ctx: dict[str, Any]) -> dict[str, Any]:
-    """Poll the provider for listings published since the last cursor and ingest them."""
+    """Poll the provider for listings published since the last cursor and ingest them.
+
+    Only one scan runs at a time (Redis lock): a long first backfill must not overlap with the
+    next scheduled tick, which would ingest the same pages twice.
+    """
+    async with redis_lock("scan_new_listings", SCAN_LOCK_TTL_SECONDS) as acquired:
+        if not acquired:
+            log.info("scanner.skipped", reason="previous scan still running")
+            return {"skipped": "already_running"}
+        return await _scan_new_listings(ctx)
+
+
+async def _scan_new_listings(ctx: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
     started = time.perf_counter()
     async with session_scope() as s:

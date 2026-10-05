@@ -90,7 +90,7 @@ def assess_risk(inp: RiskInput) -> RiskResult:
             add(
                 "price_low_fake_brand",
                 f"Prezzo molto basso ({discount}% sotto il mercato) per un brand spesso contraffatto",
-                12,
+                15,
             )
 
     if inp.brand_counterfeit_risk >= 0.1:

@@ -134,7 +134,11 @@ def enabled_channels(a: Audience, settings: Settings) -> list[str]:
 
 
 async def evaluate_alerts(
-    session: AsyncSession, outcome: AnalysisOutcome, listing: Listing, catalog: Catalog
+    session: AsyncSession,
+    outcome: AnalysisOutcome,
+    listing: Listing,
+    catalog: Catalog,
+    now: datetime | None = None,
 ) -> list[tuple[uuid.UUID, str]]:
     """Create alerts for every interested user; return (alert_id, channel) pairs to deliver."""
     settings = get_settings()
@@ -146,6 +150,8 @@ async def evaluate_alerts(
     if not audience:
         return []
     category_slug = catalog.category_slug(listing.category_id)
+    published = listing.published_at or listing.first_seen_at
+    age_hours = ((now or datetime.now(UTC)) - published).total_seconds() / 3600 if published else None
     pending: list[tuple[uuid.UUID, str]] = []
     now = datetime.now(UTC)
     for a in audience:
@@ -174,6 +180,7 @@ async def evaluate_alerts(
             risk=r.risk.score,
             is_ultra=r.ultra,
             is_new=outcome.is_new,
+            listing_age_hours=age_hours,
         )
         ns = a.settings
         decisions = decide_alerts(
@@ -190,6 +197,7 @@ async def evaluate_alerts(
             price_drop_enabled=ns.price_drop_alerts,
             watchlist_enabled=ns.watchlist_alerts,
             new_opportunity_enabled=ns.new_opportunity_alerts,
+            max_listing_age_hours=settings.alert_max_listing_age_hours,
         )
         if not decisions:
             continue

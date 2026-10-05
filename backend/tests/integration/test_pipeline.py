@@ -217,7 +217,7 @@ async def test_market_statistics_and_alerts(session, make_listing) -> None:
     res = await IngestionService(session, "test").ingest([deal], now=NOW)
     listing = await session.get(Listing, res.new_ids[0])
     outcome = await AnalysisPipeline(session).analyze_listing(listing.id, now=NOW)
-    pending = await evaluate_alerts(session, outcome, listing, await load_catalog(session))
+    pending = await evaluate_alerts(session, outcome, listing, await load_catalog(session), now=NOW)
     await session.commit()
     types = sorted(
         (await session.execute(select(Alert.type).where(Alert.user_id == user.id))).scalars().all()
@@ -226,7 +226,7 @@ async def test_market_statistics_and_alerts(session, make_listing) -> None:
     assert "new_opportunity" in types or "ultra_deal" in types
     assert pending == []  # only in-app channel enabled
     # Re-evaluating the same analysis never duplicates alerts.
-    await evaluate_alerts(session, outcome, listing, await load_catalog(session))
+    await evaluate_alerts(session, outcome, listing, await load_catalog(session), now=NOW)
     await session.commit()
     assert len((await session.execute(select(Alert).where(Alert.user_id == user.id))).scalars().all()) == len(
         types
@@ -264,3 +264,24 @@ async def test_database_constraints(session, make_listing) -> None:
         await session.commit()
     await session.rollback()
     assert res.new_ids
+
+
+async def test_overlapping_scans_are_serialized() -> None:
+    """A long backfill must not overlap with the next scheduled scan (it used to deadlock)."""
+    from app.core.redis import redis_lock
+    from app.workers.tasks import scan_new_listings
+
+    async with redis_lock("scan_new_listings", 30) as held:
+        assert held is True
+        assert await scan_new_listings({}) == {"skipped": "already_running"}
+
+
+async def test_scan_lock_is_exclusive_and_released() -> None:
+    from app.core.redis import redis_lock
+
+    async with redis_lock("test-scan", 30) as first:
+        assert first is True
+        async with redis_lock("test-scan", 30) as second:
+            assert second is False
+    async with redis_lock("test-scan", 30) as again:
+        assert again is True

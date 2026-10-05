@@ -22,11 +22,19 @@ log = get_logger(__name__)
 
 
 def client_ip(request: Request) -> str:
-    # X-Forwarded-For is honoured only when the API sits behind our own proxy (Next.js / nginx);
-    # disable TRUST_PROXY_HEADERS when the backend is exposed directly.
+    """Client address for rate limiting.
+
+    Behind our own proxies (Next.js rewrite, optionally nginx) each hop *appends* the address it
+    received the request from, so only the rightmost ``TRUSTED_PROXY_HOPS`` entries of
+    X-Forwarded-For are trustworthy; anything to their left can be forged by the client.
+    Set TRUST_PROXY_HEADERS=false when the backend is exposed directly.
+    """
+    settings = get_settings()
     forwarded = request.headers.get("x-forwarded-for")
-    if forwarded and get_settings().trust_proxy_headers:
-        return forwarded.split(",")[0].strip()
+    if forwarded and settings.trust_proxy_headers:
+        hops = [part.strip() for part in forwarded.split(",") if part.strip()]
+        if hops:
+            return hops[max(0, len(hops) - settings.trusted_proxy_hops)]
     return request.client.host if request.client else "unknown"
 
 

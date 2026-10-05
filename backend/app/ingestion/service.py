@@ -260,20 +260,22 @@ class IngestionService:
         if new_rows:
             await self._detect_duplicates(new_rows, new_images, now, result)
             stmt = pg_insert(Listing).on_conflict_do_nothing(index_elements=["provider", "external_id"])
-            await self.session.execute(stmt, new_rows)
+            # Sorted keys = same row-lock order in concurrent ingestions (no deadlocks).
+            await self.session.execute(stmt, sorted(new_rows, key=lambda r: r["external_id"]))
         if new_images:
             await self.session.execute(pg_insert(ListingImage).on_conflict_do_nothing(), new_images)
         if history_rows:
             await self.session.execute(pg_insert(ListingPriceHistory), history_rows)
         if updates:
-            await self.session.execute(update(Listing), updates)
+            await self.session.execute(update(Listing), sorted(updates, key=lambda u: str(u["id"])))
             await self._apply_status_timestamps(result, now)
         return result
 
     async def _upsert_sellers(self, sellers: list[ProviderSeller], now: datetime) -> dict[str, uuid.UUID]:
         if not sellers:
             return {}
-        unique = {s.external_id: s for s in sellers}
+        # Sorted by key so concurrent upserts lock rows in the same order (no deadlocks).
+        unique = {s.external_id: s for s in sorted(sellers, key=lambda s: s.external_id)}
         rows = []
         for s in unique.values():
             score = seller_reliability(
@@ -324,7 +326,8 @@ class IngestionService:
 
     async def _upsert_products(self, specs: list[dict[str, Any]]) -> dict[str, uuid.UUID]:
         await self.session.execute(
-            pg_insert(Product).on_conflict_do_nothing(index_elements=["product_key"]), specs
+            pg_insert(Product).on_conflict_do_nothing(index_elements=["product_key"]),
+            sorted(specs, key=lambda s: s["product_key"]),
         )
         keys = [s["product_key"] for s in specs]
         rows = (

@@ -31,6 +31,12 @@ class LoginRequest(Schema):
     password: str = Field(min_length=1, max_length=128)
 
 
+class AuthConfigOut(Schema):
+    registration_enabled: bool
+    demo_login_enabled: bool
+    demo_user_email: str | None
+
+
 class UserOut(Schema):
     id: uuid.UUID
     email: str

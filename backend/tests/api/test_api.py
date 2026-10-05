@@ -61,6 +61,50 @@ async def test_register_login_me_logout(client: httpx.AsyncClient) -> None:
     assert bearer.status_code == 200
 
 
+async def test_demo_login_is_server_side_and_optional(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.core.config import get_settings
+    from app.db.session import session_scope
+    from app.seed import seed_demo_user
+
+    cfg = (await client.get(f"{API}/auth/config")).json()
+    assert cfg == {"registration_enabled": True, "demo_login_enabled": False, "demo_user_email": None}
+    off = await client.post(f"{API}/auth/demo")
+    assert off.status_code == 403 and off.json()["error"]["code"] == "demo_disabled"
+
+    monkeypatch.setattr(get_settings(), "seed_demo_user", True)
+    assert (await client.post(f"{API}/auth/demo")).status_code == 503  # not seeded yet
+    async with session_scope() as s:
+        await seed_demo_user(s)
+    r = await client.post(f"{API}/auth/demo")
+    assert r.status_code == 200 and r.json()["access_token"] is None
+    me = await client.get(f"{API}/auth/me")
+    assert me.json()["email"] == get_settings().demo_user_email
+    assert (await client.get(f"{API}/auth/config")).json()["demo_login_enabled"] is True
+
+
+def test_production_refuses_demo_account_and_dev_secrets() -> None:
+    from app.core.config import Settings
+
+    base = {
+        "environment": "production",
+        "cookie_secure": True,
+        "jwt_secret": "x" * 40,
+        "database_url": "postgresql+asyncpg://flipfinder:s3cret-from-env@db:5432/flipfinder",
+    }
+    with pytest.raises(RuntimeError, match="SEED_DEMO_USER"):
+        Settings(**base, seed_demo_user=True).validate_for_production()
+    with pytest.raises(RuntimeError, match="JWT_SECRET"):
+        Settings(**{**base, "jwt_secret": "dev-only-change-me-dev-only-change-me"}).validate_for_production()
+    with pytest.raises(RuntimeError, match="DATABASE_URL"):
+        Settings(
+            **{**base, "database_url": "postgresql+asyncpg://flipfinder:flipfinder@db/flipfinder"},
+            seed_demo_user=False,
+        ).validate_for_production()
+    Settings(**base, seed_demo_user=False).validate_for_production()
+
+
 async def test_weak_password_is_rejected_with_readable_error(client: httpx.AsyncClient) -> None:
     r = await client.post(f"{API}/auth/register", json={"email": "x@y.it", "password": "1234567890"})
     assert r.status_code == 422

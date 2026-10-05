@@ -47,6 +47,8 @@ def test_size_normalization(raw: str | None, category: str | None, expected: str
         ("Très bon état", Condition.VERY_GOOD),
         ("Buone condizioni", Condition.GOOD),
         ("Discrete condizioni", Condition.SATISFACTORY),
+        ("very_good", Condition.VERY_GOOD),  # canonical values from feeds / the API
+        ("new_with_tags", Condition.NEW_WITH_TAGS),
         ("", Condition.UNKNOWN),
     ],
 )

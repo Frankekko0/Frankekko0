@@ -89,6 +89,7 @@ def _startup(queue: str) -> Any:
 async def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_json)
+    settings.validate_for_production()
     await _wait_for_catalog()
     high = Worker(
         _functions(),

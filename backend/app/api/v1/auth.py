@@ -14,7 +14,13 @@ from sqlalchemy import func, select
 
 from app.api.deps import DB, CurrentUser
 from app.core.config import get_settings
-from app.core.errors import AppError, AuthenticationError, ConflictError
+from app.core.errors import (
+    AppError,
+    AuthenticationError,
+    ConflictError,
+    PermissionDeniedError,
+    ProviderUnavailableError,
+)
 from app.core.logging import get_logger
 from app.core.rate_limit import RateLimit
 from app.core.security import (
@@ -27,7 +33,7 @@ from app.core.security import (
     verify_password,
 )
 from app.db.models import User
-from app.schemas.auth import LoginRequest, RegisterRequest, SessionOut, UserOut
+from app.schemas.auth import AuthConfigOut, LoginRequest, RegisterRequest, SessionOut, UserOut
 from app.schemas.common import Message
 from app.seed import ensure_user_defaults
 
@@ -102,6 +108,39 @@ async def login(
     session = _set_session(response, user)
     if not include_token:
         session.access_token = None
+    return session
+
+
+@router.get("/config", response_model=AuthConfigOut)
+async def auth_config() -> AuthConfigOut:
+    """Public: which sign-in options the login page should offer."""
+    settings = get_settings()
+    return AuthConfigOut(
+        registration_enabled=settings.allow_registration,
+        demo_login_enabled=settings.seed_demo_user,
+        demo_user_email=settings.demo_user_email if settings.seed_demo_user else None,
+    )
+
+
+@router.post("/demo", response_model=SessionOut, dependencies=[Depends(auth_limit)])
+async def demo_login(response: Response, db: DB) -> SessionOut:
+    """One-click sign-in to the seeded demo account (Demo Mode only, never in production)."""
+    settings = get_settings()
+    if not settings.seed_demo_user:
+        raise PermissionDeniedError("La modalità demo non è attiva.", code="demo_disabled")
+    user = (
+        await db.execute(select(User).where(User.email == settings.demo_user_email.lower()))
+    ).scalar_one_or_none()
+    if user is None or not user.is_active:
+        raise ProviderUnavailableError(
+            "L'account demo non è ancora pronto: riprova tra qualche secondo.", code="demo_not_ready"
+        )
+    user.last_login_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(user)
+    log.info("auth.demo_login", user_id=str(user.id))
+    session = _set_session(response, user)
+    session.access_token = None
     return session
 
 

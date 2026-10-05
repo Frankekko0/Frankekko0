@@ -44,10 +44,13 @@ def _fmt_eur(value: Decimal) -> str:
 
 def _age_label(hours: float) -> str:
     if hours < 1:
-        return f"Pubblicato da {max(1, round(hours * 60))} minuti"
+        minutes = max(1, round(hours * 60))
+        return f"Pubblicato da {minutes} {'minuto' if minutes == 1 else 'minuti'}"
     if hours < 48:
-        return f"Pubblicato da {round(hours)} ore"
-    return f"Pubblicato da {round(hours / 24)} giorni"
+        n = round(hours)
+        return f"Pubblicato da {n} {'ora' if n == 1 else 'ore'}"
+    days = round(hours / 24)
+    return f"Pubblicato da {days} {'giorno' if days == 1 else 'giorni'}"
 
 
 def build_explanation(ctx: ExplanationContext) -> list[dict[str, Any]]:
@@ -112,7 +115,8 @@ def build_explanation(ctx: ExplanationContext) -> list[dict[str, Any]]:
 
     days = ctx.velocity.estimated_days
     kind = "positive" if days <= 7 else "neutral" if days <= 14 else "negative"
-    factor(kind, "velocity", f"Vendita stimata in ~{days:.0f} giorni", c["velocity"]["contribution"])
+    unit = "giorno" if round(days) == 1 else "giorni"
+    factor(kind, "velocity", f"Vendita stimata in ~{days:.0f} {unit}", c["velocity"]["contribution"])
 
     s = ctx.seller
     if s.level == "high":
