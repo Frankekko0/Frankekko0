@@ -617,8 +617,8 @@ shot(s, DARK, [
 ])
 s = L("ACT2_13")
 shot(s, BLACK, [
-    T("PROFIT", 960, 540, cls="cap-xl gold shadow", at=s, anim="none", kf=[[0.2, 0, 0], [1.6, -420, 0]]),
-    T("CASH", 960, 540, cls="cap-xl cyan shadow", at=s, anim="none", kf=[[0.2, 0, 0], [1.6, 420, 0]]),
+    T("PROFIT", 960, 540, cls="cap-xl gold shadow", at=s, anim="fade", ad=0.3, kf=[[0.0, -250, 0], [1.4, -420, 0]]),
+    T("CASH", 960, 540, cls="cap-xl cyan shadow", at=s, anim="fade", ad=0.3, kf=[[0.0, 250, 0], [1.4, 420, 0]]),
     T("≠", 960, 530, cls="cap-xxl red", at=s + 1.0, anim="pop"),
     LBL("AT ENRON, THE TWO DRIFTED FAR APART", 960, 820, at=s + 0.6, cls="label-l"),
 ], cam=[[0, 1.06, 0, 0], [2.4, 1.0, 0, 0]])
