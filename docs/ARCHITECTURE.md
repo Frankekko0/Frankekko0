@@ -246,23 +246,42 @@ Tabelle principali (dettaglio colonne in `backend/app/db/models/`):
 
 ## 8. Logica Flip Score
 
-Componenti normalizzate 0–100 (curve a saturazione, così un valore estremo non domina):
+Componenti normalizzate 0–100 con una **curva concava a rendimenti decrescenti** (un valore
+estremo non domina, e la componente arriva a 100 a una soglia "eccellente"):
 
-| Componente | Peso default | Mappatura |
+`concave(x, full) = 100·(1 − (1 − min(1, x/full))^1.6)` — es. sconto 10% → 30, 20% → 56, 30% → 77, ≥ 50% → 100.
+
+| Componente | Peso default | Mappatura (implementazione: `backend/app/scoring/`) |
 |---|---|---|
-| Price undervaluation | 30% | sconto `d = (FMV − prezzo)/FMV`; `100·(1−e^(−d/0.25))`, 0 se d ≤ 0 |
-| Expected ROI | 20% | `100·(1−e^(−ROI/0.5))` |
-| Expected net profit | 15% | `100·(1−e^(−profit/15€))` |
-| Demand | 15% | sell-through (venduti/(venduti+attivi)) + segnale preferiti |
-| Sales velocity | 10% | `0.7·100·e^(−giorni/14) + 0.3·STR·100` |
+| Price undervaluation | 30% | sconto `d = (FMV − prezzo)/FMV`; `concave(d, 0.50)`, 0 se d ≤ 0 |
+| Expected ROI | 20% | `concave(ROI, 0.90)` |
+| Expected net profit | 15% | `concave(profit, 25 €)` |
+| Demand | 15% | `concave(STR, 0.65)` sul sell-through smussato (prior bayesiano) ± 8 punti dal segnale preferiti/giorno dell'annuncio |
+| Sales velocity | 10% | `0.8·days_score + 0.2·concave(STR, 0.65)` con `days_score = 100·e^(−max(0, giorni−1.5)/18)` (≈87 a 4 gg, ≈74 a 7, ≈50 a 14) |
 | Listing freshness | 5% | `100·e^(−ore/24)` |
-| Seller reliability | 5% | rating bayesiano, n. recensioni, anzianità, articoli |
+| Seller reliability | 5% | rating bayesiano, n. recensioni, anzianità, articoli venduti |
 
-`base = Σ peso·componente` (pesi configurabili e rinormalizzati). Penalità sottrattive,
-ciascuna con motivazione: rischio falso, condizioni scarse, informazioni insufficienti,
-domanda debole, pochi comparabili, prezzo di mercato poco affidabile (dispersione alta).
-Profitto atteso ≤ 0 ⇒ score limitato a 30. Classi: 90–100 Exceptional, 80–89 Excellent,
-70–79 Good, 60–69 Moderate, < 60 Low Priority.
+Domanda (sell-through finestrato = venduti / (venduti + ancora attivi) tra i comparabili):
+≥ 60% Very High · ≥ 45% High · ≥ 30% Medium · ≥ 15% Low · altrimenti Very Low.
+Velocity bucket: 0–3, 4–7, 8–14, 15–30, 30+ giorni.
+
+`base = Σ peso·componente` (pesi configurabili dall'utente e rinormalizzati). **Penalità
+sottrattive**, ciascuna con motivazione visibile nella UI:
+
+| Penalità | Punti |
+|---|---|
+| Rischio falso (si applica solo la più grave): descrizione sospetta / foto riutilizzate da altro venditore / prezzo troppo basso per brand spesso contraffatto (sconto > 55%) / "troppo bello per essere vero" (sconto > 65%) | 15 / 12 / 10 / 8 |
+| Condizioni: discrete / buone | 8 / 3 |
+| Informazioni insufficienti (identificazione < 50) | fino a 10 |
+| Domanda debole (STR < 20%) / contenuta (< 30%) | 8 / 4 |
+| Comparabili < 5 / < 10 | 8 / 3 |
+| Mercato poco affidabile (dispersione > 0.6 o market confidence < 35) | 6 / 5 |
+| Rischio complessivo ≥ 50 | `min(12, (risk − 45)/2.5)` |
+
+Tetti: valore di mercato non stimabile ⇒ max 35; profitto atteso ≤ 0 ⇒ max 30.
+Classi: 90–100 Exceptional, 80–89 Excellent, 70–79 Good, 60–69 Moderate, < 60 Low Priority.
+Caso di riferimento (prezzo 52% sotto mercato, ROI 73%, domanda forte, ~4 giorni, venditore
+affidabile) ⇒ ≈ 91 (verificato da `tests/unit/test_scoring.py`).
 
 **Confidence (0–100)** = 45% affidabilità prezzo di mercato (n comparabili, similarità media,
 dispersione, quota venduti, recency) + 25% confidence identificazione + 15% completezza dati
@@ -281,9 +300,10 @@ dell'utente per brand/categoria/taglia/fascia prezzo, con shrinkage bayesiano su
 
 ## 9. Algoritmo comparabili
 
-1. **Candidate pool (SQL, indicizzato)**: stesso brand; stessa categoria (o stessa categoria
-   padre); stato `active|sold|possibly_sold`; visti negli ultimi 120 giorni; escluso il soggetto
-   e i suoi duplicati; max 400 più recenti.
+1. **Candidate pool (SQL, indicizzato)**: stesso brand; stessa categoria (o categorie sorelle
+   dello stesso padre); visti negli ultimi 120 giorni; escluso il soggetto e i suoi duplicati.
+   Due query limitate: i 200 **venduti** più recenti (per data di vendita) e i 200 **attivi** più
+   recenti (per data di pubblicazione), così gli annunci attivi non "spingono fuori" i venduti.
 2. **Similarità 0–1** (pesi): categoria esatta .25 / padre .12 · modello .20 (sconosciuto .08) ·
    condizione .15 (adiacente .08) · taglia .12 (adiacente .06) · token del titolo (RapidFuzz) .10 ·
    genere .05 · colore .04 · materiale .04 · paese .03 · (+ bonus vintage coerente).

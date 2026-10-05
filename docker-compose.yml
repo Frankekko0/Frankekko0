@@ -1,0 +1,95 @@
+# Vinted FlipFinder - full stack in one command:
+#
+#   cp .env.example .env      # optional: secrets, AI key, notification channels
+#   docker compose up --build
+#
+# Web app: http://localhost:3000 (sign in with "Try the demo")
+# API docs: http://localhost:3000/docs (also http://127.0.0.1:8000/docs)
+#
+# The defaults below are for local use only. In production set ENVIRONMENT=production plus a
+# strong JWT_SECRET and POSTGRES_PASSWORD; the backend refuses to start with dev values.
+
+name: flipfinder
+
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-flipfinder}:${POSTGRES_PASSWORD:-flipfinder}@postgres:5432/${POSTGRES_DB:-flipfinder}
+  REDIS_URL: redis://redis:6379/0
+  PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}
+  CORS_ORIGINS: ${PUBLIC_APP_URL:-http://localhost:3000}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-flipfinder}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flipfinder}
+      POSTGRES_DB: ${POSTGRES_DB:-flipfinder}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    command: ["api"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *backend-env
+    ports:
+      # Bound to localhost: the browser reaches the API through the frontend's /api proxy.
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    command: ["worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *backend-env
+    healthcheck:
+      disable: true
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        BACKEND_URL: http://backend:8000
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:
