@@ -3,7 +3,7 @@
 import { Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import { api, errorMessage } from "@/lib/api";
 import type { AuthConfig, Session } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -20,13 +20,17 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [loading, setLoading] = useState<"form" | "demo" | null>(null);
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const next = params.get("next");
-  const target = next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
+  const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
+  // The fragment never reaches the server, so the auth redirect drops it from `next`; the
+  // browser keeps it on this URL. Carry it on (e.g. a listing sent by the browser extension).
+  const target = () => safeNext + (typeof window !== "undefined" && safeNext !== "/" ? window.location.hash : "");
 
   useEffect(() => {
     // Already signed in (valid cookie): skip the form.
-    api("/auth/me").then(() => router.replace(target)).catch(() => undefined);
+    api("/auth/me").then(() => router.replace(target())).catch(() => undefined);
     api<AuthConfig>("/auth/config").then(setConfig).catch(() => undefined);
-  }, [router, target]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+  }, []);
 
   async function signIn(kind: "form" | "demo") {
     setError(null);
@@ -40,7 +44,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
           body: mode === "login" ? { email, password } : { email, password, display_name: name || undefined },
         });
       }
-      router.replace(target);
+      router.replace(target());
       router.refresh();
     } catch (err) {
       setError(errorMessage(err));
@@ -56,7 +60,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const showDemo = mode === "login" && config?.demo_login_enabled;
 
   return (
-    <Card className="p-6 shadow-pop">
+    <Card className="enter highlight p-6 shadow-pop" style={{ "--i": 1 } as CSSProperties}>
       <h1 className="text-xl font-semibold tracking-tight">{mode === "login" ? "Welcome back" : "Create your account"}</h1>
       <p className="mt-1 text-[13px] text-fg-3">
         {mode === "login" ? "Sign in to see today's best flips." : "Start finding undervalued listings in minutes."}

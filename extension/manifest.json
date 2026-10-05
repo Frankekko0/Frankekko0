@@ -1,0 +1,65 @@
+{
+  "manifest_version": 3,
+  "name": "FlipFinder for Vinted",
+  "short_name": "FlipFinder",
+  "version": "0.1.0",
+  "description": "Analizza con FlipFinder l'annuncio Vinted che stai guardando: valore di mercato, profitto, ROI e rischio.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "FlipFinder for Vinted",
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.vinted.it/*",
+        "https://www.vinted.fr/*",
+        "https://www.vinted.de/*",
+        "https://www.vinted.es/*",
+        "https://www.vinted.be/*",
+        "https://www.vinted.nl/*",
+        "https://www.vinted.lu/*",
+        "https://www.vinted.pt/*",
+        "https://www.vinted.at/*",
+        "https://www.vinted.pl/*",
+        "https://www.vinted.cz/*",
+        "https://www.vinted.sk/*",
+        "https://www.vinted.lt/*",
+        "https://www.vinted.co.uk/*",
+        "https://www.vinted.com/*",
+        "https://www.vinted.se/*",
+        "https://www.vinted.fi/*",
+        "https://www.vinted.dk/*",
+        "https://www.vinted.gr/*",
+        "https://www.vinted.hr/*",
+        "https://www.vinted.ro/*",
+        "https://www.vinted.hu/*",
+        "https://www.vinted.ie/*",
+        "https://www.vinted.si/*",
+        "https://www.vinted.lv/*",
+        "https://www.vinted.ee/*"
+      ],
+      "js": [
+        "src/parse.js",
+        "src/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "minimum_chrome_version": "120"
+}

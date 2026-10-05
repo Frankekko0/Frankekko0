@@ -275,6 +275,22 @@ Adapter inclusi:
   incolli link, titolo, prezzo e (facoltativi) brand, taglia, condizioni, descrizione, foto e dati
   del venditore. *Quick check* (`POST /api/v1/analyze`) calcola tutto senza salvare.
 
+### Vinted
+
+Vinted non offre un'API pubblica per cercare gli annunci: l'unica API ufficiale (*Vinted Pro
+Integrations*) richiede un account Pro approvato e non include la ricerca nel catalogo.
+Scansionare Vinted in automatico vorrebbe dire usare la sua API interna aggirando le protezioni
+anti-bot, cosa che FlipFinder per scelta non fa. Le strade legittime sono due:
+
+- **Estensione browser "FlipFinder for Vinted"** ([`extension/`](extension/README.md)): mentre
+  navighi su Vinted, un clic su *Analizza con FlipFinder* apre l'analisi dell'annuncio che stai
+  guardando. L'estensione legge solo la pagina aperta (nessuna richiesta a Vinted, nessuna
+  automazione); i dati passano nel frammento dell'URL (`/analyze#import=…`) e FlipFinder li
+  valida, compila il modulo e avvia subito il *Quick check*. Funziona anche se non hai ancora
+  fatto l'accesso: dopo il login torni direttamente all'analisi.
+- **Feed autorizzato**: se ottieni un accesso ufficiale o un feed da un partner autorizzato,
+  basta esporlo nel formato sopra e impostare `MARKETPLACE_PROVIDER=feed`.
+
 **Scrivere un nuovo adapter**: crea una classe che estende `MarketplaceProvider`, mappa i dati su
 `ProviderListing`/`ProviderSeller` (le condizioni possono arrivare come testo libero, es.
 "Ottime condizioni", o come valore canonico `very_good`), dichiara le `capabilities` e
@@ -414,6 +430,12 @@ cd frontend
 npm run typecheck && npm run lint && npm test && npm run build
 ```
 
+Estensione browser (parsing degli annunci Vinted, nessuna dipendenza):
+
+```bash
+node --test "extension/tests/*.test.mjs"
+```
+
 ---
 
 ## Sicurezza
@@ -459,9 +481,10 @@ backend/
 frontend/
   src/app/          pagine (dashboard, deals, dettaglio, analyze, watchlists, alerts,
                     flips, analytics, saved, search, settings, login)
-  src/components/   UI, card e sezioni dei deal, grafici, layout
+  src/components/   UI (con primitive di animazione), card e sezioni dei deal, grafici, layout
   src/lib/          client API, hook dati, formattazione, filtri
   public/           manifest PWA, service worker, icone
+extension/          estensione browser "FlipFinder for Vinted" (Manifest V3)
 docs/               progetto tecnico e screenshot
 docker-compose.yml  stack completo
 .env.example        modello di configurazione
