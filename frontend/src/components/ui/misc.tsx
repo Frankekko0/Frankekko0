@@ -10,12 +10,12 @@ export function Switch({ className, ...props }: ComponentProps<typeof RSwitch.Ro
   return (
     <RSwitch.Root
       className={cn(
-        "relative inline-flex h-6 w-10 shrink-0 cursor-pointer items-center rounded-full bg-surface-3 transition-colors data-[state=checked]:bg-accent disabled:opacity-50",
+        "relative inline-flex h-6 w-10 shrink-0 cursor-pointer items-center rounded-full bg-surface-3 transition-colors duration-200 data-[state=checked]:bg-accent disabled:opacity-50",
         className,
       )}
       {...props}
     >
-      <RSwitch.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow transition-transform data-[state=checked]:translate-x-[18px]" />
+      <RSwitch.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.25)] transition-[translate,width] duration-200 ease-[var(--ease-out)] data-[state=checked]:translate-x-[18px]" />
     </RSwitch.Root>
   );
 }
@@ -40,17 +40,17 @@ export function DialogContent({
 }) {
   return (
     <RDialog.Portal>
-      <RDialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] data-[state=open]:animate-[fade-up_0.2s_ease-out]" />
+      <RDialog.Overlay className="overlay-anim fixed inset-0 z-50 bg-black/45 backdrop-blur-[3px]" />
       <RDialog.Content
         className={cn(
           "fixed z-50 flex flex-col bg-surface shadow-pop outline-none",
           side === "center"
-            ? "inset-x-0 bottom-0 max-h-[92dvh] rounded-t-3xl border-t border-line sm:inset-auto sm:left-1/2 sm:top-1/2 sm:w-full sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl sm:border"
-            : "inset-y-0 right-0 w-full max-w-md border-l border-line",
-          "data-[state=open]:animate-fade-up",
+            ? "dialog-anim inset-x-0 bottom-0 max-h-[92dvh] rounded-t-3xl border-t border-line sm:inset-auto sm:left-1/2 sm:top-1/2 sm:w-full sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl sm:border"
+            : "drawer-anim inset-y-0 right-0 w-full max-w-md border-l border-line",
           className,
         )}
       >
+        {side === "center" && <div className="mx-auto mt-2.5 h-1 w-10 shrink-0 rounded-full bg-line-strong sm:hidden" aria-hidden />}
         <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div>
             <RDialog.Title className="text-base font-semibold tracking-tight">{title}</RDialog.Title>
@@ -60,7 +60,7 @@ export function DialogContent({
               <RDialog.Description className="sr-only">{title}</RDialog.Description>
             )}
           </div>
-          <RDialog.Close className="-mr-1 rounded-lg p-1.5 text-fg-3 hover:bg-surface-2 hover:text-fg" aria-label="Close">
+          <RDialog.Close className="press -mr-1 rounded-lg p-1.5 text-fg-3 transition-colors hover:bg-surface-2 hover:text-fg" aria-label="Close">
             <X className="size-4" />
           </RDialog.Close>
         </div>
@@ -87,7 +87,7 @@ export function TabsTrigger({ className, ...props }: ComponentProps<typeof RTabs
   return (
     <RTabs.Trigger
       className={cn(
-        "rounded-lg px-3 py-1.5 text-[13px] font-medium whitespace-nowrap text-fg-2 transition-colors hover:text-fg data-[state=active]:bg-surface data-[state=active]:text-fg data-[state=active]:shadow-card",
+        "rounded-lg px-3 py-1.5 text-[13px] font-medium whitespace-nowrap text-fg-2 transition-[background-color,color,box-shadow] duration-200 hover:text-fg data-[state=active]:bg-surface data-[state=active]:text-fg data-[state=active]:shadow-card",
         className,
       )}
       {...props}
@@ -104,7 +104,7 @@ export function Tip({ content, children, side = "top" }: { content: ReactNode; c
         <RTooltip.Content
           side={side}
           sideOffset={6}
-          className="z-50 max-w-64 rounded-lg bg-fg px-2.5 py-1.5 text-xs leading-relaxed text-bg shadow-pop data-[state=delayed-open]:animate-fade-up"
+          className="popover-anim z-50 max-w-64 origin-[var(--radix-tooltip-content-transform-origin)] rounded-lg bg-fg px-2.5 py-1.5 text-xs leading-relaxed text-bg shadow-pop"
         >
           {content}
         </RTooltip.Content>
@@ -125,7 +125,10 @@ export function MenuContent({ className, ...props }: ComponentProps<typeof RMenu
       <RMenu.Content
         sideOffset={8}
         align="end"
-        className={cn("z-50 min-w-48 rounded-xl border border-line bg-surface p-1 shadow-pop data-[state=open]:animate-fade-up", className)}
+        className={cn(
+          "popover-anim z-50 min-w-52 origin-[var(--radix-dropdown-menu-content-transform-origin)] rounded-xl border border-line bg-surface/95 p-1 shadow-pop backdrop-blur-xl",
+          className,
+        )}
         {...props}
       />
     </RMenu.Portal>
@@ -136,7 +139,7 @@ export function MenuItem({ className, ...props }: ComponentProps<typeof RMenu.It
   return (
     <RMenu.Item
       className={cn(
-        "flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-fg-2 outline-none data-[highlighted]:bg-surface-2 data-[highlighted]:text-fg [&_svg]:size-4",
+        "flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-fg-2 outline-none transition-colors duration-100 data-[highlighted]:bg-surface-2 data-[highlighted]:text-fg [&_svg]:size-4",
         className,
       )}
       {...props}
@@ -197,7 +200,7 @@ export function RangeSlider({
         <RSlider.Track className="relative h-1.5 grow overflow-hidden rounded-full bg-surface-3">
           <RSlider.Range className="absolute h-full rounded-full bg-accent" />
         </RSlider.Track>
-        <RSlider.Thumb className="block size-[18px] rounded-full border-2 border-accent bg-surface shadow-card outline-none focus-visible:ring-4 focus-visible:ring-[var(--ring)]" />
+        <RSlider.Thumb className="block size-[18px] rounded-full border-2 border-accent bg-surface shadow-card outline-none transition-transform duration-150 ease-[var(--ease-out)] hover:scale-110 active:scale-115 focus-visible:ring-4 focus-visible:ring-[var(--ring)]" />
       </RSlider.Root>
     </div>
   );
@@ -211,7 +214,7 @@ export function Chip({ active, children, onClick, className }: { active?: boolea
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[13px] font-medium whitespace-nowrap transition-colors [&_svg]:size-3.5",
+        "press inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[13px] font-medium whitespace-nowrap transition-[background-color,border-color,color,transform] duration-150 [&_svg]:size-3.5",
         active ? "border-accent bg-accent-soft text-accent" : "border-line bg-surface text-fg-2 hover:border-line-strong hover:text-fg",
         className,
       )}

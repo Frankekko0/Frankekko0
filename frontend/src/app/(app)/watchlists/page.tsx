@@ -1,7 +1,7 @@
 "use client";
 
 import { Bell, BellOff, Pencil, Plus, Target, Trash2 } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent, type CSSProperties } from "react";
 import { DealRow } from "@/components/deal/deal-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -188,8 +188,8 @@ export default function WatchlistsPage() {
     <div className="space-y-6">
       <div className="flex items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Watchlists</h1>
-          <p className="mt-1 text-sm text-fg-2">Your buying strategies. Matching deals trigger alerts on your channels.</p>
+          <h1 className="enter text-[28px] font-semibold leading-tight tracking-[-0.025em] sm:text-[32px]">Watchlists</h1>
+          <p className="enter mt-1.5 text-sm text-fg-2" style={{ "--i": 1 } as CSSProperties}>Your buying strategies. Matching deals trigger alerts on your channels.</p>
         </div>
         <Button
           onClick={() => {
@@ -225,8 +225,8 @@ export default function WatchlistsPage() {
         />
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {list.data.map((w) => (
-            <Card key={w.id} className={`p-5 ${w.is_active ? "" : "opacity-60"}`}>
+          {list.data.map((w, i) => (
+            <Card key={w.id} className={`enter lift p-5 ${w.is_active ? "" : "opacity-60"}`} style={{ "--i": i } as CSSProperties}>
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">

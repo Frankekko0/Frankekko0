@@ -102,6 +102,12 @@ export function PriceDistribution({
                 d={`M${cx},${baseY} V${top + r} Q${cx},${top} ${cx + r},${top} H${cx + w - r} Q${cx + w},${top} ${cx + w},${top + r} V${baseY} Z`}
                 fill="var(--series-1)"
                 opacity={hover === null || hover === i ? 0.9 : 0.45}
+                className="transition-opacity duration-150"
+                style={{
+                  transformBox: "fill-box",
+                  transformOrigin: "50% 100%",
+                  animation: `grow-y 0.6s var(--ease-out) ${0.15 + i * 0.035}s backwards`,
+                }}
               />
             </g>
           );

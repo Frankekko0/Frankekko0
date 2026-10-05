@@ -19,18 +19,29 @@ export function EmptyState({
   className?: string;
 }) {
   return (
-    <div className={cn("flex flex-col items-center justify-center rounded-2xl border border-dashed border-line-strong px-6 py-12 text-center", className)}>
-      {icon && <div className="mb-3 flex size-11 items-center justify-center rounded-2xl bg-surface-2 text-fg-3 [&_svg]:size-5">{icon}</div>}
-      <p className="text-[15px] font-semibold text-fg">{title}</p>
-      {description && <p className="mt-1 max-w-sm text-[13px] leading-relaxed text-fg-3">{description}</p>}
-      {action && <div className="mt-4">{action}</div>}
+    <div
+      className={cn(
+        "enter relative flex flex-col items-center justify-center overflow-hidden rounded-2xl border border-dashed border-line-strong px-6 py-14 text-center",
+        className,
+      )}
+    >
+      <div className="grid-bg pointer-events-none absolute inset-0 opacity-60" aria-hidden />
+      {icon && (
+        <div className="relative mb-4 flex size-12 items-center justify-center rounded-2xl bg-surface text-accent shadow-card ring-1 ring-line [&_svg]:size-5">
+          <span className="absolute inset-0 rounded-2xl bg-gradient-to-br from-accent-soft to-transparent" aria-hidden />
+          <span className="relative">{icon}</span>
+        </div>
+      )}
+      <p className="relative text-[15px] font-semibold text-fg">{title}</p>
+      {description && <p className="relative mt-1 max-w-sm text-[13px] leading-relaxed text-fg-3">{description}</p>}
+      {action && <div className="relative mt-5">{action}</div>}
     </div>
   );
 }
 
 export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-2xl border border-line bg-surface px-6 py-10 text-center">
+    <div className="enter flex flex-col items-center gap-3 rounded-2xl border border-line bg-surface px-6 py-10 text-center">
       <p className="text-sm font-medium text-fg">Qualcosa non ha funzionato</p>
       <p className="max-w-md text-[13px] text-fg-3">{message}</p>
       {onRetry && (

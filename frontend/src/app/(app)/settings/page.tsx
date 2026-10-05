@@ -2,7 +2,7 @@
 
 import { BellRing, Calculator, Goal, LogOut, Scale, Send, Smartphone, Sparkles, Tags } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode, type CSSProperties } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,7 +27,7 @@ const DEFAULT_WEIGHTS: Record<string, number> = { undervaluation: 30, roi: 20, p
 
 function Block({ icon, title, description, children }: { icon: ReactNode; title: string; description?: string; children: ReactNode }) {
   return (
-    <Card>
+    <Card className="reveal">
       <CardHeader>
         <div>
           <CardTitle className="flex items-center gap-2 [&_svg]:size-4 [&_svg]:text-fg-3">
@@ -439,8 +439,8 @@ export default function SettingsPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-1 text-sm text-fg-2">Your targets, costs and notifications shape every score and alert.</p>
+        <h1 className="enter text-[28px] font-semibold leading-tight tracking-[-0.025em] sm:text-[32px]">Settings</h1>
+        <p className="enter mt-1.5 text-sm text-fg-2" style={{ "--i": 1 } as CSSProperties}>Your targets, costs and notifications shape every score and alert.</p>
       </div>
       {prefs.data ? <PreferencesForm initial={prefs.data} /> : <Skeleton className="h-96 rounded-2xl" />}
       {notif.data ? <NotificationsForm initial={notif.data} /> : <Skeleton className="h-96 rounded-2xl" />}

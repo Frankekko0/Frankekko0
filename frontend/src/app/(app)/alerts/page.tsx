@@ -2,7 +2,7 @@
 
 import { BellRing, CheckCheck, Eye, Flame, Target, TrendingDown, Sparkles } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState, Skeleton } from "@/components/ui/feedback";
@@ -30,8 +30,8 @@ export default function AlertsPage() {
     <div className="mx-auto max-w-3xl space-y-5">
       <div className="flex items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Alerts</h1>
-          <p className="mt-1 text-sm text-fg-2">Deals that matched your thresholds and watchlists.</p>
+          <h1 className="enter text-[28px] font-semibold leading-tight tracking-[-0.025em] sm:text-[32px]">Alerts</h1>
+          <p className="enter mt-1.5 text-sm text-fg-2" style={{ "--i": 1 } as CSSProperties}>Deals that matched your thresholds and watchlists.</p>
         </div>
         <Button variant="outline" size="sm" onClick={() => mark.mutate("all")} loading={mark.isPending}>
           <CheckCheck /> Mark all read
@@ -63,17 +63,17 @@ export default function AlertsPage() {
         <EmptyState icon={<BellRing />} title="You're all caught up" description="New alerts appear here and on the channels you enabled in Settings (push, email, Telegram, Discord)." />
       ) : (
         <ul className="space-y-2">
-          {alerts.data.items.map((a) => {
+          {alerts.data.items.map((a, i) => {
             const meta = TYPE_META[a.type] ?? TYPE_META.system;
             const Icon = meta.icon;
             const p = a.payload as { price?: number; expected_profit?: number; expected_roi?: number };
             return (
-              <li key={a.id}>
+              <li key={a.id} className="enter" style={{ "--i": i } as CSSProperties}>
                 <Link
                   href={a.opportunity_id ? `/deals/${a.opportunity_id}` : "#"}
                   onClick={() => !a.read_at && mark.mutate(a.id)}
                   className={cn(
-                    "flex items-start gap-3 rounded-2xl border bg-surface p-4 transition-colors hover:border-line-strong",
+                    "lift highlight flex items-start gap-3 rounded-2xl border bg-surface p-4",
                     a.read_at ? "border-line" : "border-accent/30 shadow-card",
                   )}
                 >

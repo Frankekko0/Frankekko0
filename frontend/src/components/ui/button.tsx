@@ -3,12 +3,14 @@ import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
 const variants = {
-  primary: "bg-accent text-accent-fg hover:bg-accent-hover shadow-card",
+  primary:
+    "bg-accent text-accent-fg hover:bg-accent-hover shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_1px_2px_rgba(11,11,11,0.12),0_4px_12px_-4px_var(--ring)]",
   secondary: "bg-surface-2 text-fg hover:bg-surface-3",
-  outline: "border border-line-strong bg-surface text-fg hover:bg-surface-2",
+  outline: "border border-line-strong bg-surface text-fg hover:bg-surface-2 hover:border-[var(--text-3)]/40 shadow-sm",
   ghost: "text-fg-2 hover:bg-surface-2 hover:text-fg",
   danger: "bg-danger text-white hover:opacity-90",
-  ultra: "bg-gradient-to-r from-ultra to-ultra-2 text-white shadow-card hover:brightness-105",
+  ultra:
+    "sheen bg-gradient-to-r from-ultra to-ultra-2 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_6px_18px_-8px_var(--ultra)] hover:brightness-105",
   inverted: "bg-fg text-bg hover:opacity-90",
 } as const;
 
@@ -37,7 +39,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     <Comp
       ref={ref}
       className={cn(
-        "inline-flex shrink-0 select-none items-center justify-center font-medium whitespace-nowrap transition-[background,color,box-shadow,transform,opacity] duration-150 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
+        "inline-flex shrink-0 select-none items-center justify-center font-medium whitespace-nowrap transition-[background-color,color,border-color,box-shadow,transform,opacity,filter] duration-150 ease-[var(--ease-out)] active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
         variants[variant],
         sizes[size],
         className,

@@ -2,7 +2,7 @@
 
 import { ArrowLeft, Bookmark, BookmarkCheck, Eye, EyeOff, ExternalLink, Flame, Heart, ShoppingBag, TrendingDown } from "lucide-react";
 import Link from "next/link";
-import { use, useState } from "react";
+import { use, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   AiSection,
   ComparablesSection,
@@ -22,6 +22,7 @@ import { PurchaseDialog } from "@/components/forms/flip-forms";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { AnimatedNumber } from "@/components/ui/motion";
 import { ErrorState, Skeleton } from "@/components/ui/feedback";
 import { errorMessage } from "@/lib/api";
 import { CONDITION_LABEL, DEMAND_LABEL, TIER_LABEL, days, eur, pct, timeAgo } from "@/lib/format";
@@ -47,8 +48,8 @@ function Gallery({ d }: { d: OpportunityDetail }) {
   const [active, setActive] = useState(0);
   return (
     <div>
-      <div className="relative aspect-square overflow-hidden rounded-2xl border border-line">
-        <ListingImage src={images[active]?.url || null} alt={d.listing.title} className="h-full w-full" />
+      <div className="group relative aspect-square overflow-hidden rounded-2xl border border-line bg-surface-2">
+        <ListingImage key={active} src={images[active]?.url || null} alt={d.listing.title} className="zoom-on-hover h-full w-full animate-fade-in" />
         {d.card.is_ultra_deal && (
           <Badge tone="ultra" className="absolute left-3 top-3 px-2.5 py-1 text-xs">
             <Flame /> ULTRA DEAL
@@ -61,7 +62,10 @@ function Gallery({ d }: { d: OpportunityDetail }) {
             <button
               key={img.url + i}
               onClick={() => setActive(i)}
-              className={cn("size-16 shrink-0 overflow-hidden rounded-lg border-2", i === active ? "border-accent" : "border-transparent opacity-70 hover:opacity-100")}
+              className={cn(
+                "press size-16 shrink-0 overflow-hidden rounded-lg border-2 transition-[border-color,opacity,transform] duration-200",
+                i === active ? "border-accent" : "border-transparent opacity-60 hover:opacity-100",
+              )}
               aria-label={`Photo ${i + 1}`}
             >
               <ListingImage src={img.url} alt="" className="h-full w-full" />
@@ -79,7 +83,7 @@ function Summary({ d }: { d: OpportunityDetail }) {
   const state = c.favorite_state;
   const positive = (c.expected_profit ?? 0) > 0;
   return (
-    <Card className="p-5">
+    <Card className={cn("enter p-5", c.is_ultra_deal && "ultra-border border-transparent")}>
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-xs font-medium text-fg-3">{TIER_LABEL[c.deal_tier]}</p>
@@ -111,12 +115,16 @@ function Summary({ d }: { d: OpportunityDetail }) {
         </div>
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-fg-3">Net profit</p>
-          <p className={cn("text-[22px] font-semibold tnum", positive ? "text-success" : "text-danger")}>{eur(c.expected_profit, { sign: true })}</p>
+          <p className={cn("text-[22px] font-semibold tnum", positive ? "text-success" : "text-danger")}>
+            {c.expected_profit !== null ? <AnimatedNumber value={c.expected_profit} format={(v) => eur(v, { sign: true })} /> : "—"}
+          </p>
           <p className="text-xs text-fg-3">total cost {eur(c.total_acquisition_cost)}</p>
         </div>
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-fg-3">ROI</p>
-          <p className={cn("text-[22px] font-semibold tnum", positive ? "text-success" : "text-danger")}>{pct(c.expected_roi)}</p>
+          <p className={cn("text-[22px] font-semibold tnum", positive ? "text-success" : "text-danger")}>
+            {c.expected_roi !== null ? <AnimatedNumber value={c.expected_roi} format={(v) => pct(v)} /> : "—"}
+          </p>
           {c.discount_vs_market !== null && <p className="text-xs text-fg-3">{pct(-c.discount_vs_market, { sign: true, digits: 1 })} vs market</p>}
         </div>
       </div>
@@ -165,6 +173,59 @@ function Summary({ d }: { d: OpportunityDetail }) {
   );
 }
 
+/** Section links that follow the reader: the section in view is highlighted. */
+function SectionNav() {
+  const [current, setCurrent] = useState<string>(NAV[0][0]);
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const visible = new Map<string, number>();
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) visible.set(e.target.id, e.isIntersecting ? e.boundingClientRect.top : Infinity);
+        const top = [...visible.entries()].filter(([, y]) => y !== Infinity).sort((a, b) => a[1] - b[1])[0];
+        if (top) setCurrent(top[0]);
+      },
+      { rootMargin: "-120px 0px -55% 0px" },
+    );
+    NAV.forEach(([id]) => {
+      const el = document.getElementById(id);
+      if (el) io.observe(el);
+    });
+    return () => io.disconnect();
+  }, []);
+  useEffect(() => {
+    // Keep the highlighted link visible in the horizontally scrolling bar. Scroll only the bar:
+    // scrollIntoView would also move the page.
+    const nav = navRef.current;
+    const link = nav?.querySelector<HTMLElement>(`[data-section="${current}"]`);
+    if (!nav || !link) return;
+    const left = link.offsetLeft - nav.clientWidth / 2 + link.offsetWidth / 2;
+    nav.scrollTo({ left: Math.max(0, left), behavior: "smooth" });
+  }, [current]);
+  return (
+    <nav
+      ref={navRef}
+      className="scrollbar-none sticky top-14 z-30 -mx-4 flex gap-1 overflow-x-auto border-b border-line bg-bg/80 px-4 py-2 backdrop-blur-xl backdrop-saturate-150 sm:mx-0 sm:rounded-xl sm:border sm:px-2"
+      aria-label="Sections"
+    >
+      {NAV.map(([href, label]) => (
+        <a
+          key={href}
+          href={`#${href}`}
+          data-section={href}
+          aria-current={current === href ? "true" : undefined}
+          className={cn(
+            "press rounded-lg px-2.5 py-1 text-[13px] font-medium whitespace-nowrap transition-[background-color,color,transform] duration-200",
+            current === href ? "bg-surface text-fg shadow-card" : "text-fg-2 hover:bg-surface-2 hover:text-fg",
+          )}
+        >
+          {label}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
 export default function DealPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const q = useOpportunity(id);
@@ -185,15 +246,17 @@ export default function DealPage({ params }: { params: Promise<{ id: string }> }
   const c = d.card;
   return (
     <div className="pb-20 lg:pb-0">
-      <Link href="/deals" className="inline-flex items-center gap-1.5 text-[13px] font-medium text-fg-3 hover:text-fg">
-        <ArrowLeft className="size-4" /> Back to deals
+      <Link href="/deals" className="group inline-flex items-center gap-1.5 text-[13px] font-medium text-fg-3 transition-colors hover:text-fg">
+        <ArrowLeft className="size-4 transition-transform duration-200 group-hover:-translate-x-0.5" /> Back to deals
       </Link>
 
       <div className="mt-3 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-5">
           <header className="grid grid-cols-1 gap-5 md:grid-cols-[minmax(0,320px)_1fr]">
-            <Gallery d={d} />
-            <div className="min-w-0">
+            <div className="enter">
+              <Gallery d={d} />
+            </div>
+            <div className="enter min-w-0" style={{ "--i": 1 } as CSSProperties}>
               <div className="flex flex-wrap gap-1.5">
                 {c.brand && <Badge tone="neutral">{c.brand.name}</Badge>}
                 {c.model_name && <Badge tone="neutral">{c.model_name}</Badge>}
@@ -202,7 +265,7 @@ export default function DealPage({ params }: { params: Promise<{ id: string }> }
                 <Badge tone="neutral">{CONDITION_LABEL[c.condition]}</Badge>
                 {d.listing.is_vintage && <Badge tone="accent">Vintage</Badge>}
               </div>
-              <h1 className="mt-3 text-xl font-semibold leading-snug tracking-tight sm:text-2xl">{d.listing.title}</h1>
+              <h1 className="mt-3 text-[22px] font-semibold leading-tight tracking-[-0.02em] sm:text-[28px]">{d.listing.title}</h1>
               <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-fg-3">
                 <span>Listed {timeAgo(d.listing.published_at)}</span>
                 <span className="inline-flex items-center gap-1">
@@ -216,7 +279,7 @@ export default function DealPage({ params }: { params: Promise<{ id: string }> }
               </p>
               {d.listing.description && <p className="mt-4 whitespace-pre-line text-[14px] leading-relaxed text-fg-2">{d.listing.description}</p>}
               {d.ai_analysis && (
-                <div className="mt-4 rounded-xl border border-line bg-surface p-3.5">
+                <div className="highlight mt-4 rounded-xl border border-line bg-surface p-3.5">
                   <p className="text-xs font-semibold uppercase tracking-[0.08em] text-fg-3">Verdict · {d.ai_analysis.verdict}</p>
                   <p className="mt-1 text-[14px] leading-relaxed text-fg">{d.ai_analysis.summary}</p>
                 </div>
@@ -224,13 +287,7 @@ export default function DealPage({ params }: { params: Promise<{ id: string }> }
             </div>
           </header>
 
-          <nav className="scrollbar-none sticky top-14 z-30 -mx-4 flex gap-1 overflow-x-auto border-b border-line bg-bg/85 px-4 py-2 backdrop-blur-xl sm:mx-0 sm:rounded-xl sm:border sm:px-2" aria-label="Sections">
-            {NAV.map(([href, label]) => (
-              <a key={href} href={`#${href}`} className="rounded-lg px-2.5 py-1 text-[13px] font-medium whitespace-nowrap text-fg-2 hover:bg-surface-2 hover:text-fg">
-                {label}
-              </a>
-            ))}
-          </nav>
+          <SectionNav />
 
           <div className="lg:hidden">
             <Summary d={d} />
@@ -254,7 +311,7 @@ export default function DealPage({ params }: { params: Promise<{ id: string }> }
         </aside>
       </div>
 
-      <div className="fixed inset-x-0 bottom-[57px] z-30 border-t border-line bg-bg/90 px-4 py-2.5 backdrop-blur-xl lg:hidden">
+      <div className="fixed inset-x-0 bottom-[57px] z-30 border-t border-line bg-bg/85 px-4 py-2.5 backdrop-blur-xl backdrop-saturate-150 [animation:sheet-in_0.45s_var(--ease-drawer)_0.2s_backwards] lg:hidden">
         <div className="mx-auto flex max-w-md items-center gap-3">
           <div className="min-w-0 flex-1">
             <p className="text-[11px] text-fg-3">

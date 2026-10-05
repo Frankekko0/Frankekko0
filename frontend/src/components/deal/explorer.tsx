@@ -3,7 +3,7 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Radar, SlidersHorizontal, UserCheck, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode, type CSSProperties } from "react";
 import { api, errorMessage } from "@/lib/api";
 import { FILTER_KEYS, PRESETS, SORTS, activeFilterCount, filtersFromParams, paramsFromFilters } from "@/lib/filters";
 import { usePreferences } from "@/lib/queries";
@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState } from "@/components/ui/feedback";
 import { Select } from "@/components/ui/input";
 import { Chip, Dialog, DialogContent, DialogTrigger } from "@/components/ui/misc";
+import { cn } from "@/lib/utils";
 import { DealCard, DealCardSkeleton } from "./deal-card";
 import { FilterPanel } from "./filter-panel";
 
@@ -91,8 +92,8 @@ export function DealsExplorer({
     <div>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-          <p className="mt-1 text-sm text-fg-2">
+          <h1 className="enter text-[28px] font-semibold leading-tight tracking-[-0.025em] sm:text-[32px]">{title}</h1>
+          <p className="enter mt-1.5 text-sm text-fg-2" style={{ "--i": 1 } as CSSProperties}>
             {description}
             {total !== undefined && <span className="text-fg-3"> · {total.toLocaleString()} results</span>}
           </p>
@@ -180,13 +181,13 @@ export function DealsExplorer({
             <FilterPanel filters={f} onChange={update} />
           </div>
         </aside>
-        <div className={feed.isFetching && !feed.isFetchingNextPage && items.length ? "opacity-70 transition-opacity" : ""}>
+        <div className={cn("transition-opacity duration-200", feed.isFetching && !feed.isFetchingNextPage && items.length ? "opacity-60" : "opacity-100")}>
           {feed.isError ? (
             <ErrorState message={errorMessage(feed.error)} onRetry={() => feed.refetch()} />
           ) : feed.isLoading ? (
             <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 xl:grid-cols-3">
               {Array.from({ length: 6 }).map((_, i) => (
-                <DealCardSkeleton key={i} />
+                <DealCardSkeleton key={i} index={i} />
               ))}
             </div>
           ) : items.length === 0 ? (
@@ -205,8 +206,8 @@ export function DealsExplorer({
           ) : (
             <>
               <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 xl:grid-cols-3">
-                {items.map((d) => (
-                  <DealCard key={d.id} deal={d} />
+                {items.map((d, i) => (
+                  <DealCard key={d.id} deal={d} index={i % 24} />
                 ))}
               </div>
               {feed.hasNextPage && (

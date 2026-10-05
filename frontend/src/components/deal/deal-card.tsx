@@ -2,6 +2,7 @@
 
 import { Bookmark, BookmarkCheck, Clock, ExternalLink, EyeOff, Flame, TrendingDown, Zap } from "lucide-react";
 import Link from "next/link";
+import type { CSSProperties } from "react";
 import { CONDITION_LABEL, DEMAND_LABEL, days, eur, pct, timeAgo } from "@/lib/format";
 import { useSetFavorite } from "@/lib/queries";
 import type { OpportunityCard } from "@/lib/types";
@@ -41,24 +42,28 @@ function Metric({ label, value, hint, tone }: { label: string; value: string; hi
   );
 }
 
-export function DealCard({ deal, priority = false }: { deal: OpportunityCard; priority?: boolean }) {
+export function DealCard({ deal, priority = false, index = 0 }: { deal: OpportunityCard; priority?: boolean; index?: number }) {
   const setFav = useSetFavorite();
   const saved = deal.favorite_state === "saved" || deal.favorite_state === "watching";
   const discount = deal.discount_vs_market;
   return (
     <article
       className={cn(
-        "group relative flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-card transition-[box-shadow,transform,border-color] duration-200 hover:-translate-y-0.5 hover:shadow-pop",
-        deal.is_ultra_deal ? "border-ultra/40 ring-1 ring-ultra/20" : "border-line",
+        "enter lift highlight group relative flex flex-col rounded-2xl border bg-surface",
+        deal.is_ultra_deal ? "ultra-border border-transparent" : "border-line",
         !deal.is_active && "opacity-60",
       )}
+      style={{ "--i": index } as CSSProperties}
     >
-      <Link href={`/deals/${deal.id}`} className="relative block aspect-[4/3] overflow-hidden" aria-label={`Open analysis: ${deal.title}`}>
-        <ListingImage
-          src={deal.image_url}
-          alt={deal.title}
-          className="h-full w-full transition-transform duration-500 group-hover:scale-[1.03]"
-        />
+      <Link
+        href={`/deals/${deal.id}`}
+        className="relative block aspect-[4/3] overflow-hidden rounded-t-[15px]"
+        aria-label={`Open analysis: ${deal.title}`}
+      >
+        <ListingImage src={deal.image_url} alt={deal.title} className="zoom-on-hover h-full w-full" />
+        {/* Scrims keep the overlaid badges legible on any photo. */}
+        <span className="pointer-events-none absolute inset-x-0 top-0 h-14 bg-gradient-to-b from-black/15 to-transparent" aria-hidden />
+        <span className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-black/30 to-transparent" aria-hidden />
         <div className="absolute inset-x-0 top-0 flex items-start justify-between p-2.5">
           <div className="flex flex-col items-start gap-1.5">
             {deal.is_ultra_deal && (
@@ -73,7 +78,7 @@ export function DealCard({ deal, priority = false }: { deal: OpportunityCard; pr
             )}
             {!deal.is_active && <Badge tone="dark">{deal.listing_status === "sold" ? "Sold" : "No longer available"}</Badge>}
           </div>
-          <div className="rounded-full bg-surface/90 p-0.5 shadow-card backdrop-blur-md">
+          <div className="rounded-full bg-surface/90 p-0.5 shadow-card ring-1 ring-black/5 backdrop-blur-md">
             <ScoreRing score={deal.flip_score} size={44} stroke={3.5} />
           </div>
         </div>
@@ -90,7 +95,10 @@ export function DealCard({ deal, priority = false }: { deal: OpportunityCard; pr
           <p className="truncate text-[12px] font-medium text-fg-3">
             {[deal.brand?.name ?? "Unknown brand", deal.size, CONDITION_LABEL[deal.condition]].filter(Boolean).join(" · ")}
           </p>
-          <Link href={`/deals/${deal.id}`} className="mt-0.5 line-clamp-2 text-[14px] font-semibold leading-snug text-fg hover:underline">
+          <Link
+            href={`/deals/${deal.id}`}
+            className="mt-0.5 line-clamp-2 text-[14px] font-semibold leading-snug text-fg decoration-fg-3/40 underline-offset-2 hover:underline"
+          >
             {deal.title}
           </Link>
         </div>
@@ -140,9 +148,9 @@ export function DealCard({ deal, priority = false }: { deal: OpportunityCard; pr
   );
 }
 
-export function DealCardSkeleton() {
+export function DealCardSkeleton({ index = 0 }: { index?: number }) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-line bg-surface">
+    <div className="enter overflow-hidden rounded-2xl border border-line bg-surface" style={{ "--i": index } as CSSProperties}>
       <div className="skeleton aspect-[4/3]" />
       <div className="space-y-3 p-3.5">
         <div className="skeleton h-3 w-1/2 rounded" />
@@ -169,8 +177,10 @@ export function DealRow({ deal, metric }: { deal: OpportunityCard; metric: "roi"
           ? { value: eur(deal.expected_profit, { sign: true }), label: "profit" }
           : { value: timeAgo(deal.published_at), label: "listed" };
   return (
-    <Link href={`/deals/${deal.id}`} className="flex items-center gap-3 rounded-xl p-2 transition-colors hover:bg-surface-2">
-      <ListingImage src={deal.image_url} alt={deal.title} className="size-12 shrink-0 rounded-lg" />
+    <Link href={`/deals/${deal.id}`} className="group press flex items-center gap-3 rounded-xl p-2 transition-[background-color,transform] duration-150 hover:bg-surface-2">
+      <span className="size-12 shrink-0 overflow-hidden rounded-lg">
+        <ListingImage src={deal.image_url} alt={deal.title} className="zoom-on-hover size-12" />
+      </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13px] font-semibold text-fg">{deal.title}</p>
         <p className="truncate text-xs text-fg-3">

@@ -3,7 +3,7 @@
 import { ArrowRight, Search as SearchIcon, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useState, type FormEvent } from "react";
+import { Suspense, useState, type FormEvent, type CSSProperties } from "react";
 import { DealCard, DealCardSkeleton } from "@/components/deal/deal-card";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState } from "@/components/ui/feedback";
@@ -45,10 +45,10 @@ function SearchInner() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+        <h1 className="enter flex items-center gap-2 text-[28px] font-semibold leading-tight tracking-[-0.025em] sm:text-[32px]">
           <Sparkles className="size-5 text-accent" /> Smart search
         </h1>
-        <p className="mt-1 text-sm text-fg-2">Describe what you want, in Italian or English. FlipFinder turns it into precise filters.</p>
+        <p className="enter mt-1.5 text-sm text-fg-2" style={{ "--i": 1 } as CSSProperties}>Describe what you want, in Italian or English. FlipFinder turns it into precise filters.</p>
       </div>
       <form onSubmit={submit} className="relative" role="search">
         <SearchIcon className="pointer-events-none absolute left-4 top-1/2 size-5 -translate-y-1/2 text-fg-3" />
@@ -120,7 +120,7 @@ function SearchInner() {
       {q && res.isLoading && (
         <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <DealCardSkeleton key={i} />
+            <DealCardSkeleton key={i} index={i} />
           ))}
         </div>
       )}
@@ -131,8 +131,8 @@ function SearchInner() {
             <EmptyState icon={<SearchIcon />} title="No deals match this search" description="Try a higher price limit or fewer constraints. New listings are analysed continuously." />
           ) : (
             <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {data.results.items.map((d) => (
-                <DealCard key={d.id} deal={d} />
+              {data.results.items.map((d, i) => (
+                <DealCard key={d.id} deal={d} index={i} />
               ))}
             </div>
           )}

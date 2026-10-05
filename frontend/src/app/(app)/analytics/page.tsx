@@ -1,7 +1,7 @@
 "use client";
 
 import { Brain, Database, Layers, Store } from "lucide-react";
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState, Skeleton } from "@/components/ui/feedback";
 import { Input, Select } from "@/components/ui/input";
@@ -32,7 +32,7 @@ function SegmentTable({ rows, loading, kind }: { rows?: SegmentStats[]; loading:
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.slug} className="border-b border-line last:border-0">
+            <tr key={r.slug} className="border-b border-line transition-colors last:border-0 hover:bg-surface-2/60">
               <td className="px-5 py-2.5 font-medium text-fg">
                 {kind === "category" ? (r.name_it ?? r.name) : r.name}
                 {r.segment && <span className="ml-1.5 text-xs text-fg-3">segment</span>}
@@ -40,7 +40,10 @@ function SegmentTable({ rows, loading, kind }: { rows?: SegmentStats[]; loading:
               <td className="px-2 py-2.5">
                 <div className="flex items-center gap-2">
                   <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-3">
-                    <div className="h-full rounded-full bg-[var(--series-1)]" style={{ width: `${(r.flip_index / max) * 100}%` }} />
+                    <div
+                      className="h-full origin-left rounded-full bg-[var(--series-1)]"
+                      style={{ width: `${(r.flip_index / max) * 100}%`, animation: "grow-x 0.9s var(--ease-out) backwards" }}
+                    />
                   </div>
                   <span className="w-9 text-right text-xs font-semibold tnum">{r.flip_index.toFixed(0)}</span>
                 </div>
@@ -201,8 +204,8 @@ export default function AnalyticsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
-        <p className="mt-1 text-sm text-fg-2">Which brands and categories statistically produce the best flips (last 30 days).</p>
+        <h1 className="enter text-[28px] font-semibold leading-tight tracking-[-0.025em] sm:text-[32px]">Analytics</h1>
+        <p className="enter mt-1.5 text-sm text-fg-2" style={{ "--i": 1 } as CSSProperties}>Which brands and categories statistically produce the best flips (last 30 days).</p>
       </div>
       <Tabs defaultValue="brands">
         <TabsList>
@@ -212,7 +215,7 @@ export default function AnalyticsPage() {
           <TabsTrigger value="personal">Your performance</TabsTrigger>
         </TabsList>
         <TabsContent value="brands" className="mt-4">
-          <Card>
+          <Card className="reveal">
             <CardHeader>
               <div>
                 <CardTitle className="flex items-center gap-2">
@@ -227,7 +230,7 @@ export default function AnalyticsPage() {
           </Card>
         </TabsContent>
         <TabsContent value="categories" className="mt-4">
-          <Card>
+          <Card className="reveal">
             <CardHeader>
               <div>
                 <CardTitle className="flex items-center gap-2">
@@ -242,7 +245,7 @@ export default function AnalyticsPage() {
           </Card>
         </TabsContent>
         <TabsContent value="market" className="mt-4">
-          <Card>
+          <Card className="reveal">
             <CardHeader>
               <div>
                 <CardTitle className="flex items-center gap-2">
@@ -257,7 +260,7 @@ export default function AnalyticsPage() {
           </Card>
         </TabsContent>
         <TabsContent value="personal" className="mt-4">
-          <Card>
+          <Card className="reveal">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Brain className="size-4 text-fg-3" /> Your performance & learning

@@ -1,4 +1,5 @@
 import { AlertTriangle, ShieldAlert, ShieldCheck, ShieldX } from "lucide-react";
+import type { CSSProperties } from "react";
 import { RISK_LABEL } from "@/lib/format";
 import type { RiskLevel } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -35,6 +36,7 @@ export function ScoreRing({
     <div className={cn("relative inline-flex shrink-0 items-center justify-center", className)} style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90" aria-hidden>
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--surface-3)" strokeWidth={stroke} />
+        {/* Draws in on mount (ring-draw), then eases between values when the score changes. */}
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -43,8 +45,10 @@ export function ScoreRing({
           stroke={color ?? scoreColor(value)}
           strokeWidth={stroke}
           strokeLinecap="round"
-          strokeDasharray={`${(value / 100) * c} ${c}`}
-          className="transition-[stroke-dasharray] duration-700 ease-out"
+          strokeDasharray={c}
+          strokeDashoffset={c * (1 - value / 100)}
+          style={{ "--ring-len": c, animation: "ring-draw 0.9s var(--ease-out) backwards" } as CSSProperties}
+          className="transition-[stroke-dashoffset] duration-700 ease-[var(--ease-out)]"
         />
       </svg>
       <span className="absolute inset-0 flex flex-col items-center justify-center leading-none">
@@ -76,7 +80,14 @@ export function RiskBadge({ level, score, className }: { level: RiskLevel; score
 export function Meter({ value, color, className }: { value: number; color?: string; className?: string }) {
   return (
     <div className={cn("h-1.5 w-full overflow-hidden rounded-full bg-surface-3", className)}>
-      <div className="h-full rounded-full transition-[width] duration-700 ease-out" style={{ width: `${Math.max(0, Math.min(100, value))}%`, background: color ?? scoreColor(value) }} />
+      <div
+        className="h-full origin-left rounded-full transition-[width] duration-700 ease-[var(--ease-out)]"
+        style={{
+          width: `${Math.max(0, Math.min(100, value))}%`,
+          background: color ?? scoreColor(value),
+          animation: "grow-x 0.9s var(--ease-out) backwards",
+        }}
+      />
     </div>
   );
 }

@@ -37,7 +37,7 @@ import { Meter, RiskBadge, scoreColor } from "./score";
 
 function Section({ id, title, description, icon, action, children, className }: { id: string; title: string; description?: string; icon?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <Card id={id} className={cn("scroll-mt-24", className)}>
+    <Card id={id} className={cn("reveal scroll-mt-28", className)}>
       <CardHeader className="flex-wrap">
         <div className="min-w-0 flex-[1_1_240px]">
           <CardTitle className="flex items-center gap-2 [&_svg]:size-4 [&_svg]:text-fg-3">

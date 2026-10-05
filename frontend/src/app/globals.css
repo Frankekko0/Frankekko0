@@ -42,6 +42,16 @@
   --shadow-sm: 0 1px 2px rgba(11, 11, 11, 0.04), 0 1px 1px rgba(11, 11, 11, 0.03);
   --shadow-md: 0 8px 24px -12px rgba(11, 11, 11, 0.18), 0 2px 6px rgba(11, 11, 11, 0.04);
   --ring: rgba(42, 120, 214, 0.35);
+  --highlight: rgba(255, 255, 255, 0.6);
+  --glow-a: rgba(42, 120, 214, 0.1);
+  --glow-b: rgba(229, 83, 42, 0.08);
+
+  /* Motion: strong curves, short durations. Distances collapse under reduced motion. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --motion-y: 8px;
+  --motion-scale: 0.96;
 }
 
 .dark {
@@ -80,11 +90,14 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-md: 0 12px 32px -12px rgba(0, 0, 0, 0.7), 0 2px 8px rgba(0, 0, 0, 0.4);
   --ring: rgba(75, 143, 234, 0.45);
+  --highlight: rgba(255, 255, 255, 0.05);
+  --glow-a: rgba(75, 143, 234, 0.14);
+  --glow-b: rgba(255, 106, 61, 0.1);
 }
 
 @theme inline {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --color-bg: var(--bg);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
@@ -113,7 +126,10 @@
   --shadow-pop: var(--shadow-md);
   --animate-shimmer: shimmer 1.6s ease-in-out infinite;
   --animate-pulse-dot: pulse-dot 2s ease-in-out infinite;
-  --animate-fade-up: fade-up 0.32s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-fade-up: fade-up 0.32s var(--ease-out) backwards;
+  --animate-fade-in: fade-in 0.2s ease both;
+  --animate-scale-in: scale-in 0.18s var(--ease-out) backwards;
+  --animate-wiggle: wiggle 0.6s var(--ease-out);
 }
 
 @keyframes shimmer {
@@ -125,21 +141,94 @@
   50% { opacity: 0.45; transform: scale(0.85); }
 }
 @keyframes fade-up {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translateY(var(--motion-y)); }
   to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fade-out {
+  to { opacity: 0; }
+}
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(var(--motion-scale)); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes scale-out {
+  to { opacity: 0; transform: scale(var(--motion-scale)); }
+}
+@keyframes sheet-in {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes sheet-out {
+  to { transform: translateY(100%); }
+}
+@keyframes drawer-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+@keyframes drawer-out {
+  to { transform: translateX(100%); }
+}
+@keyframes ring-draw {
+  from { stroke-dashoffset: var(--ring-len); }
+}
+@keyframes grow-x {
+  from { transform: scaleX(0); }
+}
+@keyframes grow-y {
+  from { transform: scaleY(0); }
+}
+@keyframes wiggle {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(-14deg); }
+  40% { transform: rotate(10deg); }
+  60% { transform: rotate(-6deg); }
+  80% { transform: rotate(3deg); }
+}
+@keyframes ping {
+  75%, 100% { transform: scale(2.4); opacity: 0; }
+}
+@keyframes border-spin {
+  to { --border-angle: 360deg; }
+}
+@keyframes sheen {
+  from { transform: translateX(-120%) skewX(-20deg); }
+  to { transform: translateX(220%) skewX(-20deg); }
+}
+@keyframes aurora {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(4%, -3%, 0) scale(1.08); }
+}
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(calc(var(--motion-y) * 2)); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@property --border-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
 }
 
 @layer base {
   html {
     -webkit-text-size-adjust: 100%;
     text-rendering: optimizeLegibility;
+    scroll-behavior: smooth;
   }
   body {
     background: var(--bg);
     color: var(--text);
     font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv11";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+  h1, h2, h3 {
+    text-wrap: balance;
   }
   ::selection {
     background: var(--accent-soft);
@@ -150,6 +239,9 @@
   }
   .tnum {
     font-variant-numeric: tabular-nums;
+  }
+  button, a, [role="button"] {
+    -webkit-tap-highlight-color: transparent;
   }
 }
 
@@ -168,11 +260,157 @@
   .safe-bottom {
     padding-bottom: env(safe-area-inset-bottom);
   }
+
+  /* Staggered entrance: set style={{ "--i": index }} on siblings (capped so long lists stay fast). */
+  .enter {
+    /* backwards (not both): hold the start frame during the delay, then release transform for hover */
+    animation: fade-up 0.34s var(--ease-out) backwards;
+    animation-delay: calc(min(var(--i, 0), 10) * 45ms);
+  }
+
+  /* Scroll-driven reveal where supported; elsewhere content is simply visible. */
+  @supports (animation-timeline: view()) {
+    .reveal {
+      animation: reveal linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 28%;
+    }
+  }
+
+  /* Hover lift only for real pointers (taps on touch screens must not "stick"). */
+  .lift {
+    transition: transform 0.22s var(--ease-out), box-shadow 0.22s var(--ease-out), border-color 0.2s ease;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .lift:hover {
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-md);
+    }
+    .group:hover .zoom-on-hover {
+      transform: scale(1.045);
+    }
+  }
+  .zoom-on-hover {
+    transition: transform 0.6s var(--ease-out);
+  }
+
+  /* Pressable feedback for any custom clickable element. */
+  /* :where() keeps specificity at zero so a component's own transition list still wins. */
+  :where(.press) {
+    transition: transform 0.16s var(--ease-out);
+  }
+  .press:active {
+    transform: scale(0.97);
+  }
+
+  /* Card depth: hairline top highlight (visible mostly in dark mode). */
+  .highlight {
+    box-shadow: inset 0 1px 0 var(--highlight), var(--shadow-sm);
+  }
+
+  /* Animated gradient border for Ultra Deals (rare, so the motion stays special). */
+  .ultra-border {
+    position: relative;
+    isolation: isolate;
+  }
+  .ultra-border::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    z-index: -1;
+    border-radius: inherit;
+    padding: 1.5px;
+    background: conic-gradient(from var(--border-angle), var(--ultra), var(--ultra-2), transparent 40%, transparent 60%, var(--ultra));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    animation: border-spin 6s linear infinite;
+  }
+
+  /* Light sweep across a button on hover. */
+  .sheen {
+    position: relative;
+    overflow: hidden;
+  }
+  .sheen::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 40%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+    transform: translateX(-120%) skewX(-20deg);
+    pointer-events: none;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .sheen:hover::after {
+      animation: sheen 0.9s var(--ease-out);
+    }
+  }
+
+  /* Soft colour field behind page heroes. */
+  .aurora {
+    pointer-events: none;
+    position: absolute;
+    inset: -40% -10% auto -10%;
+    height: 520px;
+    background:
+      radial-gradient(40% 60% at 20% 30%, var(--glow-a), transparent 70%),
+      radial-gradient(35% 55% at 75% 20%, var(--glow-b), transparent 70%);
+    filter: blur(8px);
+    animation: aurora 18s ease-in-out infinite;
+  }
+
+  .grid-bg {
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(70% 60% at 50% 30%, #000, transparent);
+  }
 }
 
+/* Overlays: Radix keeps the element mounted until the closing animation ends. */
+.overlay-anim[data-state="open"] { animation: fade-in 0.2s ease both; }
+.overlay-anim[data-state="closed"] { animation: fade-out 0.16s ease both; }
+.dialog-anim[data-state="open"] { animation: scale-in 0.22s var(--ease-out) both; }
+.dialog-anim[data-state="closed"] { animation: scale-out 0.14s ease both; }
+@media (max-width: 639px) {
+  /* On phones the centered dialog is a bottom sheet. */
+  .dialog-anim[data-state="open"] { animation: sheet-in 0.42s var(--ease-drawer) both; }
+  .dialog-anim[data-state="closed"] { animation: sheet-out 0.26s var(--ease-drawer) both; }
+}
+.drawer-anim[data-state="open"] { animation: drawer-in 0.4s var(--ease-drawer) both; }
+.drawer-anim[data-state="closed"] { animation: drawer-out 0.24s var(--ease-drawer) both; }
+.popover-anim[data-state="open"],
+.popover-anim[data-state="delayed-open"],
+.popover-anim[data-state="instant-open"] { animation: scale-in 0.16s var(--ease-out) both; }
+.popover-anim[data-state="closed"] { animation: scale-out 0.1s ease both; }
+
 @media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-y: 0px;
+    --motion-scale: 1;
+  }
+  .dialog-anim[data-state="open"],
+  .drawer-anim[data-state="open"] {
+    animation: fade-in 0.2s ease both !important;
+  }
+  .dialog-anim[data-state="closed"],
+  .drawer-anim[data-state="closed"] {
+    animation: fade-out 0.14s ease both !important;
+  }
+  .aurora,
+  .ultra-border::before,
+  .animate-pulse-dot,
+  .animate-shimmer {
+    animation: none !important;
+  }
+  .lift:hover,
+  .group:hover .zoom-on-hover,
+  .press:active {
+    transform: none !important;
+  }
   *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

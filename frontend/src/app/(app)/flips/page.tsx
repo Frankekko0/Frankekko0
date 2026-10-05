@@ -2,7 +2,7 @@
 
 import { ExternalLink, MoreHorizontal, Package, Plus, Receipt, Trash2, Trophy } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { MonthlyProfitChart } from "@/components/charts/monthly-bars";
 import { PurchaseDialog, SaleDialog } from "@/components/forms/flip-forms";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState, Skeleton } from "@/components/ui/feedback";
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger, Tabs, TabsList, TabsTrigger } from "@/components/ui/misc";
+import { AnimatedNumber } from "@/components/ui/motion";
 import { StatTile } from "@/components/ui/stat";
 import { eur, pct, plural, shortDate } from "@/lib/format";
 import { useDeletePurchase, useDeleteSale, useFlips, usePortfolio, useUpdatePurchase } from "@/lib/queries";
@@ -78,8 +79,8 @@ export default function FlipsPage() {
     <div className="space-y-6">
       <div className="flex items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">My Flips</h1>
-          <p className="mt-1 text-sm text-fg-2">Your purchases, inventory and realized profit. Every flip teaches your personal score.</p>
+          <h1 className="enter text-[28px] font-semibold leading-tight tracking-[-0.025em] sm:text-[32px]">My Flips</h1>
+          <p className="enter mt-1.5 text-sm text-fg-2" style={{ "--i": 1 } as CSSProperties}>Your purchases, inventory and realized profit. Every flip teaches your personal score.</p>
         </div>
         <PurchaseDialog
           trigger={
@@ -91,12 +92,13 @@ export default function FlipsPage() {
       </div>
 
       <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatTile label="Profit" value={eur(p?.profit)} sub={p ? `${plural(p.flips_completed, "flip")} completed` : undefined} tone="success" icon={<Trophy />} loading={portfolio.isLoading} />
-        <StatTile label="Average ROI" value={pct(p?.average_roi)} sub={p?.win_rate !== null && p?.win_rate !== undefined ? `win rate ${pct(p.win_rate)}` : "no sales yet"} loading={portfolio.isLoading} />
-        <StatTile label="Revenue" value={eur(p?.revenue)} sub={p ? `invested ${eur(p.total_invested)}` : undefined} loading={portfolio.isLoading} />
+        <StatTile index={1} label="Profit" value={p?.profit != null ? <AnimatedNumber value={p.profit} format={(v) => eur(v)} /> : "—"} sub={p ? `${plural(p.flips_completed, "flip")} completed` : undefined} tone="success" icon={<Trophy />} loading={portfolio.isLoading} />
+        <StatTile index={2} label="Average ROI" value={p?.average_roi != null ? <AnimatedNumber value={p.average_roi} format={(v) => pct(v)} /> : "—"} sub={p?.win_rate !== null && p?.win_rate !== undefined ? `win rate ${pct(p.win_rate)}` : "no sales yet"} loading={portfolio.isLoading} />
+        <StatTile index={3} label="Revenue" value={p?.revenue != null ? <AnimatedNumber value={p.revenue} format={(v) => eur(v)} /> : "—"} sub={p ? `invested ${eur(p.total_invested)}` : undefined} loading={portfolio.isLoading} />
         <StatTile
+          index={4}
           label="Inventory value"
-          value={eur(p?.inventory_value)}
+          value={p?.inventory_value != null ? <AnimatedNumber value={p.inventory_value} format={(v) => eur(v)} /> : "—"}
           sub={p ? `${plural(p.inventory_items, "item")} · cost ${eur(p.inventory_cost)}` : undefined}
           icon={<Package />}
           loading={portfolio.isLoading}
@@ -104,7 +106,7 @@ export default function FlipsPage() {
       </section>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <Card>
+        <Card className="reveal">
           <CardHeader>
             <CardTitle>Monthly profit</CardTitle>
           </CardHeader>
@@ -116,7 +118,7 @@ export default function FlipsPage() {
             )}
           </CardContent>
         </Card>
-        <Card>
+        <Card className="reveal">
           <CardHeader>
             <CardTitle>Performance</CardTitle>
           </CardHeader>
@@ -145,7 +147,7 @@ export default function FlipsPage() {
         </Card>
       </div>
 
-      <Card>
+      <Card className="reveal">
         <CardHeader className="items-center">
           <CardTitle>Purchases & sales</CardTitle>
           <Tabs value={tab} onValueChange={setTab}>

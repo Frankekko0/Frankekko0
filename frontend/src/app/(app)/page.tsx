@@ -7,6 +7,7 @@ import { GlobalSearch, ScanStatus } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState, SectionHeader } from "@/components/ui/feedback";
+import { AnimatedNumber } from "@/components/ui/motion";
 import { StatTile } from "@/components/ui/stat";
 import { compactNum, eur, pct, plural, timeAgo } from "@/lib/format";
 import { useAlerts, useInsights, useMe, useOpportunities, useQuickStats, useTriggerScan } from "@/lib/queries";
@@ -24,7 +25,7 @@ function DealGrid({ items, loading, count = 8 }: { items?: OpportunityCard[]; lo
     return (
       <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {Array.from({ length: count }).map((_, i) => (
-          <DealCardSkeleton key={i} />
+          <DealCardSkeleton key={i} index={i} />
         ))}
       </div>
     );
@@ -41,9 +42,7 @@ function DealGrid({ items, loading, count = 8 }: { items?: OpportunityCard[]; lo
   return (
     <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {items.map((d, i) => (
-        <div key={d.id} className="animate-fade-up" style={{ animationDelay: `${Math.min(i, 8) * 30}ms` }}>
-          <DealCard deal={d} />
-        </div>
+        <DealCard key={d.id} deal={d} index={i} />
       ))}
     </div>
   );
@@ -51,14 +50,14 @@ function DealGrid({ items, loading, count = 8 }: { items?: OpportunityCard[]; lo
 
 function ListCard({ title, icon, items, metric, href, loading }: { title: string; icon: React.ReactNode; items?: OpportunityCard[]; metric: "roi" | "velocity" | "profit" | "new"; href: string; loading: boolean }) {
   return (
-    <Card>
+    <Card className="reveal highlight">
       <CardHeader>
         <CardTitle className="flex items-center gap-2 [&_svg]:size-4 [&_svg]:text-fg-3">
           {icon}
           {title}
         </CardTitle>
-        <Link href={href} className="text-[13px] font-medium text-accent hover:underline">
-          See all
+        <Link href={href} className="group inline-flex items-center gap-1 text-[13px] font-medium text-accent">
+          See all <ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />
         </Link>
       </CardHeader>
       <CardContent className="pt-2">
@@ -101,50 +100,94 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8">
-      <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div>
-          <p className="text-[13px] font-medium text-fg-3">
-            {greeting}
-            {me?.display_name ? `, ${me.display_name}` : ""}
-          </p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-[28px]">Today&apos;s best flips</h1>
-          <p className="mt-1 text-sm text-fg-2">Listings priced below their real market value, ranked by profit, ROI, demand and risk.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="xl:hidden">
-            <ScanStatus />
+      <section className="enter relative overflow-hidden rounded-3xl border border-line bg-surface/70 px-5 py-6 shadow-card sm:px-8 sm:py-8">
+        <div className="aurora" aria-hidden />
+        <div className="grid-bg pointer-events-none absolute inset-0 opacity-70" aria-hidden />
+        <div className="relative flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-[13px] font-medium text-fg-3">
+              {greeting}
+              {me?.display_name ? `, ${me.display_name}` : ""}
+            </p>
+            <h1 className="mt-1.5 text-[30px] font-semibold leading-[1.08] tracking-[-0.03em] sm:text-[40px]">
+              Today&apos;s best{" "}
+              <span className="bg-gradient-to-r from-ultra to-ultra-2 bg-clip-text text-transparent">flips</span>
+            </h1>
+            <p className="mt-2 max-w-xl text-sm text-fg-2 sm:text-[15px]">
+              Listings priced below their real market value, ranked by profit, ROI, demand and risk.
+            </p>
           </div>
-          <Button variant="outline" size="sm" onClick={() => scan.mutate()} loading={scan.isPending}>
-            <RefreshCw /> Scan now
-          </Button>
-          <Button asChild size="sm">
-            <Link href="/analyze">
-              <ScanSearch /> Analyze a listing
-            </Link>
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="2xl:hidden">
+              <ScanStatus />
+            </div>
+            <Button variant="outline" size="sm" onClick={() => scan.mutate()} loading={scan.isPending}>
+              <RefreshCw /> Scan now
+            </Button>
+            <Button asChild size="sm">
+              <Link href="/analyze">
+                <ScanSearch /> Analyze a listing
+              </Link>
+            </Button>
+          </div>
         </div>
-      </section>
-
-      <section className="md:hidden">
-        <GlobalSearch />
-      </section>
-      <section className="hidden flex-wrap items-center gap-2 md:flex">
-        <span className="text-xs text-fg-3">Try:</span>
-        {EXAMPLES.map((e) => (
-          <Link key={e} href={`/search?q=${encodeURIComponent(e)}`} className="rounded-full border border-line bg-surface px-3 py-1 text-xs text-fg-2 transition-colors hover:border-accent hover:text-accent">
-            {e}
-          </Link>
-        ))}
+        <div className="relative mt-6 md:hidden">
+          <GlobalSearch />
+        </div>
+        <div className="relative mt-6 hidden flex-wrap items-center gap-2 md:flex">
+          <span className="text-xs text-fg-3">Try:</span>
+          {EXAMPLES.map((e) => (
+            <Link
+              key={e}
+              href={`/search?q=${encodeURIComponent(e)}`}
+              className="press rounded-full border border-line bg-surface/80 px-3 py-1 text-xs text-fg-2 backdrop-blur transition-[border-color,color,transform] duration-150 hover:border-accent hover:text-accent"
+            >
+              {e}
+            </Link>
+          ))}
+        </div>
       </section>
 
       <section aria-label="Quick stats" className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-        <StatTile label="Opportunities today" value={s ? s.opportunities_today.toLocaleString() : "—"} sub={s ? `${s.active_opportunities} active now` : undefined} icon={<Sparkles />} loading={stats.isLoading} />
-        <StatTile label="Average expected ROI" value={pct(s?.average_expected_roi)} sub="on deals with Flip ≥ 60" icon={<TrendingUp />} tone="success" loading={stats.isLoading} />
-        <StatTile label="Potential profit" value={eur(s?.potential_profit, { compact: true })} sub="sum of top deals (Flip ≥ 70)" icon={<Wallet />} tone="success" loading={stats.isLoading} />
-        <StatTile label="Ultra deals found" value={s?.ultra_deals ?? "—"} sub="Flip > 90 · Conf. > 80 · ROI > 60%" icon={<Flame />} tone="ultra" loading={stats.isLoading} />
         <StatTile
+          index={1}
+          label="Opportunities today"
+          value={s ? <AnimatedNumber value={s.opportunities_today} /> : "—"}
+          sub={s ? `${s.active_opportunities} active now` : undefined}
+          icon={<Sparkles />}
+          loading={stats.isLoading}
+        />
+        <StatTile
+          index={2}
+          label="Average expected ROI"
+          value={s?.average_expected_roi != null ? <AnimatedNumber value={s.average_expected_roi} format={(v) => pct(v)} /> : "—"}
+          sub="on deals with Flip ≥ 60"
+          icon={<TrendingUp />}
+          tone="success"
+          loading={stats.isLoading}
+        />
+        <StatTile
+          index={3}
+          label="Potential profit"
+          value={s ? <AnimatedNumber value={s.potential_profit} format={(v) => eur(v, { compact: true })} /> : "—"}
+          sub="sum of top deals (Flip ≥ 70)"
+          icon={<Wallet />}
+          tone="success"
+          loading={stats.isLoading}
+        />
+        <StatTile
+          index={4}
+          label="Ultra deals found"
+          value={s ? <AnimatedNumber value={s.ultra_deals} /> : "—"}
+          sub="Flip > 90 · Conf. > 80 · ROI > 60%"
+          icon={<Flame />}
+          tone="ultra"
+          loading={stats.isLoading}
+        />
+        <StatTile
+          index={5}
           label="Listings analyzed"
-          value={s ? compactNum(s.listings_analyzed) : "—"}
+          value={s ? <AnimatedNumber value={s.listings_analyzed} format={(v) => compactNum(v)} /> : "—"}
           sub={s ? `${compactNum(s.listings_tracked)} tracked in total` : undefined}
           icon={<Gauge />}
           loading={stats.isLoading}
@@ -153,35 +196,35 @@ export default function DashboardPage() {
       </section>
 
       {(ultra.data?.items.length ?? 0) > 0 && (
-        <section>
+        <section className="reveal">
           <SectionHeader
             icon={<Flame className="text-ultra" />}
             title="Ultra Deals"
             description="Rare: Flip Score above 90 with high confidence and ROI above 60%. Move fast."
             action={
-              <Link href="/deals?preset=ultra" className="inline-flex items-center gap-1 text-[13px] font-medium text-accent hover:underline">
-                All ultra deals <ArrowRight className="size-3.5" />
+              <Link href="/deals?preset=ultra" className="group inline-flex items-center gap-1 text-[13px] font-medium text-accent">
+                All ultra deals <ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />
               </Link>
             }
           />
           <div className="scrollbar-none -mx-4 flex snap-x gap-4 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0">
-            {ultra.data!.items.map((d) => (
-              <div key={d.id} className="w-[280px] shrink-0 snap-start">
-                <DealCard deal={d} />
+            {ultra.data!.items.map((d, i) => (
+              <div key={d.id} className="w-[280px] shrink-0 snap-start py-1">
+                <DealCard deal={d} index={i} />
               </div>
             ))}
           </div>
         </section>
       )}
 
-      <section>
+      <section className="reveal">
         <SectionHeader
           icon={<Sparkles className="text-accent" />}
           title="Top opportunities"
           description="Best balance of profit, ROI, demand, sales velocity and reliability."
           action={
-            <Link href="/deals?preset=best_deals" className="inline-flex items-center gap-1 text-[13px] font-medium text-accent hover:underline">
-              Explore all <ArrowRight className="size-3.5" />
+            <Link href="/deals?preset=best_deals" className="group inline-flex items-center gap-1 text-[13px] font-medium text-accent">
+              Explore all <ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />
             </Link>
           }
         />
@@ -195,7 +238,7 @@ export default function DashboardPage() {
       </section>
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card>
+        <Card className="reveal highlight">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <BellRing className="size-4 text-fg-3" /> Watchlist alerts
@@ -209,7 +252,7 @@ export default function DashboardPage() {
               <ul className="-mx-2 divide-y divide-line">
                 {alerts.data.items.slice(0, 5).map((a) => (
                   <li key={a.id}>
-                    <Link href={a.opportunity_id ? `/deals/${a.opportunity_id}` : "/alerts"} className="flex items-start gap-3 rounded-lg px-2 py-2.5 hover:bg-surface-2">
+                    <Link href={a.opportunity_id ? `/deals/${a.opportunity_id}` : "/alerts"} className="press flex items-start gap-3 rounded-lg px-2 py-2.5 transition-[background-color,transform] duration-150 hover:bg-surface-2">
                       <span className={`mt-1.5 size-2 shrink-0 rounded-full ${a.read_at ? "bg-surface-3" : a.priority === "high" ? "bg-ultra" : "bg-accent"}`} aria-hidden />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px] font-semibold text-fg">{a.title}</span>
@@ -236,7 +279,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="reveal highlight">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Layers className="size-4 text-fg-3" /> Market insights
@@ -253,7 +296,10 @@ export default function DashboardPage() {
                   <li key={b.slug} className="flex items-center gap-3 text-[13px]">
                     <span className="w-28 truncate font-medium text-fg">{b.name}</span>
                     <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-3">
-                      <div className="h-full rounded-full bg-[var(--series-1)]" style={{ width: `${Math.min(100, b.flip_index)}%` }} />
+                      <div
+                        className="h-full origin-left rounded-full bg-[var(--series-1)]"
+                        style={{ width: `${Math.min(100, b.flip_index)}%`, animation: "grow-x 0.9s var(--ease-out) backwards" }}
+                      />
                     </div>
                     <span className="w-24 text-right text-xs text-fg-3 tnum">
                       {plural(b.opportunities, "deal")} · {pct(b.average_roi)}
