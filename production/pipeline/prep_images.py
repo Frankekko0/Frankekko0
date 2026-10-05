@@ -13,6 +13,7 @@ DST.mkdir(parents=True, exist_ok=True)
 # Images that must not be graded (documents, logos, mugshots get a light touch).
 NO_GRADE = {"enron_logo", "hearing_doc_collapse", "hearing_doc_shredding", "skilling_indictment", "code_ethics_cover"}
 LIGHT = {"ken_lay", "skilling_mug", "mclean", "watkins", "andersen_witnesses", "hearing_0124"}
+MID_LIFT = 0.87   # gamma < 1 lifts mid-tones (~ +10% at 50% grey) without touching black or white
 BW = {"ken_lay", "skilling_mug", "andersen_witnesses", "enron_complex", "houston_pano_night", "wallst_2000", "shredder_detail",
       "casey_courthouse", "supreme_court", "rbc_floor", "pipeline", "enron_field"}
 
@@ -26,6 +27,7 @@ def grade(arr, strength=1.0):
     highs = np.clip((lum - 0.55) * 2.2, 0, 1)
     x += strength * (shadows * np.array([-0.018, 0.006, 0.03]) + highs * np.array([0.03, 0.012, -0.022]))
     x = 0.035 * strength + x * (1 - 0.05 * strength)                  # lifted, filmic blacks
+    x = np.clip(x, 0, 1) ** MID_LIFT                                   # open up the mid-tones for phone screens
     return (np.clip(x, 0, 1) * 255).astype(np.uint8)
 
 
@@ -34,6 +36,7 @@ def to_bw(arr):
     lum = 0.2126 * x[..., 0] + 0.7152 * x[..., 1] + 0.0722 * x[..., 2]
     lum = 0.5 + (lum - 0.5) * 1.18
     lum = 0.03 + np.clip(lum, 0, 1) * 0.94
+    lum = lum ** MID_LIFT
     out = np.stack([lum * 1.0, lum * 0.985, lum * 0.95], -1)            # faint warm paper tone
     return (np.clip(out, 0, 1) * 255).astype(np.uint8)
 

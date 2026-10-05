@@ -62,6 +62,11 @@ svg.el { overflow: visible; }
 .credit { position: absolute; left: 40px; bottom: 30px; font-family: 'Inter', sans-serif; font-weight: 500; font-size: 17px; letter-spacing: 0.03em; color: rgba(255, 255, 255, 0.62); text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9); }
 .credit b { color: rgba(255, 255, 255, 0.85); font-weight: 600; }
 .tag { position: absolute; right: 40px; bottom: 30px; font-family: 'Inter', sans-serif; font-weight: 600; font-size: 15px; letter-spacing: 0.2em; text-transform: uppercase; color: rgba(255, 255, 255, 0.55); }
+/* "illustrative" marker: same place (top right) and size in every scene that is not archival */
+.tagline { font-family: 'Inter', sans-serif; font-weight: 700; font-size: 25px; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(242, 239, 232, 0.88);
+  padding: 7px 16px 8px; border: 2px solid rgba(242, 239, 232, 0.38); border-radius: 8px; background: rgba(4, 6, 9, 0.45); }
+.tagline.dark { color: #4a4134; border-color: rgba(60, 50, 36, 0.4); background: rgba(255, 255, 255, 0.35); }
+.note { font-family: 'Inter', sans-serif; font-weight: 600; font-size: 21px; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(242, 239, 232, 0.72); }
 
 /* documents */
 .docwrap { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
@@ -73,5 +78,15 @@ svg.el { overflow: visible; }
 /* global overlays */
 #vignette { position: absolute; inset: 0; z-index: 50; pointer-events: none; background: radial-gradient(ellipse at 50% 50%, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.55) 100%); }
 #grain { position: absolute; inset: 0; z-index: 51; width: 1920px; height: 1080px; opacity: 0.075; mix-blend-mode: overlay; pointer-events: none; }
+#subscrim { position: absolute; left: 0; right: 0; bottom: 0; height: 340px; z-index: 54; pointer-events: none; opacity: 0;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0.3) 38%, rgba(0, 0, 0, 0) 100%); }
+#subs { position: absolute; left: 0; width: 1920px; bottom: 70px; z-index: 56; display: flex; justify-content: center; pointer-events: none; }
+.subline { position: relative; white-space: nowrap; font-family: 'Inter', sans-serif; font-weight: 800; font-size: 56px; line-height: 1; letter-spacing: -0.012em;
+  transform-origin: 50% 100%; padding: 0 10px; border-radius: 16px; background: rgba(7, 9, 12, 0.62); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); }
+.sw { position: relative; z-index: 2; display: inline-block; padding: 8px 12px 14px; margin: 0 -1px; transform-origin: 50% 80%;
+  text-shadow: 0 3px 16px rgba(0, 0, 0, 0.92), 0 1px 3px rgba(0, 0, 0, 0.95); }
+.sw.on { text-shadow: none; }
+.subbar { position: absolute; z-index: 1; bottom: 2px; height: 7px; border-radius: 4px; box-shadow: 0 0 18px rgba(232, 176, 75, 0.55); }
+.subpill { position: absolute; z-index: 1; top: 2px; bottom: 2px; border-radius: 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5); opacity: 0; }
 #flash { position: absolute; inset: 0; z-index: 60; background: #fff; opacity: 0; pointer-events: none; }
 #black { position: absolute; inset: 0; z-index: 61; background: #000; opacity: 0; pointer-events: none; }

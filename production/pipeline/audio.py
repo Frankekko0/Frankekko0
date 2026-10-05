@@ -1,5 +1,5 @@
 """Final audio mix: processed narration + per-act music (ducked under speech) + SFX,
-normalised to -14 LUFS / -1 dBTP for YouTube. Writes build/mix.wav (48 kHz stereo).
+normalised to -14 LUFS / -1.5 dBTP for YouTube. Writes build/mix.wav (48 kHz stereo).
 """
 import json
 import subprocess
@@ -23,14 +23,15 @@ CUES = {
     "ACT0": ("act0_echoes_of_time_v2.mp3", 10, -21),
     "ACT1": ("act1_inspired.mp3", 0, -23),
     "ACT2": ("act2_impact_prelude.mp3", 0, -23),
-    "ACT3": ("act3_rising_tide.mp3", 0, -21),
+    "ACT3": ("act3_rising_tide.mp3", 0, -24),
     "ACT4": ("act4_static_motion.mp3", 0, -22),
     "ACT5": ("act5_lightless_dawn.mp3", 170, -22),
-    "ACT6": ("act6_interloper.mp3", 70, -19.5),
-    "ACT7": ("act7_heartbreaking.mp3", 0, -22),
+    "ACT6": ("act6_interloper.mp3", 70, -22.5),
+    "ACT7": ("act7_heartbreaking.mp3", 0, -25),
     "ACT8": ("act8_despair_and_triumph.mp3", 118, -21),
 }
-DUCK_DB = 9.0          # music reduction while the narrator speaks
+DUCK_DB = 14.0         # music reduction while the narrator speaks (keeps the voice >= ~12 LU above the bed)
+TAIL = ("act0_echoes_of_time_v2.mp3", 10, -23)   # the opening theme returns under the end card
 XFADE = 1.3
 
 
@@ -147,10 +148,11 @@ def main():
     gain_db = -DUCK_DB * speaking
     w = S.w
     holes = [  # (start, end, depth dB)
-        (w("ACT0_08", "gone") - 0.1, w("ACT0_08", "gone") + 1.1, -22),
+        (w("ACT0_08", "less") - 0.1, E("ACT0_08") + 0.9, -22),
         (L("ACT2_08") + 0.9, E("ACT2_08") + 0.5, -16),
         (L("ACT6_12") + 1.3, E("ACT6_12") + 0.9, -20),
         (w("ACT6_13", "chapter") - 0.05, w("ACT6_13", "chapter") + 0.6, -10),
+        (L("ACT8_08") - 0.3, E("ACT8_08") - 0.4, -5),
         (E("ACT8_08") - 0.4, dur, -60),
     ]
     tt = np.arange(N) / SR
@@ -159,6 +161,20 @@ def main():
         ramp_out = np.clip((b - tt) / 0.5, 0, 1) if b < dur else 1.0
         gain_db += depth * np.minimum(ramp_in, ramp_out)
     music *= db(gain_db)[:, None]
+
+    # ---- end card: the opening theme comes back after "It had weeks."
+    f, off, target = TAIL
+    a0 = S.OC - 0.3
+    seg_len = int((dur - a0) * SR)
+    trk = load_audio(MUSIC / f)
+    seg = trk[int(off * SR):int(off * SR) + seg_len]
+    seg = np.pad(seg, ((0, seg_len - len(seg)), (0, 0)))
+    seg = seg * db(target - rms_db(seg[: int(10 * SR)]))
+    env = np.ones(seg_len)
+    fi, fo = int(1.8 * SR), int(3.5 * SR)
+    env[:fi] = np.sin(np.linspace(0, np.pi / 2, fi)) ** 2
+    env[-fo:] *= np.cos(np.linspace(0, np.pi / 2, fo)) ** 2
+    music[int(a0 * SR):int(a0 * SR) + seg_len] += seg * env[:, None]
 
     # ---- sound effects
     fx = np.zeros((N, 2))
@@ -182,10 +198,10 @@ def main():
     sf.write(BUILD / "stem_music.wav", music.astype(np.float32), SR, subtype="FLOAT")
 
     # ---- two-pass loudness normalisation to -14 LUFS, -1 dBTP
-    p1 = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(tmp), "-af", "loudnorm=I=-14:TP=-1.0:LRA=11:print_format=json", "-f", "null", "-"],
+    p1 = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(tmp), "-af", "loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json", "-f", "null", "-"],
                         capture_output=True, text=True).stderr
     m = json.loads(p1[p1.rfind("{"):p1.rfind("}") + 1])
-    af = (f"loudnorm=I=-14:TP=-1.0:LRA=11:measured_I={m['input_i']}:measured_TP={m['input_tp']}:measured_LRA={m['input_lra']}:"
+    af = (f"loudnorm=I=-14:TP=-1.5:LRA=11:measured_I={m['input_i']}:measured_TP={m['input_tp']}:measured_LRA={m['input_lra']}:"
           f"measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true")
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(tmp), "-af", af, "-ar", str(SR), "-c:a", "pcm_s24le", str(BUILD / "mix.wav")], check=True)
     print(f"mix: measured {m['input_i']} LUFS -> -14 LUFS; duration {dur:.1f}s")

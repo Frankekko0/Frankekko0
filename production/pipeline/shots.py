@@ -12,7 +12,8 @@ NAR = json.loads((ROOT / "build" / "narration.json").read_text())
 LINES = {l["id"]: l for a in NAR["acts"] for l in a["lines"]}
 ACTS = {a["id"]: a for a in NAR["acts"]}
 DOCS = json.loads((ROOT / "assets" / "docs" / "docs.json").read_text())
-END = round(LINES["ACT8_09"]["end"] + 1.2, 2)          # video length
+OUTRO = 18.5                                           # end card for YouTube end-screen elements
+END = round(LINES["ACT8_09"]["end"] + 1.2 + OUTRO, 2)  # video length
 
 
 def L(i):
@@ -37,6 +38,7 @@ def we(i, word, n=1):
 
 
 SHOTS, OVER, FX = [], [], []
+DUPS = []   # (start, end, text) of on-screen captions that say exactly what the narrator says
 
 
 def shot(start, bg=None, els=(), **kw):
@@ -124,6 +126,8 @@ LABELS = {
     "fiber_laying": "Fiber-optic cable reels",
     "code_ethics_cover": "Enron Code of Ethics (July 2000)",
     "andersen_tower": "Arthur Andersen offices",
+    "enron_logo": "Enron logo (Paul Rand design)",
+    "hearing_doc_shredding": "House hearing record, \"Destruction of Enron-Related Documents by Andersen Personnel\" (2002)",
 }
 
 
@@ -170,8 +174,8 @@ BLACK = dict(kind="black")
 # ---------------------------------------------------------------- reusable overlays
 def cap(text, at, until=None, pos="low", cls=None, anim="up", **kw):
     """Emphasis caption on top of whatever is on screen."""
-    if pos == "low":
-        el = T(text, 110, 905, cls=cls or "cap-m boxed shadow", at=at, until=until, anim=anim, anchor="bl", **kw)
+    if pos == "low":   # lower third, kept clear of the subtitle band
+        el = T(text, 110, 800, cls=cls or "cap-m boxed shadow", at=at, until=until, anim=anim, anchor="bl", **kw)
     elif pos == "center":
         el = T(text, 960, 540, cls=cls or "cap-l shadow", at=at, until=until, anim=anim, **kw)
     elif pos == "high":
@@ -181,8 +185,16 @@ def cap(text, at, until=None, pos="low", cls=None, anim="up", **kw):
     return el
 
 
-def caption(text, at, until, **kw):
+def caption(text, at, until, dup=False, **kw):
+    """dup=True: the caption repeats the narration word for word, so the subtitle steps aside for it."""
     over(at, until + 0.3, [cap(text, at, until, **kw)])
+    if dup:
+        DUPS.append((at, until, text))
+
+
+def illus(at, text="ILLUSTRATIVE", dark=False, until=None):
+    """Marker for anything that is not archival: same size and place (top right) in every scene."""
+    return T(text, 1840, 78, cls="tagline" + (" dark" if dark else ""), at=at, until=until, anim="fade", anchor="r")
 
 
 def datestamp(text, at, until, sub=None):
@@ -215,11 +227,11 @@ def person(key, name, role, at, side="left", note=None, extra=()):
            RECT(tx, 505, 120, 4, at=at + 0.45, style={"background": "var(--gold)"}, anim="wipe"),
            T(role, tx, 560, cls="label-l gold", at=at + 0.55, anim="fade", anchor="l")]
     if note:
-        els.append(T(note, px, 840, cls="label", at=at + 0.6, anim="fade", anchor="tl", style={"fontSize": "17px", "letterSpacing": "0.12em"}))
+        els.append(T(note, px, 836, cls="note", at=at + 0.6, anim="fade", anchor="tl"))
     return els + list(extra)
 
 
-def stock(view, reveal, ann=(), red_from=None, x=70, y=120, w_=1780, h=860, ystep=10, at=None, head=True, color="#e8b04b", lw=5, **kw):
+def stock(view, reveal, ann=(), red_from=None, x=70, y=120, w_=1780, h=780, ystep=10, at=None, head=True, color="#e8b04b", lw=5, **kw):
     return dict(kind="stock", x=x, y=y, w=w_, h=h, view=[list(v) for v in view], reveal=[list(r) for r in reveal],
                 ann=[dict(a) for a in ann], redFrom=red_from, ystep=ystep, at=at, anim="fade", ad=0.3, head=head, color=color, lw=lw, **kw)
 
@@ -279,11 +291,10 @@ shot(0.0, DARK, [
 ], cam=[[0, 1.0, 0, 0], [2.2, 1.12, 0, 0]], tin="dip", tinD=0.6)
 sfx(0.0, "hit", -2)
 shot(w("ACT0_01", "ran"), PH("enron_complex", "push", dim=0.25, bw=True), [], tin="cut")
-caption("IT DIDN'T RUN OUT OF **CUSTOMERS**", w("ACT0_01", "ran"), L("ACT0_02") - 0.1)
 shot(L("ACT0_02"), PH("pipeline", "left", dim=0.15), [])
+shot(w("ACT0_02", "moving"), PH("pipeline", [1.45, -260, 80, 1.6, -300, 60], dim=0.2, bw=True), [])
 datestamp("2001", L("ACT0_02") + 0.1, w("ACT0_02", "its", 2) - 0.1, sub="STILL OPERATING")
 shot(w("ACT0_02", "its", 2), PH("rbc_floor", "right", dim=0.2), [])
-caption("STILL MAKING DEALS", w("ACT0_02", "making") - 0.3, E("ACT0_02"))
 # rewind 2001 -> 1992
 shot(L("ACT0_03"), DARK, [
     LBL("THE REAL PROBLEM STARTED", 960, 360, at=L("ACT0_03") + 0.1, anim="up"),
@@ -300,15 +311,21 @@ sfx(w("ACT0_03", "decision"), "paper", -8)
 # 1992
 s0 = L("ACT0_04")
 shot(s0, NAVY, [
-    T("1992", 960, 470, cls="cap-xxl shadow", at=s0 + 0.05, anim="zoom", ad=0.5),
-    LBL("ENRON GETS PERMISSION TO USE", 960, 620, at=w("ACT0_04", "got"), cls="label-l"),
-    T("**MARK-TO-MARKET**", 960, 705, cls="cap-m shadow", at=w("ACT0_04", "accounting"), anim="wipe", ad=0.6),
-], cam=[[0, 1.0, 0, 0], [5, 1.05, 0, 0]])
+    T("1992", 960, 520, cls="cap-xxl shadow", at=s0 + 0.05, anim="zoom", ad=0.5),
+], cam=[[0, 1.0, 0, 0], [2, 1.08, 0, 0]])
 sfx(s0, "hit", -6)
+g0 = w("ACT0_04", "got")
+shot(g0, NAVY, [
+    LBL("1992 · ENRON GETS PERMISSION TO USE", 960, 380, at=g0 + 0.05, cls="label-l"),
+    T("**MARK-TO-MARKET**", 960, 530, cls="cap-xl shadow", at=w("ACT0_04", "accounting") - 0.15, anim="wipe", ad=0.6),
+    LBL("AN ACCOUNTING METHOD", 960, 660, at=w("ACT0_04", "accounting") + 0.2, cls="label-l gold"),
+], cam=[[0, 1.06, 0, 0], [3.5, 1.0, 0, 0]])
+sfx(w("ACT0_04", "accounting") - 0.15, "whoosh", -10)
 # future profits pulled into today
 s1 = w("ACT0_04", "profits")
 years = [f"YR {i}" for i in range(1, 11)]
-els = [LBL("EXPECTED FUTURE PROFITS", 1150, 300, at=s1, cls="label-l gold"),
+els = [illus(s1),
+       LBL("EXPECTED FUTURE PROFITS", 1150, 300, at=s1, cls="label-l gold"),
        RECT(180, 640, 1560, 3, at=s1, style={"background": "rgba(255,255,255,0.35)"}, anim="wipe", ad=0.6),
        BOX(150, 480, 230, 160, at=s1, cls="", text="TODAY", style={"border": "3px solid var(--ink)", "fontSize": "46px", "color": "var(--ink)"}, anim="pop")]
 merge = w("ACT0_04", "into")
@@ -331,13 +348,10 @@ shot(s2, DARK, [
     RECT(958, 330, 4, 320, at=s2 + 0.2, style={"background": "rgba(255,255,255,0.25)"}, anim="wipeD"),
 ])
 shot(w("ACT0_05", "on"), PH("enron_field", "in", dim=0.15), [])
-caption("ON PAPER: **SPECTACULAR**", w("ACT0_05", "spectacular") - 0.4, E("ACT0_05") + 0.4)
 s3 = L("ACT0_06")
 shot(s3, PH("wallst_2000", "left", dim=0.1), [])
-caption("WALL STREET FELL IN LOVE", s3 + 0.2, w("ACT0_06", "keeping") - 0.1)
 shot(w("ACT0_06", "keeping"), DARK, [
     stock([[0, "1998-01-01", "2000-08-31", 0, 100]], [[0, "1998-01-02"], [E("ACT0_06") - w("ACT0_06", "keeping") + 0.3, "2000-08-23"]], ystep=20),
-    T("KEEPING THE PICTURE **ALIVE**", 960, 980, cls="cap-s shadow", at=w("ACT0_06", "picture"), anim="up"),
 ], rel=True)
 s4 = L("ACT0_07")
 shot(s4, NAVY, [
@@ -347,19 +361,21 @@ shot(s4, NAVY, [
 ], cam=[[0, 1.0, 0, 0], [4, 1.07, 0, 0]])
 sfx(s4 + 0.4, "riser", -8)
 s5 = L("ACT0_08")
+l5 = w("ACT0_08", "less")
 shot(s5, EMBER, [
-    stock([[0, "2001-10-12", "2001-12-05", 0, 40]], [[0, "2001-10-12"], [1.4, "2001-12-02"]], red_from="2001-10-12", ystep=10, head=True),
-    T("LESS THAN **TWO MONTHS**", 960, 980, cls="cap-s shadow", at=s5 + 0.3, anim="up"),
+    T("FALL 2001", 960, 150, cls="label-l red", at=s5 + 0.15),
+    stock([[0, "2001-10-12", "2001-12-05", 0, 40]], [[0, "2001-10-12"], [l5 - s5 - 0.1, "2001-12-02"]], red_from="2001-10-12", ystep=10, head=True),
 ], rel=True)
-shot(w("ACT0_08", "it") - 0.05, BLACK, [T("GONE.", 960, 540, cls="cap-xl", at=w("ACT0_08", "gone") - 0.05, anim="none")])
-sfx(w("ACT0_08", "gone") - 0.05, "hit", -1)
+sfx(w("ACT0_08", "collapsed"), "hit", -6)
+shot(l5 - 0.05, BLACK, [
+    T("47 DAYS", 960, 500, cls="cap-xxl", at=l5, anim="zoom", ad=0.35),
+    LBL("OCT 16 → DEC 2, 2001", 960, 660, at=l5 + 0.45, cls="label-l red"),
+])
+sfx(l5, "hit", -1)
 s6 = L("ACT0_09")
 shot(s6, PH("houston_sunrise_2002", "in", dim=0.2), [])
-caption("BILLIONS IN **SAVINGS**", s6, w("ACT0_09", "thousands") - 0.05)
 shot(w("ACT0_09", "thousands"), PH("enron_complex", "left", dim=0.25, bw=True), [])
-caption("THOUSANDS OF **JOBS**", w("ACT0_09", "thousands"), w("ACT0_09", "one") - 0.05)
 shot(w("ACT0_09", "one"), PH("enron_jet", "right", dim=0.1), [])
-caption("ONE OF AMERICA'S MOST **ADMIRED** COMPANIES", w("ACT0_09", "one"), E("ACT0_09") + 0.2)
 s7 = L("ACT0_10")
 shot(s7, DARK, [T("ONE ACCOUNTING IDEA", 960, 540, cls="cap-l shadow", at=s7 + 0.1, anim="blur", until=w("ACT0_10", "changed") - 0.1)])
 s8 = w("ACT0_10", "changed")
@@ -392,14 +408,14 @@ shot(s, NAVY, [
     LBL("1985 MERGER", 960, 300, at=s + 0.4, cls="label-l gold"),
 ])
 sfx(w("ACT1_02", "enron"), "hit", -10)
-shot(w("ACT1_02", "led"), dict(kind="dark", grid=True), person("ken_lay", "KENNETH LAY", "CHAIRMAN & CEO", w("ACT1_02", "led"), note="PHOTO: 2004"))
+shot(w("ACT1_02", "led"), dict(kind="dark", grid=True), person("ken_lay", "KENNETH LAY", "CHAIRMAN & CEO", w("ACT1_02", "led"), note="2004 BOOKING PHOTO"))
 sfx(w("ACT1_02", "led"), "shutter", -10)
 s = L("ACT1_03")
 shot(s, PH("pipeline", "right", dim=0.12), [])
-caption("STEADY.", w("ACT1_03", "steady"), w("ACT1_03", "predictable") - 0.05, pos=(960, 900), cls="cap-m shadow")
-caption("PREDICTABLE.", w("ACT1_03", "predictable"), w("ACT1_03", "a", 2) - 0.05, pos=(960, 900), cls="cap-m shadow")
-caption("A LITTLE **BORING.**", w("ACT1_03", "a", 2), E("ACT1_03") + 0.2, pos=(960, 900), cls="cap-m shadow")
-shot(L("ACT1_04"), dict(kind="dark", grid=True), person("skilling_mug", "JEFFREY SKILLING", "FORMER McKINSEY CONSULTANT", L("ACT1_04") + 0.4, side="right", note="PHOTO: 2004"))
+caption("STEADY.", w("ACT1_03", "steady"), w("ACT1_03", "predictable") - 0.05, pos=(960, 540), cls="cap-xl shadow", dup=True, aod=0.08)
+caption("PREDICTABLE.", w("ACT1_03", "predictable"), w("ACT1_03", "a", 2) - 0.05, pos=(960, 540), cls="cap-xl shadow", dup=True, aod=0.08)
+caption("A LITTLE **BORING.**", w("ACT1_03", "a", 2), E("ACT1_03") + 0.2, pos=(960, 540), cls="cap-xl shadow", dup=True)
+shot(L("ACT1_04"), dict(kind="dark", grid=True), person("skilling_mug", "JEFFREY SKILLING", "FORMER McKINSEY CONSULTANT", L("ACT1_04") + 0.4, side="right", note="2004 BOOKING PHOTO"))
 sfx(L("ACT1_04") + 0.4, "shutter", -10)
 s = L("ACT1_05")
 shot(s, NAVY, [
@@ -422,7 +438,6 @@ shot(s, NAVY, [
 ])
 s = L("ACT1_06")
 shot(s, PH("nyse_floor", "in", dim=0.2, fallback="chicago_floor"), [])
-caption("IT **WORKED.**", s, w("ACT1_06", "by") - 0.05)
 s = w("ACT1_06", "natural")
 shot(s - 0.4, DARK, [
     LBL("BY THE LATE 1990s, ENRON TRADED", 960, 260, at=s - 0.35, cls="label-l"),
@@ -448,8 +463,8 @@ shot(s, NAVY, [
 ])
 s = w("ACT1_08", "that")
 shot(s, DARK, [
-    stock([[0, "1998-01-01", "2000-12-31", 0, 100]], [[0, "1998-01-02"], [w("ACT1_08", "more") - s, "2000-08-23"]], ystep=20,
-          ann=[dict(d="2000-08-23", p=90.75, t0=w("ACT1_08", "more") - s, label="ALL-TIME HIGH\n$90.75 · AUG 23, 2000", dy=-70, color="#e8b04b", fs=32)]),
+    stock([[0, "1998-01-01", "2000-12-31", 0, 120]], [[0, "1998-01-02"], [w("ACT1_08", "more") - s, "2000-08-23"]], ystep=20,
+          ann=[dict(d="2000-08-23", p=90.75, t0=w("ACT1_08", "more") - s, label="ALL-TIME HIGH (INTRADAY)\n$90.75 · AUG 23, 2000", dy=-60, color="#e8b04b", fs=32)]),
 ], rel=True)
 sfx(w("ACT1_08", "more"), "hit", -10)
 s = L("ACT1_09")
@@ -457,7 +472,7 @@ shot(s, PH("enron_complex", "push", dim=0.0), [])
 caption("ENRON LOOKED LIKE **THE FUTURE**", s + 0.1, E("ACT1_09") + 0.3, pos="center", cls="cap-l shadow")
 s = L("ACT1_10")
 shot(s, PH("enron_complex", [1.25, 0, 0, 1.45, 0, 40], dim=0.45, bw=True), [])
-caption("BUT UNDERNEATH THAT SUCCESS...", w("ACT1_10", "question") - 0.2, E("ACT1_10") + 0.1, pos="center", cls="cap-m shadow")
+caption("BUT UNDERNEATH THAT SUCCESS...", L("ACT1_10") + 0.1, E("ACT1_10") + 0.1, pos="center", cls="cap-m shadow", dup=True)
 s = L("ACT1_11")
 shot(s, BLACK, [
     T("HOW MUCH OF THAT **PROFIT**", 960, 460, cls="cap-l", at=s + 0.05, anim="up"),
@@ -485,6 +500,7 @@ shot(s, DARK, [
 sfx(w("ACT2_02", "mark"), "type", -10)
 s = w("ACT2_02", "january")
 shot(s - 0.2, PAPER, [
+    illus(s - 0.15, "ILLUSTRATIVE RECREATION", dark=True),
     T("U.S. SECURITIES AND EXCHANGE COMMISSION", 960, 300, cls="typew dark", at=s - 0.15, anim="type", ad=0.9, style={"fontSize": "44px", "fontWeight": "700"}),
     T("JANUARY 30, 1992", 960, 390, cls="typew dark", at=s + 0.2, anim="type", ad=0.6, style={"fontSize": "40px"}),
     T("Mark-to-market accounting for Enron's\nnatural gas trading contracts", 960, 540, cls="typew dark", at=w("ACT2_02", "approved") - 0.5, anim="fade", align="center", style={"fontSize": "40px", "lineHeight": "1.35"}),
@@ -494,19 +510,20 @@ sfx(w("ACT2_02", "approved"), "stamp", -2)
 # ---- the 10-year contract explainer
 s = L("ACT2_03")
 shot(s, PAPER, [
-    LBL("HYPOTHETICAL EXAMPLE", 960, 130, at=s, cls="label dark", style={"color": "#7a6f5d"}),
-    RECT(560, 190, 800, 760, at=s, style={"background": "#fbf8f1", "boxShadow": "0 30px 80px rgba(0,0,0,.25)", "border": "1px solid #d8cfbd"}, anim="up"),
-    T("NATURAL GAS SUPPLY AGREEMENT", 960, 280, cls="typew dark", at=s + 0.2, anim="fade", style={"fontSize": "38px", "fontWeight": "700"}),
-    T("TERM: **10 YEARS**", 960, 400, cls="typew dark", at=w("ACT2_03", "ten"), anim="type", ad=0.5, style={"fontSize": "48px"}),
-    RECT(640, 470, 640, 2, at=s + 0.4, style={"background": "#b9ad97"}, anim="wipe"),
-    T("EXPECTED PROFIT:", 960, 560, cls="typew dark", at=w("ACT2_03", "expects"), anim="fade", style={"fontSize": "40px"}),
-    T("$100,000,000", 960, 650, cls="typew", at=w("ACT2_03", "one"), anim="type", ad=0.8, style={"fontSize": "66px", "fontWeight": "700", "color": "#9a6a0a"}),
-    T("(estimated)", 960, 730, cls="typew", at=w("ACT2_03", "profit"), anim="fade", style={"fontSize": "30px", "color": "#7a6f5d"}),
+    illus(s, "HYPOTHETICAL EXAMPLE", dark=True),
+    RECT(560, 150, 800, 700, at=s, style={"background": "#fbf8f1", "boxShadow": "0 30px 80px rgba(0,0,0,.25)", "border": "1px solid #d8cfbd"}, anim="up"),
+    T("NATURAL GAS SUPPLY AGREEMENT", 960, 240, cls="typew dark", at=s + 0.2, anim="fade", style={"fontSize": "38px", "fontWeight": "700"}),
+    T("TERM: **10 YEARS**", 960, 355, cls="typew dark", at=w("ACT2_03", "ten"), anim="type", ad=0.5, style={"fontSize": "48px"}),
+    RECT(640, 425, 640, 2, at=s + 0.4, style={"background": "#b9ad97"}, anim="wipe"),
+    T("EXPECTED PROFIT:", 960, 510, cls="typew dark", at=w("ACT2_03", "expects"), anim="fade", style={"fontSize": "40px"}),
+    T("$100,000,000", 960, 600, cls="typew", at=w("ACT2_03", "one"), anim="type", ad=0.8, style={"fontSize": "66px", "fontWeight": "700", "color": "#9a6a0a"}),
+    T("(estimated)", 960, 680, cls="typew", at=w("ACT2_03", "profit"), anim="fade", style={"fontSize": "30px", "color": "#7a6f5d"}),
 ], cam=[[0, 1.0, 0, 0], [6, 1.06, 0, 0]])
 sfx(w("ACT2_03", "one"), "type", -8)
 yrs10 = [(f"Y{i}", 10) for i in range(1, 11)]
 s = L("ACT2_04")
 shot(s, DARK, [
+    illus(s, "HYPOTHETICAL EXAMPLE"),
     LBL("TRADITIONAL ACCOUNTING", 960, 150, at=s, cls="label-l"),
     T("PROFIT RECORDED **AS IT IS EARNED**", 960, 230, cls="cap-s", at=s + 0.3),
     RECT(250, 820, 1420, 3, at=s, style={"background": "rgba(255,255,255,.4)"}, anim="wipe"),
@@ -515,7 +532,8 @@ shot(s, DARK, [
 ])
 s = L("ACT2_05")
 yb = w("ACT2_05", "book")
-els = [LBL("MARK-TO-MARKET", 960, 150, at=s, cls="label-l gold"),
+els = [illus(s, "HYPOTHETICAL EXAMPLE"),
+       LBL("MARK-TO-MARKET", 960, 150, at=s, cls="label-l gold"),
        T("ESTIMATE THE WHOLE CONTRACT'S VALUE **TODAY**", 960, 230, cls="cap-s", at=w("ACT2_05", "estimate")),
        RECT(250, 820, 1420, 3, at=s, style={"background": "rgba(255,255,255,.4)"}, anim="none")]
 for i in range(10):
@@ -526,11 +544,11 @@ for i in range(10):
 els.append(RECT(290, 820 - 600, 100, 600, at=yb + 0.25, anim="grow", ad=0.6, style={"background": "linear-gradient(#ffd27a, var(--gold))", "borderRadius": "6px 6px 0 0", "boxShadow": "0 0 50px rgba(232,176,75,.6)"}))
 els.append(T("$100M", 340, 180, cls="cap-m gold shadow", at=yb + 0.7, anim="pop"))
 els.append(T("BOOKED AS PROFIT NOW", 470, 420, cls="label-l gold", at=w("ACT2_05", "now") - 0.1, anchor="l"))
-els.append(T("Simplified illustration: in practice, the expected future cash flows were estimated and discounted to a present value.", 960, 1010, cls="label",
-             at=yb + 0.8, style={"fontSize": "17px", "letterSpacing": "0.08em", "textTransform": "none"}))
+els.append(T("Simplified: in practice, expected future cash flows were estimated and discounted to a present value.", 960, 893, cls="label",
+             at=yb + 0.8, until=E("ACT2_05") - 0.2, style={"fontSize": "21px", "letterSpacing": "0.06em", "textTransform": "none", "color": "rgba(242,239,232,.72)"}))
 shot(s, DARK, els, cam=[[0, 1.0, 0, 0], [E("ACT2_05") - s, 1.0, 0, 0], [E("ACT2_06") - s, 1.15, 330, 90]])
 sfx(yb + 0.25, "whoosh", -6)
-caption("YEAR ONE.", L("ACT2_06"), w("ACT2_06", "one", 2) - 0.05, pos=(1180, 620), cls="cap-xl shadow")
+caption("YEAR ONE.", L("ACT2_06"), w("ACT2_06", "one", 2) - 0.12, pos=(1180, 620), cls="cap-xl shadow", aod=0.08, aout="fade")
 caption("ONE **GIANT** NUMBER.", w("ACT2_06", "one", 2), E("ACT2_06") + 0.4, pos=(1180, 620), cls="cap-l shadow")
 sfx(L("ACT2_06"), "hit", -6)
 s = L("ACT2_07")
@@ -538,35 +556,37 @@ shot(s, PH("chicago_floor", "in", dim=0.35), [])
 caption("MARK-TO-MARKET **≠ FRAUD**", s + 0.4, w("ACT2_07", "it's") - 0.05, pos="center", cls="cap-l shadow")
 caption("FINE FOR THINGS WITH **CLEAR MARKET PRICES**", w("ACT2_07", "it's"), E("ACT2_07") + 0.2, pos="center", cls="cap-m shadow")
 s = L("ACT2_08")
-shot(s, BLACK, [
-    LBL("THE DANGER IS IN ONE WORD", 960, 380, at=s + 0.05, cls="label-l"),
+shot(s, DARK, [
+    LBL("THE DANGER IS IN ONE WORD", 960, 380, at=s + 0.05, cls="label-l", anim="up"),
     T("~~ESTIMATE.~~", 960, 560, cls="cap-xxl", at=w("ACT2_08", "estimate"), anim="zoom", ad=0.35),
-])
+], cam=[[0, 1.0, 0, 0], [4.5, 1.1, 0, 0]])
 sfx(w("ACT2_08", "estimate"), "hit", -2)
 s = L("ACT2_09")
 dials = [("FUTURE PRICES", 520), ("DEMAND", 960), ("COSTS", 1400)]
 opt = w("ACT2_10", "optimistic")
-els = [LBL("MARKET PRICE TO CHECK AGAINST:", 960, 230, at=s, cls="label-l"),
+els = [illus(s),
+       LBL("MARKET PRICE TO CHECK AGAINST:", 960, 230, at=s, cls="label-l"),
        T("~~NONE~~", 960, 320, cls="cap-m", at=w("ACT2_09", "market") + 0.3, anim="stamp"),
        T("VALUE = **ENRON'S OWN ASSUMPTIONS**", 960, 450, cls="cap-s", at=w("ACT2_09", "assumptions") - 0.6)]
 for i, (name, cx) in enumerate(dials):
     ta = w("ACT2_09", "assumptions") - 0.3 + i * 0.15
-    els += [RECT(cx - 170, 640, 340, 10, at=ta, style={"background": "rgba(255,255,255,.18)", "borderRadius": "6px"}, anim="wipe"),
-            RECT(cx - 20, 615, 40, 60, at=ta + 0.1, style={"background": "var(--ink)", "borderRadius": "8px"}, anim="pop",
+    els += [RECT(cx - 170, 600, 340, 10, at=ta, style={"background": "rgba(255,255,255,.18)", "borderRadius": "6px"}, anim="wipe"),
+            RECT(cx - 20, 575, 40, 60, at=ta + 0.1, style={"background": "var(--ink)", "borderRadius": "8px"}, anim="pop",
                  kf=[[opt - s + i * 0.12, 0, 0], [opt - s + 0.9 + i * 0.12, 120, 0]]),
-            T(name, cx, 720, cls="label-l", at=ta + 0.1)]
-els += [LBL("OPTIMISTIC →", 1500, 560, at=opt, cls="label gold"),
-        LBL("ESTIMATED PROFIT (HYPOTHETICAL)", 960, 820, at=w("ACT2_10", "profit") - 0.6, cls="label"),
-        CNT(140, 960, 900, at=w("ACT2_10", "bigger") - 0.1, frm=100, fmt={"pre": "$", "suf": "M"}, cls="cap-l gold shadow", dur=0.9, cease="outExpo")]
-shot(s, DARK, els)
-caption("**INSTANTLY.**", w("ACT2_10", "instantly"), E("ACT2_10") + 0.2, pos=(1500, 900), cls="cap-m shadow")
+            T(name, cx, 680, cls="label-l", at=ta + 0.1)]
+els += [LBL("OPTIMISTIC →", 1500, 520, at=opt, cls="label gold"),
+        LBL("ESTIMATED PROFIT (HYPOTHETICAL)", 960, 760, at=w("ACT2_10", "profit") - 0.6, cls="label"),
+        CNT(140, 960, 838, at=w("ACT2_10", "bigger") - 0.1, frm=100, fmt={"pre": "$", "suf": "M"}, cls="cap-l gold shadow", dur=0.9, cease="outExpo")]
+shot(s, DARK, els, cam=[[0, 1.0, 0, 0], [5.5, 1.05, 0, -20], [11, 1.0, 0, 0]])
+caption("**INSTANTLY.**", w("ACT2_10", "instantly"), E("ACT2_10") + 0.2, pos=(1500, 838), cls="cap-m shadow", dup=True)
 sfx(w("ACT2_10", "instantly"), "pop", -6)
 # reported now vs cash later
 s = L("ACT2_11")
 now = w("ACT2_11", "profit")
 later = w("ACT2_11", "cash")
 never = w("ACT2_11", "never")
-els = [LBL("THE CRUCIAL PART", 960, 150, at=s, cls="label-l gold"),
+els = [illus(s),
+       LBL("THE CRUCIAL PART", 960, 150, at=s, cls="label-l gold"),
        RECT(200, 760, 1520, 3, at=s + 0.2, style={"background": "rgba(255,255,255,.4)"}, anim="wipe"),
        T("TODAY", 300, 810, cls="mono", at=s + 0.3, anim="fade", style={"fontSize": "28px"}),
        T("YEAR 10", 1640, 810, cls="mono muted", at=s + 0.3, anim="fade", style={"fontSize": "28px"}),
@@ -590,7 +610,7 @@ shot(s, DARK, [
     RECT(0, 0, 960, 1080, at=s, style={"background": "linear-gradient(180deg, rgba(232,176,75,0.10), rgba(232,176,75,0.02))"}, anim="fade"),
     T("ACCOUNTING\nPROFIT", 480, 330, cls="cap-l gold shadow", at=s, anim="up", align="center"),
     T("WHAT THE FINANCIAL\nSTATEMENTS SAY\nYOU EARNED", 480, 620, cls="label-l", at=w("ACT2_12", "what"), align="center", style={"lineHeight": "1.5"}),
-    RECT(958, 160, 4, 760, at=s, style={"background": "rgba(255,255,255,.2)"}, anim="wipeD"),
+    RECT(958, 160, 4, 700, at=s, style={"background": "rgba(255,255,255,.2)"}, anim="wipeD"),
     RECT(960, 0, 960, 1080, at=cf, style={"background": "linear-gradient(180deg, rgba(89,201,211,0.10), rgba(89,201,211,0.02))"}, anim="fade"),
     T("CASH\nFLOW", 1440, 330, cls="cap-l cyan shadow", at=cf, anim="up", align="center"),
     T("THE MONEY THAT ACTUALLY\nCOMES THROUGH THE DOOR", 1440, 620, cls="label-l", at=w("ACT2_12", "money"), align="center", style={"lineHeight": "1.5"}),
@@ -606,9 +626,8 @@ sfx(s + 1.0, "hit", -3)
 # Blockbuster
 s = L("ACT2_14")
 shot(s, PH("blockbuster_sign", "in", dim=0.3), [])
-datestamp("JULY 2000", s + 0.4, E("ACT2_15"))
-caption("ENRON + BLOCKBUSTER", w("ACT2_14", "deal") - 0.6, w("ACT2_14", "movies") - 0.05)
-caption("**20-YEAR DEAL** · MOVIES ON DEMAND", w("ACT2_14", "movies"), E("ACT2_14") + 0.3)
+datestamp("JULY 2000", s + 0.4, E("ACT2_15"), sub="PHOTO: 2018")
+caption("ENRON + BLOCKBUSTER", w("ACT2_14", "deal") - 0.6, E("ACT2_14") + 0.3)
 s = L("ACT2_15")
 shot(s, DARK, [
     T("PILOT TESTS ONLY", 960, 420, cls="cap-l", at=w("ACT2_15", "small") - 0.2),
@@ -621,10 +640,11 @@ shot(s, NAVY, [
     CNT(111, 960, 500, at=w("ACT2_16", "one") - 0.1, fmt={"pre": "$", "suf": " MILLION"}, cls="cap-xl gold shadow", dur=1.6),
     LBL("IN PROFIT FROM THE VENTURE (Q4 2000 – Q1 2001)", 960, 640, at=w("ACT2_16", "profit"), cls="label-l"),
     T("BASED LARGELY ON **PROJECTED FUTURE EARNINGS**", 960, 780, cls="cap-s", at=w("ACT2_16", "projected") - 0.2),
-    LBL("SOURCE: U.S. SEC AND JUSTICE DEPARTMENT FILINGS", 960, 1000, at=w("ACT2_16", "projected"), cls="label", style={"fontSize": "17px"}),
+    LBL("SOURCE: U.S. SEC AND JUSTICE DEPARTMENT FILINGS", 960, 880, at=w("ACT2_16", "projected"), cls="label", style={"fontSize": "20px"}),
 ])
 s = L("ACT2_17")
-els = [LBL("ONCE IT'S BOOKED...", 960, 150, at=s, cls="label-l gold"),
+els = [illus(s),
+       LBL("ONCE IT'S BOOKED...", 960, 150, at=s, cls="label-l gold"),
        RECT(250, 820, 1420, 3, at=s, style={"background": "rgba(255,255,255,.4)"}, anim="none"),
        RECT(290, 220, 100, 600, at=s, anim="none", style={"background": "var(--gold)", "borderRadius": "6px 6px 0 0", "opacity": "0.45"}),
        T("Y1", 340, 854, cls="mono muted", at=s, anim="none", style={"fontSize": "26px"})]
@@ -643,11 +663,11 @@ for i, q in enumerate(qs):
     h = 70 * (1.32 ** i)
     els += [RECT(x, 860 - h, 120, h, at=w("ACT2_18", "more") + 0.2 * i, anim="grow", ad=0.4, style={"background": "linear-gradient(var(--gold), #a8781f)", "borderRadius": "6px 6px 0 0"}),
             T(q, x + 60, 900, cls="mono muted", at=s + 0.2, anim="fade", style={"fontSize": "26px"})]
-els += [LBL("NEW DEALS NEEDED (ILLUSTRATIVE)", 340, 230, at=s + 0.4, cls="label", anchor="l")]
+els += [LBL("NEW DEALS NEEDED", 340, 230, at=s + 0.4, cls="label", anchor="l"), illus(s)]
 shot(s, DARK, els)
-caption("MORE DEALS.", w("ACT2_18", "more"), w("ACT2_18", "bigger") - 0.05, pos=(760, 330), cls="cap-m shadow")
-caption("**BIGGER** DEALS.", w("ACT2_18", "bigger"), w("ACT2_18", "every") - 0.05, pos=(760, 330), cls="cap-m shadow")
-caption("EVERY SINGLE **QUARTER.**", w("ACT2_18", "every"), E("ACT2_18") + 0.2, pos=(760, 330), cls="cap-m shadow")
+caption("MORE DEALS.", w("ACT2_18", "more"), w("ACT2_18", "bigger") - 0.05, pos=(760, 330), cls="cap-m shadow", aod=0.08)
+caption("**BIGGER** DEALS.", w("ACT2_18", "bigger"), w("ACT2_18", "every") - 0.05, pos=(760, 330), cls="cap-m shadow", dup=True, aod=0.08)
+caption("EVERY SINGLE **QUARTER.**", w("ACT2_18", "every"), E("ACT2_18") + 0.2, pos=(760, 330), cls="cap-m shadow", dup=True)
 s = L("ACT2_19")
 els = [T("THE **TREADMILL**", 960, 260, cls="cap-l shadow", at=w("ACT2_19", "treadmill") - 0.2)]
 for i in range(14):
@@ -689,7 +709,7 @@ shot(s, PH("enron_field", "in", dim=0.35), [
         style={"background": "rgba(10,8,6,.88)", "border": "6px solid #3a3227", "borderRadius": "10px"}),
     LBL("ENRON SHARE PRICE, DEC. 29, 2000 · $83.13", 960, 670, at=s + 0.6, cls="label shadow"),
 ])
-caption("IT WAS **THE SCOREBOARD**", w("ACT3_03", "scoreboard") - 0.6, E("ACT3_03") + 0.4, pos=(960, 820), cls="cap-m shadow")
+caption("IT WAS **THE SCOREBOARD**", w("ACT3_03", "it") - 0.05, E("ACT3_03") + 0.4, pos=(960, 820), cls="cap-m shadow", dup=True)
 s = L("ACT3_04")
 els = [LBL("ANALYSTS EXPECTED: HIT THE TARGET. EVERY QUARTER.", 960, 200, at=s, cls="label-l")]
 checks = [w("ACT3_04", "delivered"), w("ACT3_04", "again"), w("ACT3_04", "again", 2)]
@@ -698,12 +718,12 @@ for i in range(8):
     tt = checks[min(i // 3, 2)] + (i % 3) * 0.12 if i < 9 else checks[2]
     els += [BOX(x, 420, 160, 160, at=s + 0.1 * i, text=f"Q{(i % 4) + 1}", anim="pop", style={"border": "2px solid rgba(255,255,255,.3)", "fontSize": "44px"}),
             T("✓", x + 80, 680, cls="cap-l green", at=tt, anim="pop")]
-els.append(LBL("ILLUSTRATIVE", 1700, 1000, at=s, cls="label", style={"fontSize": "16px"}))
+els.append(illus(s))
 shot(s, DARK, els)
 for c in checks:
     sfx(c, "pop", -12)
 s = L("ACT3_05")
-els = [LBL("EVERY SUCCESS RAISED THE BAR", 960, 160, at=s, cls="label-l")]
+els = [LBL("EVERY SUCCESS RAISED THE BAR", 960, 160, at=s, cls="label-l"), illus(s)]
 for i in range(6):
     x = 330 + i * 220
     h = 140 + i * 85
@@ -713,9 +733,7 @@ els.append(T("THE BAR", 1620, 300, cls="cap-s red", at=s + 0.9))
 shot(s, DARK, els)
 s = L("ACT3_06")
 shot(s, PH("dabhol", "in", dim=0.25, fallback="pipeline"), [])
-caption("OVERSEAS **POWER PLANTS**", w("ACT3_06", "overseas") - 0.2, w("ACT3_06", "broadband") - 0.05)
 shot(w("ACT3_06", "broadband"), PH("fiber_laying", "right", dim=0.25, fallback="houston_night_2000"), [])
-caption("A **BROADBAND** NETWORK", w("ACT3_06", "broadband"), w("ACT3_06", "struggling") - 0.05)
 caption("~~STRUGGLING~~", w("ACT3_06", "struggling"), E("ACT3_06") + 0.3, pos="center", cls="cap-xl shadow")
 s = L("ACT3_07")
 need = "M 260 860 C 700 840, 1100 700, 1660 220"
@@ -726,7 +744,7 @@ shot(s, DARK, [
     T("GROWTH WALL STREET EXPECTED", 1640, 190, cls="label-l gold", at=s + 1.2, anchor="r"),
     PATH(real, at=w("ACT3_07", "real"), stroke="#9aa0a8", sw=6, ad=1.4),
     T("REAL GROWTH", 1640, 650, cls="label-l", at=w("ACT3_07", "harder"), anchor="r"),
-    LBL("ILLUSTRATIVE", 260, 960, at=s, cls="label", anchor="l", style={"fontSize": "16px"}),
+    illus(s),
 ])
 s = L("ACT3_08")
 shot(s, EMBER, [
@@ -743,10 +761,10 @@ chapter(4, "HIDING THE PROBLEMS", E("ACT3_08") + 0.25)
 s = L("ACT4_01") - 0.1
 shot(s, dict(kind="dark"), [
     doc("powers_p1", [[0, 830, 560, 1.0, -1.5], [6, 880, 590, 1.55, -1.5]], hl=[(0, L("ACT4_01") + 1.4 - s, "")], base_w=1050),
-    BOX(1180, 760, 640, 190, at=L("ACT4_01") + 0.3, html='<div class="cap-l">ANDREW FASTOW</div><div class="label-l gold" style="margin-top:8px">CFO, 1998 – 2001</div>',
+    BOX(1180, 630, 640, 190, at=L("ACT4_01") + 0.3, html='<div class="cap-l">ANDREW FASTOW</div><div class="label-l gold" style="margin-top:8px">CFO, 1998 – 2001</div>',
         style={"background": "rgba(5,7,9,.9)", "borderLeft": "6px solid var(--gold)", "flexDirection": "column", "alignItems": "flex-start", "padding": "0 34px", "justifyContent": "center", "textTransform": "none"},
         anim="left", fixed=True),
-    LBL("SOURCE: POWERS REPORT TO ENRON'S BOARD, FEB. 2002", 1180, 985, at=L("ACT4_01") + 0.6, cls="label ink boxed", anchor="l", fixed=True, style={"fontSize": "16px"}),
+    LBL("SOURCE: POWERS REPORT TO ENRON'S BOARD, FEB. 2002", 1180, 862, at=L("ACT4_01") + 0.6, cls="label ink boxed", anchor="l", fixed=True, style={"fontSize": "18px"}),
 ])
 _extra_hl = [[547, 535, 1343, 562], [217, 612, 582, 640]]
 SHOTS[-1]["els"][0]["hl"] = [dict(boxes=_extra_hl, t0=L("ACT4_01") + 1.0 - s, cls="")]
@@ -767,29 +785,31 @@ shot(s, DARK, [
 s = L("ACT4_04")
 ind = w("ACT4_04", "independent")
 shot(s, DARK, [
-    LBL("THE RULE BACK THEN", 960, 140, at=s, cls="label-l"),
-    BOX(660, 250, 600, 600, at=s + 0.1, text="", style={"border": "4px solid var(--cyan)", "background": "rgba(89,201,211,.06)"}),
-    T("SPE", 960, 220, cls="cap-s cyan", at=s + 0.1),
-    RECT(664, 254, 592, 574, at=s + 0.3, anim="fade", style={"background": "rgba(255,255,255,.07)"}),
-    T("OTHER FUNDING", 960, 540, cls="label-l", at=s + 0.4),
-    RECT(664, 828, 592, 18, at=w("ACT4_04", "three") - 0.1, anim="growX", ad=0.5, style={"background": "var(--gold)", "boxShadow": "0 0 25px var(--gold)"}),
-    T("**3%** FROM AN OUTSIDE INVESTOR, AT RISK", 960, 910, cls="cap-s", at=w("ACT4_04", "three"), style={"fontSize": "40px"}),
-    STAMP("COUNTS AS INDEPENDENT", 960, 380, at=ind, color="cyan", rot=-5, cls="cap-s"),
+    illus(s, "SIMPLIFIED DIAGRAM"),
+    LBL("THE RULE BACK THEN", 960, 100, at=s, cls="label-l"),
+    BOX(660, 200, 600, 600, at=s + 0.1, text="", style={"border": "4px solid var(--cyan)", "background": "rgba(89,201,211,.06)"}),
+    T("SPE", 960, 170, cls="cap-s cyan", at=s + 0.1),
+    RECT(664, 204, 592, 574, at=s + 0.3, anim="fade", style={"background": "rgba(255,255,255,.07)"}),
+    T("OTHER FUNDING", 960, 490, cls="label-l", at=s + 0.4),
+    RECT(664, 778, 592, 18, at=w("ACT4_04", "three") - 0.1, anim="growX", ad=0.5, style={"background": "var(--gold)", "boxShadow": "0 0 25px var(--gold)"}),
+    T("**3%** FROM AN OUTSIDE INVESTOR, AT RISK", 960, 856, cls="cap-s", at=w("ACT4_04", "three"), style={"fontSize": "40px"}),
+    STAMP("COUNTS AS INDEPENDENT", 960, 330, at=ind, color="cyan", rot=-5, cls="cap-s"),
 ])
 sfx(ind, "stamp", -8)
 s = L("ACT4_05")
 lift = w("ACT4_05", "debt")
 shot(s, DARK, [
-    BOX(200, 200, 640, 700, at=s, text="", style={"border": "3px solid var(--ink)", "background": "rgba(255,255,255,.03)"}),
+    illus(s, "SIMPLIFIED DIAGRAM"),
+    BOX(200, 200, 640, 640, at=s, text="", style={"border": "3px solid var(--ink)", "background": "rgba(255,255,255,.03)"}),
     T("ENRON BALANCE SHEET", 520, 170, cls="label-l", at=s),
     BOX(250, 260, 540, 140, at=s + 0.1, text="ASSETS", style={"background": "rgba(76,195,138,.15)", "border": "3px solid var(--green)", "color": "var(--green)", "fontSize": "46px"}),
     BOX(250, 430, 540, 140, at=s + 0.2, text="EQUITY", style={"background": "rgba(232,176,75,.12)", "border": "3px solid var(--gold)", "color": "var(--gold)", "fontSize": "46px"}),
-    BOX(250, 600, 540, 240, at=s + 0.3, text="DEBT", style={"background": "rgba(229,72,77,.18)", "border": "3px solid var(--red)", "color": "var(--red)", "fontSize": "60px"},
-        kf=[[lift - s, 0, 0], [lift - s + 1.0, 1000, 20]]),
-    BOX(1180, 520, 560, 360, at=w("ACT4_05", "mattered"), text="", style={"border": "4px dashed var(--cyan)"}),
-    T("SPE", 1460, 490, cls="cap-s cyan", at=w("ACT4_05", "mattered")),
-    T("OFF THE BALANCE SHEET", 1460, 930, cls="label-l cyan", at=lift + 1.0),
-    T("**LOOKS STRONGER**", 520, 960, cls="cap-s", at=w("ACT4_05", "balance") - 0.2),
+    BOX(250, 600, 540, 210, at=s + 0.3, text="DEBT", style={"background": "rgba(229,72,77,.18)", "border": "3px solid var(--red)", "color": "var(--red)", "fontSize": "60px"},
+        kf=[[lift - s, 0, 0], [lift - s + 1.0, 1000, -20]]),
+    BOX(1180, 480, 560, 340, at=w("ACT4_05", "mattered"), text="", style={"border": "4px dashed var(--cyan)"}),
+    T("SPE", 1460, 450, cls="cap-s cyan", at=w("ACT4_05", "mattered")),
+    T("OFF THE BALANCE SHEET", 1460, 862, cls="label-l cyan", at=lift + 1.0),
+    T("**LOOKS STRONGER**", 520, 880, cls="cap-s", at=w("ACT4_05", "balance") - 0.2),
 ])
 sfx(lift, "whoosh", -8)
 s = L("ACT4_06")
@@ -797,41 +817,43 @@ els = [T("AGAIN AND AGAIN", 960, 170, cls="label-l", at=s)]
 for i in range(12):
     els.append(BOX(140 + (i % 6) * 280, 300 + (i // 6) * 180, 220, 120, at=s + 0.08 * i, text="SPE", anim="pop",
                    style={"border": "2px solid rgba(89,201,211,.35)", "color": "rgba(89,201,211,.5)", "fontSize": "34px"}))
-els += [BOX(160, 720, 460, 170, at=w("ACT4_06", "chewco"), text="CHEWCO", style={"background": "#0d1218", "border": "4px solid var(--gold)", "fontSize": "62px"}),
-        BOX(730, 720, 460, 170, at=w("ACT4_06", "ljm"), text="LJM", style={"background": "#0d1218", "border": "4px solid var(--gold)", "fontSize": "62px"}),
-        BOX(1300, 720, 460, 170, at=w("ACT4_06", "raptors"), text="RAPTORS", style={"background": "#0d1218", "border": "4px solid var(--gold)", "fontSize": "62px"}),
-        T("NAMED AFTER THE VELOCIRAPTORS OF JURASSIC PARK", 1530, 935, cls="label", at=w("ACT4_06", "jurassic") - 0.3, style={"fontSize": "18px"})]
+els += [BOX(160, 670, 460, 170, at=w("ACT4_06", "chewco"), text="CHEWCO", style={"background": "#0d1218", "border": "4px solid var(--gold)", "fontSize": "62px"}),
+        BOX(730, 670, 460, 170, at=w("ACT4_06", "ljm"), text="LJM", style={"background": "#0d1218", "border": "4px solid var(--gold)", "fontSize": "62px"}),
+        BOX(1300, 670, 460, 170, at=w("ACT4_06", "raptors"), text="RAPTORS", style={"background": "#0d1218", "border": "4px solid var(--gold)", "fontSize": "62px"}),
+        T("NAMED AFTER THE VELOCIRAPTORS OF JURASSIC PARK", 1760, 878, cls="label", at=w("ACT4_06", "jurassic") - 0.3, anchor="r", style={"fontSize": "21px"})]
 shot(s, DARK, els)
 for nm in ["chewco", "ljm", "raptors"]:
     sfx(w("ACT4_06", nm), "pop", -10)
 s = L("ACT4_07")
 shot(s, DARK, [
-    BOX(660, 250, 600, 600, at=s, text="", anim="none", style={"border": "4px solid var(--cyan)", "background": "rgba(89,201,211,.06)"}),
-    T("SPE", 960, 220, cls="cap-s cyan", at=s, anim="none"),
-    RECT(664, 828, 592, 18, at=s, anim="none", style={"background": "var(--gold)", "boxShadow": "0 0 25px var(--gold)"}),
-    T("THE \"OUTSIDE\" 3%", 1300, 840, cls="cap-s", at=s, anim="none", anchor="l", style={"fontSize": "40px"}),
-    BOX(60, 760, 360, 150, at=w("ACT4_07", "outside"), text="ENRON", style={"border": "4px solid var(--gold)", "color": "var(--gold)", "fontSize": "54px"}),
-    PATH("M 420 835 C 520 835, 560 840, 650 838", at=w("ACT4_07", "wasn't") - 0.1, stroke="#e5484d", sw=6, arrow=True, ad=0.6),
-    T("~~NOT REALLY OUTSIDE~~", 960, 540, cls="cap-m", at=w("ACT4_07", "really"), anim="stamp"),
+    illus(s, "SIMPLIFIED DIAGRAM"),
+    BOX(660, 200, 600, 600, at=s, text="", anim="none", style={"border": "4px solid var(--cyan)", "background": "rgba(89,201,211,.06)"}),
+    T("SPE", 960, 170, cls="cap-s cyan", at=s, anim="none"),
+    RECT(664, 778, 592, 18, at=s, anim="none", style={"background": "var(--gold)", "boxShadow": "0 0 25px var(--gold)"}),
+    T("THE \"OUTSIDE\" 3%", 1300, 790, cls="cap-s", at=s, anim="none", anchor="l", style={"fontSize": "40px"}),
+    BOX(60, 710, 360, 150, at=w("ACT4_07", "outside"), text="ENRON", style={"border": "4px solid var(--gold)", "color": "var(--gold)", "fontSize": "54px"}),
+    PATH("M 420 785 C 520 785, 560 790, 650 788", at=w("ACT4_07", "wasn't") - 0.1, stroke="#e5484d", sw=6, arrow=True, ad=0.6),
+    T("~~NOT REALLY OUTSIDE~~", 960, 490, cls="cap-m", at=w("ACT4_07", "really"), anim="stamp"),
 ])
 s = L("ACT4_08")
 shot(s, dict(kind="dark"), [
     doc("powers_p5", [[0, 760, 1390, 1.1, 1.0], [3.5, 760, 1390, 1.45, 1.0]], hl=[(0, 0.4, "")], base_w=1100),
     RECT(0, 0, 1920, 1080, style={"background": "linear-gradient(0deg, rgba(5,7,9,.9) 0%, rgba(5,7,9,0) 45%)"}, anim="none", fixed=True),
-    STAMP("CHEWCO: DIDN'T MEET IT", 960, 880, at=w("ACT4_08", "didn't"), color="red", rot=-3, cls="cap-m", fixed=True),
+    STAMP("CHEWCO: DIDN'T MEET IT", 960, 790, at=w("ACT4_08", "didn't"), color="red", rot=-3, cls="cap-m", fixed=True),
 ])
 sfx(w("ACT4_08", "didn't"), "stamp", -6)
 s = L("ACT4_09")
 bk = w("ACT4_09", "backed")
 shot(s, DARK, [
+    illus(s, "SIMPLIFIED DIAGRAM"),
     BOX(140, 380, 460, 260, at=s, text="ENRON'S<br>INVESTMENTS", style={"border": "3px solid var(--ink)", "fontSize": "44px"}),
     T("▼ LOSING VALUE", 370, 700, cls="label-l red", at=w("ACT4_09", "losses")),
     PATH("M 620 510 L 1180 510", at=w("ACT4_09", "hedged") - 0.2, stroke="#e8b04b", arrow=True, ad=0.6),
     T("\"HEDGED\"", 900, 460, cls="cap-s gold", at=w("ACT4_09", "hedged")),
     BOX(1200, 360, 560, 300, at=w("ACT4_09", "covered") - 0.3, text="RAPTOR", style={"border": "4px solid var(--cyan)", "color": "var(--cyan)", "fontSize": "72px"}),
     T("WILL COVER THE LOSSES", 1480, 710, cls="label-l cyan", at=w("ACT4_09", "covered")),
-    BOX(1250, 820, 460, 130, at=bk, text="BACKED BY ENRON STOCK", style={"background": "rgba(229,72,77,.2)", "border": "4px solid var(--red)", "color": "var(--red)", "fontSize": "36px"}),
-    PATH("M 1240 890 C 900 1000, 500 1000, 370 660", at=bk + 0.3, stroke="#e5484d", sw=5, arrow=True, dash="16 12", ad=0.9),
+    BOX(1250, 760, 460, 120, at=bk, text="BACKED BY ENRON STOCK", style={"background": "rgba(229,72,77,.2)", "border": "4px solid var(--red)", "color": "var(--red)", "fontSize": "36px"}),
+    PATH("M 1240 830 C 900 900, 520 900, 370 735", at=bk + 0.3, stroke="#e5484d", sw=5, arrow=True, dash="16 12", ad=0.9),
     T("~~A HEDGE WITH ITSELF~~", 760, 250, cls="cap-m", at=w("ACT4_09", "own"), anim="stamp"),
 ])
 s = L("ACT4_10")
@@ -840,7 +862,6 @@ shot(s, dict(kind="dark"), [
         hl=[(0, 0.9, ""), (1, w("ACT4_10", "almost") - s, "red")], base_w=1050),
     LBL("POWERS REPORT · FEB. 1, 2002", 100, 90, at=s + 0.2, cls="label ink boxed", anchor="l", fixed=True),
 ])
-caption("EARNINGS INFLATED BY **ALMOST $1 BILLION**", w("ACT4_10", "almost"), E("ACT4_10") + 0.6)
 sfx(s + 0.1, "paper", -8)
 s = L("ACT4_11")
 shot(s, EMBER, [T("CONFLICT OF\n~~INTEREST~~", 960, 540, cls="cap-xl shadow", at=s + 0.05, anim="zoom", align="center")])
@@ -855,9 +876,9 @@ shot(s, DARK, [
     PATH("M 1220 500 L 700 500", at=w("ACT4_12", "partnerships") + 0.2, stroke="#9aa0a8", arrow=True),
     BOX(220, 640, 400, 120, at=w("ACT4_12", "design") - 0.2, text="FASTOW · CFO", style={"background": "#0d1218", "border": "2px solid var(--ink)", "fontSize": "40px"}),
     BOX(1300, 640, 400, 120, at=ran, text="FASTOW · RUNS LJM", style={"background": "#0d1218", "border": "2px solid var(--red)", "color": "var(--red)", "fontSize": "40px"}),
-    T("SAME MAN", 960, 640, cls="cap-s red", at=ran + 0.4),
-    IMG("code_ethics_cover", 760, 600, 300, 420, at=appr - 0.2, anim="up", style={"boxShadow": "0 30px 80px rgba(0,0,0,.7)"}),
-    STAMP("BOARD-APPROVED EXCEPTION", 1300, 860, at=appr + 0.4, color="gold", rot=-4, cls="cap-s"),
+    T("SAME MAN", 960, 640, cls="cap-s red", at=ran + 0.4, until=appr - 0.3),
+    IMG("code_ethics_cover", 840, 560, 240, 336, at=appr - 0.2, anim="up", style={"boxShadow": "0 30px 80px rgba(0,0,0,.7)"}),
+    STAMP("BOARD-APPROVED EXCEPTION", 1380, 820, at=appr + 0.4, color="gold", rot=-4, cls="cap-s"),
 ])
 sfx(appr + 0.4, "stamp", -8)
 s = L("ACT4_13")
@@ -867,13 +888,13 @@ shot(s, dict(kind="dark"), [
 ])
 shot(th - 0.15, dict(kind="dark"), [
     doc("powers_p3", [[0, 820, 830, 1.2, 0.6], [4, 800, 860, 1.6, 0.6]], hl=[(0, 0.5, "red")], base_w=1050),
-    BOX(1240, 760, 600, 170, at=w("ACT4_13", "thirty"), html='<div class="cap-l gold">$30 MILLION+</div><div class="label" style="margin-top:6px">FROM THE PARTNERSHIPS</div>',
+    BOX(1240, 680, 600, 170, at=w("ACT4_13", "thirty"), html='<div class="cap-l gold">$30 MILLION+</div><div class="label" style="margin-top:6px">FROM THE PARTNERSHIPS</div>',
         style={"background": "rgba(5,7,9,.92)", "borderLeft": "6px solid var(--gold)", "flexDirection": "column", "alignItems": "flex-start", "padding": "0 30px", "textTransform": "none"}, anim="left", fixed=True),
 ])
 sfx(w("ACT4_13", "thirty"), "hit", -10)
 s = L("ACT4_14")
 shot(s, PH("enron_complex", "in", dim=0.05), [])
-caption("ON PAPER: **STRONGER THAN EVER**", s + 0.1, E("ACT4_14") + 0.2, pos="center", cls="cap-l shadow")
+caption("ON PAPER: **STRONGER THAN EVER**", s + 0.1, E("ACT4_14") + 0.2, pos="center", cls="cap-l shadow", dup=True)
 s = L("ACT4_15")
 els = []
 for i in range(10):
@@ -920,20 +941,20 @@ shot(s, DARK, [
       for i, hh in enumerate([40, 70, 110, 160])],
     T("DEBT", 1060, 560, cls="label-l", at=dbt_t, anchor="l"),
     T("~~GROWING ▲~~", 1060, 635, cls="cap-s", at=dbt_t + 0.1, anchor="l"),
-    RECT(380, 920 - 150, 110, 150, at=cash_t, anim="grow", ad=0.4, style={"background": "var(--gold)", "borderRadius": "4px 4px 0 0"}),
-    RECT(540, 920 - 45, 110, 45, at=cash_t + 0.3, anim="grow", ad=0.4, style={"background": "var(--cyan)", "borderRadius": "4px 4px 0 0"}),
-    T("PROFIT", 435, 950, cls="mono gold", at=cash_t, style={"fontSize": "24px"}), T("CASH", 595, 950, cls="mono cyan", at=cash_t + 0.3, style={"fontSize": "24px"}),
+    RECT(380, 850 - 150, 110, 150, at=cash_t, anim="grow", ad=0.4, style={"background": "var(--gold)", "borderRadius": "4px 4px 0 0"}),
+    RECT(540, 850 - 45, 110, 45, at=cash_t + 0.3, anim="grow", ad=0.4, style={"background": "var(--cyan)", "borderRadius": "4px 4px 0 0"}),
+    T("PROFIT", 435, 878, cls="mono gold", at=cash_t, style={"fontSize": "24px"}), T("CASH", 595, 878, cls="mono cyan", at=cash_t + 0.3, style={"fontSize": "24px"}),
     T("CASH ≠ PROFITS", 1060, 840, cls="cap-s cyan", at=cash_t + 0.2, anchor="l"),
-    LBL("ILLUSTRATIVE", 1700, 1010, at=s, cls="label", style={"fontSize": "15px"}),
+    illus(s),
 ])
 s = L("ACT5_05")
-shot(s, dict(kind="dark", grid=True), person("skilling_mug", "JEFFREY SKILLING", "CEO FOR SIX MONTHS", s + 0.1, side="left", note="PHOTO: 2004",
+shot(s, dict(kind="dark", grid=True), person("skilling_mug", "JEFFREY SKILLING", "CEO FOR SIX MONTHS", s + 0.1, side="left", note="2004 BOOKING PHOTO",
                                             extra=[STAMP("RESIGNS", 1300, 760, at=w("ACT5_05", "resigned"), color="red", rot=-5, cls="cap-l"),
-                                                   T("\"PERSONAL REASONS\"", 1300, 900, cls="label-l", at=w("ACT5_05", "personal"))]))
+                                                   T("\"PERSONAL REASONS\"", 1300, 878, cls="label-l", at=w("ACT5_05", "personal"))]))
 datestamp("AUGUST 14, 2001", s + 0.1, E("ACT5_05"))
 sfx(w("ACT5_05", "resigned"), "stamp", -4)
 s = L("ACT5_06")
-shot(s, dict(kind="dark", grid=True), person("ken_lay", "KENNETH LAY", "BACK AS CEO", s + 0.1, side="right", note="PHOTO: 2004",
+shot(s, dict(kind="dark", grid=True), person("ken_lay", "KENNETH LAY", "BACK AS CEO", s + 0.1, side="right", note="2004 BOOKING PHOTO",
                                             extra=[T("\"NO CHANGE IN\nPERFORMANCE\nOR OUTLOOK\"", 170, 760, cls="cap-s gold", at=w("ACT5_06", "assured") + 0.3, anchor="l")]))
 s = L("ACT5_07")
 shot(s, dict(kind="dark", grid=True), person("watkins", "SHERRON WATKINS", "ENRON VICE PRESIDENT", s + 0.1, side="left", note="PHOTO: LATER YEARS",
@@ -994,7 +1015,6 @@ shot(s, dict(kind="dark"), [
         hl=[(0, 0.6, "red"), (1, w("ACT6_02", "six") - s, "red"), (2, w("ACT6_02", "six") - s + 0.6, "red")], base_w=1000),
     LBL("ENRON PRESS RELEASE · OCT. 16, 2001", 100, 175, at=s, cls="label ink boxed", anchor="l", fixed=True),
 ])
-caption("THIRD-QUARTER LOSS: ~~$618 MILLION~~", w("ACT6_02", "six"), E("ACT6_02") + 0.3)
 sfx(s, "paper", -8)
 s = L("ACT6_03")
 shot(s, EMBER, [
@@ -1009,7 +1029,7 @@ sfx(s, "tick", -6)
 s2 = w("ACT6_04", "the")
 shot(s2, DARK, [
     T("THE SEC STARTS **ASKING QUESTIONS**", 960, 200, cls="cap-m shadow", at=s2),
-    stock([[0, "2001-10-10", "2001-10-26", 10, 40]], [[0, "2001-10-10"], [w("ACT6_04", "falls") - s2 + 0.8, "2001-10-22"]], red_from="2001-10-15", ystep=5, y=250, h=760),
+    stock([[0, "2001-10-10", "2001-10-26", 10, 40]], [[0, "2001-10-10"], [w("ACT6_04", "falls") - s2 + 0.8, "2001-10-22"]], red_from="2001-10-15", ystep=5, y=250, h=680),
 ], rel=True)
 hud(20.65, w("ACT6_04", "falls"), L("ACT6_05") + 0.5)
 s = L("ACT6_05")
@@ -1029,27 +1049,26 @@ inc = [("1997", 105, 28), ("1998", 703, 133), ("1999", 893, 248), ("2000", 979, 
 dbt = [("1997", 711), ("1998", 561), ("1999", 685), ("2000", 628)]
 dh = w("ACT6_06", "hundreds", 2)
 els = [LBL("NET INCOME: REPORTED vs. RESTATED ($M)", 490, 150, at=s, cls="label"),
-       RECT(140, 860, 700, 3, at=s, anim="wipe", style={"background": "rgba(255,255,255,.4)"})]
+       RECT(140, 842, 700, 3, at=s, anim="wipe", style={"background": "rgba(255,255,255,.4)"})]
 for i, (yr, rep, cut) in enumerate(inc):
     x = 170 + i * 170
     hrep = rep * 0.62
-    els += [RECT(x, 860 - hrep, 120, hrep, at=s + 0.1 * i, anim="grow", ad=0.4, style={"background": "var(--gold)", "borderRadius": "4px 4px 0 0"}),
-            RECT(x, 860 - hrep, 120, cut * 0.62, at=s + 0.9 + 0.12 * i, anim="wipeD", ad=0.4, style={"background": "repeating-linear-gradient(45deg, rgba(229,72,77,.95) 0 10px, rgba(120,20,20,.95) 10px 20px)"}),
-            T(f"–{cut}", x + 60, 860 - hrep - 34, cls="mono red", at=s + 1.0 + 0.12 * i, style={"fontSize": "28px"}),
-            T(yr, x + 60, 900, cls="mono muted", at=s, style={"fontSize": "26px"})]
+    els += [RECT(x, 842 - hrep, 120, hrep, at=s + 0.1 * i, anim="grow", ad=0.4, style={"background": "var(--gold)", "borderRadius": "4px 4px 0 0"}),
+            RECT(x, 842 - hrep, 120, cut * 0.62, at=s + 0.9 + 0.12 * i, anim="wipeD", ad=0.4, style={"background": "repeating-linear-gradient(45deg, rgba(229,72,77,.95) 0 10px, rgba(120,20,20,.95) 10px 20px)"}),
+            T(f"–{cut}", x + 60, 842 - hrep - 34, cls="mono red", at=s + 1.0 + 0.12 * i, style={"fontSize": "28px"}),
+            T(yr, x + 60, 880, cls="mono muted", at=s, anim="fade", style={"fontSize": "26px"})]
 els += [LBL("DEBT ADDED BACK ($M)", 1430, 150, at=dh - 0.3, cls="label"),
-        RECT(1080, 860, 700, 3, at=dh - 0.3, anim="wipe", style={"background": "rgba(255,255,255,.4)"})]
+        RECT(1080, 842, 700, 3, at=dh - 0.3, anim="wipe", style={"background": "rgba(255,255,255,.4)"})]
 for i, (yr, d) in enumerate(dbt):
     x = 1110 + i * 170
     hh = d * 0.62
-    els += [RECT(x, 860 - hh, 120, hh, at=dh + 0.12 * i, anim="grow", ad=0.4, style={"background": "rgba(229,72,77,.85)", "borderRadius": "4px 4px 0 0"}),
-            T(f"+{d}", x + 60, 860 - hh - 34, cls="mono red", at=dh + 0.2 + 0.12 * i, style={"fontSize": "28px"}),
-            T(yr, x + 60, 900, cls="mono muted", at=dh - 0.3, style={"fontSize": "26px"})]
-els.append(LBL("SOURCE: POWERS REPORT (2002), RESTATEMENT FOR CHEWCO AND LJM1", 960, 1010, at=s + 0.5, cls="label", style={"fontSize": "16px"}))
+    els += [RECT(x, 842 - hh, 120, hh, at=dh + 0.12 * i, anim="grow", ad=0.4, style={"background": "rgba(229,72,77,.85)", "borderRadius": "4px 4px 0 0"}),
+            T(f"+{d}", x + 60, 842 - hh - 34, cls="mono red", at=dh + 0.2 + 0.12 * i, style={"fontSize": "28px"}),
+            T(yr, x + 60, 880, cls="mono muted", at=dh - 0.3, anim="fade", style={"fontSize": "26px"})]
+els.append(LBL("SOURCE: POWERS REPORT (2002), RESTATEMENT FOR CHEWCO AND LJM1", 960, 88, at=s + 0.5, cls="label", style={"fontSize": "19px"}))
 shot(s, DARK, els)
 s = L("ACT6_07")
 shot(s, PH("rbc_floor", "in", dim=0.35, bw=True), [])
-caption("A TRADING COMPANY RUNS ON **TRUST**", s + 0.1, E("ACT6_07") + 0.2)
 s = L("ACT6_08")
 shot(s, BLACK, [T("TRUST", 960, 540, cls="cap-xxl", at=s, anim="none", t1=s + 0.7, aout="blur", aod=0.7)])
 s = L("ACT6_09")
@@ -1058,10 +1077,9 @@ sfx(s, "tick", -6)
 hud(8.63, s + 0.3, L("ACT6_11") + 0.6, color="#e8b04b")
 s2 = w("ACT6_09", "dynegy")
 shot(s2, PH("houston_chase_night", "right", dim=0.3, fallback="houston_pano_night"), [])
-caption("DYNEGY AGREES TO **BUY ENRON**", s2 + 0.2, E("ACT6_09") + 0.3)
 s = L("ACT6_10")
 shot(s, DARK, [
-    stock([[0, "2001-11-01", "2001-11-28", 0, 14]], [[0, "2001-11-09"], [2.0, "2001-11-27"]], red_from="2001-11-12", ystep=2, y=160, h=820),
+    stock([[0, "2001-11-01", "2001-11-28", 0, 14]], [[0, "2001-11-09"], [2.0, "2001-11-27"]], red_from="2001-11-12", ystep=2, y=160, h=740),
     T("THE MORE DYNEGY LOOKED, **THE WORSE IT GOT**", 960, 110, cls="cap-s shadow", at=s + 0.1),
 ], rel=True)
 s = L("ACT6_11")
@@ -1075,10 +1093,10 @@ sfx(w("ACT6_11", "junk") - 0.2, "stamp", -4)
 sfx(w("ACT6_11", "walks") - 0.1, "stamp", -4)
 s = L("ACT6_12")
 shot(s, EMBER, [
-    stock([[0, "2001-11-01", "2001-11-30", 0, 14]], [[0, "2001-11-01"], [1.4, "2001-11-28"]], red_from="2001-11-01", ystep=2, y=160, h=820, head=False,
+    stock([[0, "2001-11-01", "2001-11-30", 0, 14]], [[0, "2001-11-01"], [1.4, "2001-11-28"]], red_from="2001-11-01", ystep=2, y=160, h=740, head=False,
           ann=[dict(d="2001-11-28", t0=1.5, label="$0.61", dy=-150, dx=-60, color="#e5484d", fs=110)]),
 ], rel=True)
-hud(0.61, s + 1.5, E("ACT6_15") + 0.2)
+hud(0.61, s + 1.5, L("ACT6_15") - 0.1)
 sfx(s + 1.5, "hit", -1)
 s = L("ACT6_13")
 shot(s, PH("enron_complex", [1.1, 0, 0, 1.2, 0, 0], dim=0.55, bw=True), [
@@ -1129,7 +1147,7 @@ shot(s, NAVY, [
          x=960, y=560, at=sixty - 0.2, anim="wipe", ad=0.9),
     T("~60%", 960, 535, cls="cap-xl red", at=sixty, anim="pop"),
     T("ENRON STOCK", 960, 640, cls="label-l", at=sixty + 0.2),
-    LBL("APPROXIMATE SHARE AT THE END OF 2000", 960, 990, at=sixty + 0.3, cls="label", style={"fontSize": "17px"}),
+    LBL("APPROXIMATE SHARE AT THE END OF 2000", 960, 878, at=sixty + 0.3, cls="label", style={"fontSize": "20px"}),
 ])
 s = L("ACT7_04")
 shot(s, DARK, [
@@ -1143,27 +1161,28 @@ shot(s, DARK, [
     RECT(460, 860, 1000, 3, at=s, anim="wipe", style={"background": "rgba(255,255,255,.4)"}),
     RECT(560, 860 - 580, 280, 580, at=s + 0.2, anim="grow", ad=0.6, style={"background": "var(--gold)", "borderRadius": "6px 6px 0 0"}),
     T("~$70B", 700, 240, cls="cap-m gold", at=s + 0.6),
-    T("AUG 2000", 700, 900, cls="mono muted", at=s + 0.2, style={"fontSize": "28px"}),
+    T("AUG 2000", 700, 890, cls="mono muted", at=s + 0.2, anim="fade", style={"fontSize": "28px"}),
     RECT(1080, 856, 280, 4, at=w("ACT7_05", "tens"), anim="grow", style={"background": "var(--red)"}),
     T("< $1B", 1220, 800, cls="cap-m red", at=w("ACT7_05", "tens") + 0.2),
-    T("NOV 30, 2001", 1220, 900, cls="mono muted", at=w("ACT7_05", "tens"), style={"fontSize": "28px"}),
+    T("NOV 30, 2001", 1220, 890, cls="mono muted", at=w("ACT7_05", "tens"), anim="fade", style={"fontSize": "28px"}),
 ])
 s = L("ACT7_06")
-shot(s, PH("andersen_witnesses", "in", dim=0.2), [])
-caption("ENRON'S AUDITOR: **ARTHUR ANDERSEN**", s + 0.2, w("ACT7_06", "one") - 0.05)
-caption("ONE OF THE **BIG FIVE** ACCOUNTING FIRMS", w("ACT7_06", "one"), E("ACT7_06") + 0.2)
+shot(s, dict(kind="dark", grid=True, credit=credit("andersen_witnesses")), [
+    IMG("andersen_witnesses", 960 - 420, 120, 840, 562, at=s, anim="fade", ad=0.5, kb=[1.0, 1.06],
+        style={"border": "1px solid rgba(255,255,255,.25)", "boxShadow": "0 30px 90px rgba(0,0,0,.7)"}),
+    T("ARTHUR **ANDERSEN**", 960, 772, cls="cap-m shadow", at=s + 0.3, anim="up"),
+    LBL("ENRON'S AUDITOR · HOUSE HEARING, JAN. 2002", 960, 850, at=s + 0.6, cls="label"),
+], cam=[[0, 1.0, 0, 0], [6, 1.04, 0, 0]])
 s = L("ACT7_07")
 shot(s, DARK, [
-    IMG("hearing_doc_shredding", 960 - 330, 110, 660, 854, at=s, anim="up", kb=[1.0, 1.05], style={"boxShadow": "0 40px 120px rgba(0,0,0,.75)"}),
-    LBL("U.S. HOUSE HEARING RECORD, 2002", 960, 1010, at=s + 0.3, cls="label", style={"fontSize": "17px"}),
+    IMG("hearing_doc_shredding", 960 - 300, 80, 600, 776, at=s, anim="up", kb=[1.0, 1.05], style={"boxShadow": "0 40px 120px rgba(0,0,0,.75)"}),
+    LBL("U.S. HOUSE HEARING RECORD, 2002", 960, 892, at=s + 0.3, cls="label", style={"fontSize": "20px"}),
 ], cam=[[0, 1.0, 0, 0], [4, 1.08, 0, -30]])
-caption("ENRON DOCUMENTS **SHREDDED**", s + 0.2, w("ACT7_07", "in") - 0.05)
 sfx(s + 0.1, "paper", -8)
 s2 = w("ACT7_07", "in")
 shot(s2, PH("shredder_detail", "push", dim=0.3, bw=True), [])
 sfx(s2, "shred", -12)
-datestamp("JUNE 2002", s2 + 0.1, E("ACT7_07") + 0.3)
-caption("CONVICTED: **OBSTRUCTION OF JUSTICE**", w("ACT7_07", "convicted") - 0.1, E("ACT7_07") + 0.3)
+datestamp("JUNE 2002", s2 + 0.1, E("ACT7_07") + 0.3, sub="ILLUSTRATIVE PHOTO")
 s = L("ACT7_08")
 shot(s, PH("supreme_court", "in", dim=0.3, bw=True), [])
 caption("2005: SUPREME COURT **OVERTURNS** THE CONVICTION", s + 0.2, w("ACT7_08", "by") - 0.05)
@@ -1174,7 +1193,7 @@ cards = [("ANDREW FASTOW", "PLEADED GUILTY · SENTENCED TO 6 YEARS", w("ACT7_09"
          ("KENNETH LAY", "CONVICTED (2006) · DIED BEFORE SENTENCING;\nCONVICTION VACATED", w("ACT7_09", "lay"))]
 els = []
 for i, (nm, verdict, tt) in enumerate(cards):
-    y = 230 + i * 240
+    y = 200 + i * 235
     els += [BOX(260, y, 1400, 200, at=tt - 0.1, anim="left", html=f'<div class="cap-m" style="text-align:left">{nm}</div><div class="label gold" style="margin-top:10px;text-align:left;line-height:1.5">{verdict.replace(chr(10), "<br>")}</div>',
                 style={"background": "rgba(5,7,9,.86)", "borderLeft": "6px solid var(--gold)", "flexDirection": "column", "alignItems": "flex-start", "padding": "0 40px", "textTransform": "none"})]
 shot(s, PH("casey_courthouse", "in", dim=0.55, bw=True, fallback="supreme_court"), els, tout="dip", toutD=0.6)
@@ -1196,17 +1215,18 @@ for i, (txt, tt) in enumerate(items):
     els += [T(f"NOT {txt}", 960, y, cls="cap-m shadow", at=tt), RECT(560, y - 4, 800, 8, at=tt + 0.35, anim="wipe", ad=0.3, style={"background": "var(--red)"})]
 shot(s, DARK, els)
 s = L("ACT8_03")
-parts = [("AGGRESSIVE\nESTIMATES", "aggressive", 420, 330), ("HIDDEN DEBT\n& LOSSES", "debt", 1500, 330), ("A CFO ON\nBOTH SIDES", "c.f", 360, 760),
-         ("DISCLOSURES\nNO ONE COULD READ", "disclosures", 1560, 760), ("PRESSURE TO\nKEEP CLIMBING", "relentless", 960, 900)]
+parts = [("AGGRESSIVE\nESTIMATES", "aggressive", 420, 300), ("HIDDEN DEBT\n& LOSSES", "debt", 1500, 300), ("A CFO ON\nBOTH SIDES", "c.f", 360, 700),
+         ("DISCLOSURES\nNO ONE COULD READ", "disclosures", 1560, 700), ("PRESSURE TO\nKEEP CLIMBING", "relentless", 960, 790)]
 els = [T("A COMBINATION", 960, 120, cls="label-l gold", at=s + 0.1)]
 for txt, word, x, y in parts:
     tt = w("ACT8_03", word) - 0.15
-    els += [PATH(f"M {x} {y} L 960 520", at=tt + 0.2, stroke="rgba(229,72,77,.6)", sw=3, ad=0.5),
+    els += [PATH(f"M {x} {y} L 960 490", at=tt + 0.2, stroke="rgba(229,72,77,.6)", sw=3, ad=0.5),
             BOX(x - 220, y - 85, 440, 170, at=tt, text=txt.replace("\n", "<br>"), anim="pop",
                 style={"background": "#0d1218", "border": "3px solid var(--gold)", "fontSize": "38px", "lineHeight": "1.15"})]
-els.append(BOX(780, 440, 360, 160, at=w("ACT8_03", "relentless") + 1.2, text="COLLAPSE", anim="pop",
+els.append(BOX(780, 410, 360, 160, at=w("ACT8_03", "relentless") + 1.2, text="COLLAPSE", anim="pop",
                style={"background": "rgba(229,72,77,.25)", "border": "4px solid var(--red)", "color": "var(--red)", "fontSize": "56px"}))
-shot(s, DARK, els, cam=[[0, 1.08, 0, 0], [E("ACT8_03") - s, 0.97, 0, 0]])
+mid3 = w("ACT8_03", "c.f") - s
+shot(s, DARK, els, cam=[[0, 1.1, 0, 60], [mid3, 1.03, -40, 20], [E("ACT8_03") - s, 0.97, 0, 0]])
 for word in ["aggressive", "debt", "disclosures", "relentless"]:
     sfx(w("ACT8_03", word) - 0.15, "pop", -12)
 sfx(w("ACT8_03", "c.f") - 0.15, "pop", -12)
@@ -1222,7 +1242,7 @@ shot(s, DARK, [
     PATH("M 1500 330 L 1500 700", at=gap, stroke="#e5484d", sw=5, arrow=True, ad=0.4),
     PATH("M 1500 700 L 1500 330", at=gap, stroke="#e5484d", sw=5, arrow=True, ad=0.4),
     T("~~THE GAP~~", 1440, 520, cls="cap-m", at=gap + 0.2, anim="pop", anchor="r"),
-    LBL("ILLUSTRATIVE", 260, 960, at=s, cls="label", anchor="l", style={"fontSize": "16px"}),
+    illus(s),
 ])
 s = L("ACT8_05")
 shot(s, BLACK, [
@@ -1243,5 +1263,17 @@ shot(s, BLACK, [
         kf=[[0, 0, 0, 1.0, 0.8], [E("ACT8_08") - s, 0, 0, 0.9, 0.5]]),
 ])
 s = L("ACT8_09")
-shot(s - 0.15, BLACK, [T("IT HAD WEEKS.", 960, 540, cls="cap-m", at=s, anim="fade", ad=0.4, t1=END - 0.65, aod=0.45)])
+shot(s - 0.15, BLACK, [T("IT HAD WEEKS.", 960, 540, cls="cap-m", at=s, anim="fade", ad=0.4, t1=E("ACT8_09") + 1.25, aod=0.6)])
 sfx(s, "hit", -6)
+
+# ---- end card: 18 s of room for YouTube end-screen elements (right two thirds stay clear)
+OC = E("ACT8_09") + 2.3
+shot(OC, NAVY, [
+    stock([[0, "1998-01-01", "2001-12-31", 0, 100]], [[0, "1998-01-02"], [9.0, "2001-11-30"]], red_from="2000-08-24", ystep=20, head=False,
+          x=700, y=140, w_=1180, h=700, revealEase="inOut", style={"opacity": "0.22"}),
+    IMG("enron_logo", 140, 250, 120, 120, at=OC + 0.3, anim="fade", ad=0.8),
+    T("ENRON", 140, 455, cls="cap-l", at=OC + 0.5, anim="left", anchor="l", style={"letterSpacing": "0.08em"}),
+    T("**PROFIT ON PAPER**", 140, 560, cls="cap-m", at=OC + 0.8, anim="left", anchor="l"),
+    RECT(140, 625, 140, 4, at=OC + 1.1, style={"background": "var(--gold)"}, anim="wipe"),
+    T("SOURCES, PHOTO CREDITS\nAND MUSIC IN THE DESCRIPTION", 140, 700, cls="label", at=OC + 1.4, anim="fade", anchor="l", style={"lineHeight": "1.6"}),
+], tin="fade", tinD=0.8, tout="dip", toutD=1.2)

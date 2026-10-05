@@ -274,16 +274,19 @@
       lines.forEach((ln, i) => ctx.fillText(ln, lx, ly + ((a.dy ?? -90) < 0 ? -8 - (lines.length - 1 - i) * (a.fs || 30) * 1.15 : 8 + i * (a.fs || 30) * 1.15)));
       ctx.globalAlpha = 1;
     }
-    // head dot + price
+    // head dot + price (the price label hides once an annotation sits on the same point)
     if (s.head !== false) {
       const hx = X(head[0]), hy = Y(head[1]);
       const hc = head[0] >= redFrom ? '#e5484d' : col;
       ctx.fillStyle = hc; ctx.shadowColor = hc; ctx.shadowBlur = 30;
       ctx.beginPath(); ctx.arc(hx, hy, 10, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
-      ctx.font = '600 40px "IBM Plex Mono"'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-      ctx.fillStyle = '#fff';
-      const lbl = '$' + head[1].toFixed(2);
-      ctx.fillText(lbl, Math.min(hx + 24, w - 210), clamp(hy - 34, pad.t + 20, h - pad.b - 20));
+      const covered = (s.ann || []).some((a) => lt >= a.t0 && Math.abs(dnum(a.d) - head[0]) < 2);
+      if (s.headLabel !== false && !covered) {
+        ctx.font = '600 40px "IBM Plex Mono"'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#fff';
+        const lbl = '$' + head[1].toFixed(2);
+        ctx.fillText(lbl, Math.min(hx + 24, w - 210), clamp(hy - 34, pad.t + 20, h - pad.b - 20));
+      }
     }
   }
 
@@ -482,6 +485,90 @@
     flash.style.opacity = fl; black.style.opacity = bl;
   }
 
+  // ---------- burned-in subtitles ----------
+  // One chunk at a time, centred low in frame. Every word is visible from the start of
+  // its chunk (dimmed), lights up when spoken, and a gold bar slides under the word
+  // being said. Keywords keep their colour and get a filled box while spoken.
+  const SUBS = TL.subs || [];
+  const subsEl = document.getElementById('subs');
+  const scrim = document.getElementById('subscrim');
+  let subLine = null, subPill = null, subBar = null, subIdx = -1, subWords = [];
+  const KEY = { gold: ['#f2bd55', '#e8b04b', '#0d0f12'], red: ['#ff6d70', '#e5484d', '#ffffff'], cyan: ['#6fd8e2', '#59c9d3', '#0d0f12'] };
+  function mountChunk(i) {
+    subsEl.textContent = '';
+    subLine = document.createElement('div'); subLine.className = 'subline';
+    subBar = document.createElement('div'); subBar.className = 'subbar';
+    subPill = document.createElement('div'); subPill.className = 'subpill';
+    subLine.appendChild(subPill); subLine.appendChild(subBar);
+    subWords = SUBS[i].words.map((wd) => {
+      const sp = document.createElement('span'); sp.className = 'sw'; sp.textContent = wd.t;
+      subLine.appendChild(sp); return { wd, sp };
+    });
+    subsEl.appendChild(subLine);
+    for (const o of subWords) { o.x = o.sp.offsetLeft; o.w = o.sp.offsetWidth; }
+    subIdx = i;
+  }
+  function subAt(t) {
+    let lo = 0, hi = SUBS.length - 1, k = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (SUBS[mid].s <= t) { k = mid; lo = mid + 1; } else hi = mid - 1; }
+    return k;
+  }
+  function renderSubs(t) {
+    const k = subAt(t);
+    const c = k >= 0 ? SUBS[k] : null;
+    const FADE = 0.16;
+    let vis = 0;
+    if (c && t < c.e + FADE) vis = t <= c.e ? 1 : 1 - (t - c.e) / FADE;
+    // the scrim follows the subtitles but lingers through the short gaps between chunks
+    let sc = 0;
+    if (c) {
+      const pv = SUBS[k - 1], nx = SUBS[k + 1];
+      const fin = pv && c.s - pv.e < 1.2 ? 1 : clamp((t - c.s + 0.1) / 0.3);
+      const fout = t <= c.e + 0.35 || (nx && nx.s - c.e < 1.2) ? 1 : clamp(1 - (t - c.e - 0.35) / 0.4);
+      sc = Math.min(fin, fout);
+    }
+    scrim.style.opacity = sc.toFixed(3);
+    if (!c || vis <= 0) { subsEl.style.display = 'none'; return null; }
+    subsEl.style.display = '';
+    if (subIdx !== k) mountChunk(k);
+    const pin = EASE.outBack(prog(t, c.s, 0.24));
+    subLine.style.opacity = (clamp(prog(t, c.s, 0.12)) * vis).toFixed(3);
+    subLine.style.transform = `translateY(${((1 - pin) * 18).toFixed(2)}px) scale(${lerp(0.96, 1, clamp(pin)).toFixed(4)})`;
+    // active word = last word already started
+    let a = -1;
+    subWords.forEach((o, i) => { if (t >= o.wd.s) a = i; });
+    subWords.forEach((o, i) => {
+      const key = KEY[o.wd.c];
+      const spoken = i <= a;
+      const active = i === a && t < o.wd.e + 0.25;
+      let color = spoken ? (key ? key[0] : '#ffffff') : 'rgba(255,255,255,0.5)';
+      if (active && key) color = key[2];
+      o.sp.style.color = color;
+      o.sp.classList.toggle('on', active && !!key);
+      const p = prog(t, o.wd.s, 0.22);
+      const bump = spoken && p < 1 ? Math.sin(Math.PI * p) : 0;
+      o.sp.style.transform = bump ? `translateY(${(-4 * bump).toFixed(2)}px) scale(${(1 + 0.07 * bump).toFixed(4)})` : '';
+    });
+    // sliding bar under the active word; filled box behind an active keyword
+    if (a >= 0) {
+      const cur = subWords[a], prev = subWords[Math.max(a - 1, 0)];
+      const m = EASE.out(prog(t, cur.wd.s, 0.11));
+      const x = lerp(a > 0 ? prev.x : cur.x, cur.x, m), wdt = lerp(a > 0 ? prev.w : cur.w, cur.w, m);
+      const key = KEY[cur.wd.c];
+      subBar.style.opacity = '1';
+      subBar.style.left = (x + 10).toFixed(1) + 'px'; subBar.style.width = Math.max(wdt - 20, 8).toFixed(1) + 'px';
+      subBar.style.background = key ? key[1] : '#e8b04b';
+      const on = key && t < cur.wd.e + 0.25;
+      subPill.style.opacity = on ? '1' : '0';
+      if (on) {
+        const pp = EASE.outBack(prog(t, cur.wd.s, 0.18));
+        subPill.style.left = cur.x + 'px'; subPill.style.width = cur.w + 'px'; subPill.style.background = key[1];
+        subPill.style.transform = `scale(${lerp(0.82, 1, clamp(pp, 0, 1.2)).toFixed(4)})`;
+      }
+    } else { subBar.style.opacity = '0'; subPill.style.opacity = '0'; }
+    return subLine;
+  }
+
   // ---------- public API ----------
   window.setupRange = async (t0, t1) => {
     for (const sp of TL.shots) if (sp.end >= t0 - 1 && sp.start <= t1 + 1) mountShot(sp);
@@ -499,6 +586,42 @@
   window.renderAt = (t) => {
     for (const sh of shots) updateShot(sh, t);
     globalFx(t);
+    renderSubs(t);
     return true;
+  };
+  // Layout audit: which visible elements touch the subtitle at time t.
+  window.auditAt = (t) => {
+    window.renderAt(t);
+    const line = subsEl.style.display === 'none' ? null : subLine;
+    if (!line || parseFloat(line.style.opacity) < 0.3) return null;
+    const words = subWords.map((o) => o.sp.getBoundingClientRect());
+    const R = { l: Math.min(...words.map((r) => r.left)) - 6, r: Math.max(...words.map((r) => r.right)) + 6,
+                t: Math.min(...words.map((r) => r.top)) - 4, b: Math.max(...words.map((r) => r.bottom)) + 4 };
+    const hits = [];
+    const visible = (n) => { for (let p = n; p && p !== document.body; p = p.parentElement) { const cs = getComputedStyle(p); if (cs.display === 'none' || parseFloat(cs.opacity) < 0.08) return false; } return true; };
+    for (const sh of shots) {
+      if (sh.div.style.display === 'none') continue;
+      for (const e of sh.els) {
+        const k = e.spec.kind || 'text';
+        if (k === 'doc' || k === 'gridbg') continue;
+        let nodes = [e.node];
+        if (k === 'path' || k === 'circle') nodes = [e.g];
+        for (const n of nodes) {
+          if (!visible(n)) continue;
+          let r = n.getBoundingClientRect();
+          if (k === 'stock') r = { left: r.left, right: r.right, top: r.top, bottom: r.bottom - 34 };
+          if (r.right - r.left >= 1900 && r.bottom - r.top >= 1000) continue;  // full-frame washes
+          if (r.right < R.l || r.left > R.r || r.bottom < R.t || r.top > R.b) continue;
+          hits.push({ shot: sh.sp.start, kind: k, text: (e.spec.text || e.spec.html || '').toString().replace(/<[^>]+>/g, ' ').slice(0, 50), top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) });
+        }
+      }
+      for (const e of sh.els) if (e.markers) for (const { m } of e.markers) {
+        if (!visible(m) || m.style.opacity === '0') continue;
+        const r = m.getBoundingClientRect();
+        if (r.right < R.l || r.left > R.r || r.bottom < R.t || r.top > R.b) continue;
+        hits.push({ shot: sh.sp.start, kind: 'highlight', text: 'doc highlight', top: Math.round(r.top), bottom: Math.round(r.bottom) });
+      }
+    }
+    return { box: R, hits };
   };
 })();

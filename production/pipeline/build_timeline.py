@@ -1,12 +1,14 @@
 """Compile pipeline/shots.py into build/timeline.js (renderer) and build/cues.json (audio)."""
 import csv
 import json
+import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).parent))
 import shots as S  # noqa: E402
+import subs as SB  # noqa: E402
 
 ABS_KEYS = ("at", "until", "t1")
 
@@ -49,7 +51,19 @@ def main():
         out.append(o)
 
     series = [[r["date"], float(r["close"])] for r in csv.DictReader(open(ROOT / "assets" / "data" / "ene_daily.csv"))]
-    tl = {"fps": 30, "duration": S.END, "shots": out, "data": {"ene": series}}
+
+    # ---- subtitles: a chunk steps aside while a big caption shows the same words
+    def toks(s):
+        return set(re.findall(r"[a-z0-9$%]+", re.sub(r"\*\*|~~|__", "", s).lower().replace("’", "'")))
+    subs, dropped = [], []
+    for ch in SB.build(S.NAR):
+        mid = (ch["s"] + ch["e"]) / 2
+        ct = toks(" ".join(x["t"] for x in ch["words"]))
+        hit = any(a - 0.3 <= mid <= b + 0.3 and ct and len(ct & toks(txt)) / len(ct) >= 0.8 for a, b, txt in S.DUPS)
+        (dropped if hit else subs).append(ch)
+    print(f"subtitles: {len(subs)} chunks ({len(dropped)} replaced by on-screen captions)")
+
+    tl = {"fps": 30, "duration": S.END, "shots": out, "data": {"ene": series}, "subs": subs}
     (ROOT / "build" / "timeline.js").write_text("window.TL = " + json.dumps(tl, separators=(",", ":")) + ";\n")
 
     acts = [{"id": a["id"], "start": a["start"], "end": a["end"]} for a in S.NAR["acts"]]

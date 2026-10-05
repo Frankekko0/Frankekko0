@@ -1,879 +1,861 @@
 1
-00:00:00,500 --> 00:00:03,428
-Enron wasn't destroyed
-because it ran out of customers.
+00:00:00,500 --> 00:00:03,747
+Enron wasn’t destroyed because
+it ran out of customers.
 
 2
-00:00:03,998 --> 00:00:07,383
-In 2001, its pipelines were
-still moving gas.
+00:00:03,997 --> 00:00:07,457
+In 2001, its pipelines
+were still moving gas.
 
 3
-00:00:07,403 --> 00:00:09,533
+00:00:07,497 --> 00:00:09,763
 Its traders were still making deals.
 
 4
-00:00:09,803 --> 00:00:12,878
-The real problem had
-started almost a decade earlier,
+00:00:09,803 --> 00:00:13,117
+The real problem had started
+almost a decade earlier,
 
 5
-00:00:12,898 --> 00:00:15,272
+00:00:13,157 --> 00:00:15,506
 with a decision about how to count money.
 
 6
-00:00:15,542 --> 00:00:19,832
+00:00:15,546 --> 00:00:19,731
 In 1992, Enron got permission
-to use an accounting
+to use an accounting method
 
 7
-00:00:19,852 --> 00:00:22,855
-method that could turn
-profits expected in the future...
+00:00:19,771 --> 00:00:22,556
+that could turn profits
+expected in the future...
 
 8
-00:00:22,875 --> 00:00:24,422
+00:00:22,596 --> 00:00:24,651
 into profits reported today.
 
 9
-00:00:24,692 --> 00:00:26,458
-The cash didn't have to arrive yet.
+00:00:24,691 --> 00:00:26,686
+The cash didn’t have to arrive yet.
 
 10
-00:00:26,478 --> 00:00:29,264
-But on paper, Enron could
-look spectacular.
+00:00:26,726 --> 00:00:29,582
+But on paper,
+Enron could look spectacular.
 
 11
-00:00:29,884 --> 00:00:32,604
-And as Wall Street
-fell in love with the company,
+00:00:29,882 --> 00:00:32,397
+And as Wall Street fell
+in love with the company,
 
 12
-00:00:32,624 --> 00:00:35,008
-keeping that picture alive
-became critical.
+00:00:32,437 --> 00:00:35,236
+keeping that picture
+alive became critical.
 
 13
-00:00:35,278 --> 00:00:38,973
+00:00:35,276 --> 00:00:39,222
 By 2000, Enron was worth
-nearly seventy billion dollars.
+nearly $70 billion.
 
 14
-00:00:39,243 --> 00:00:41,258
-Then, in less than
-two months, it was gone.
+00:00:39,262 --> 00:00:43,589
+Then, in the fall of 2001,
+it collapsed in less than two months.
 
 15
-00:00:42,128 --> 00:00:44,696
+00:00:44,139 --> 00:00:46,963
 Billions in savings. Thousands of jobs.
 
 16
-00:00:44,716 --> 00:00:47,351
-One of America's most admired companies.
+00:00:47,003 --> 00:00:49,592
+One of America’s most admired companies.
 
 17
-00:00:47,621 --> 00:00:51,673
+00:00:49,632 --> 00:00:54,006
 To understand how, you need one
 accounting idea that changed everything.
 
 18
-00:00:54,993 --> 00:00:57,237
+00:00:57,006 --> 00:00:59,487
 Houston, Texas. 1985.
 
 19
-00:00:57,507 --> 00:01:01,607
+00:00:59,527 --> 00:01:01,849
 Two natural gas pipeline companies merge
-into what soon becomes Enron,
 
 20
-00:01:01,627 --> 00:01:03,165
+00:01:01,889 --> 00:01:05,410
+into what soon becomes Enron,
 led by Kenneth Lay.
 
 21
-00:01:03,435 --> 00:01:05,825
+00:01:05,450 --> 00:01:07,709
 At first, Enron moves gas. Steady.
 
 22
-00:01:05,845 --> 00:01:07,344
+00:01:07,749 --> 00:01:09,591
 Predictable. A little boring.
 
 23
-00:01:07,614 --> 00:01:11,527
+00:01:09,631 --> 00:01:13,812
 Then Lay brings in a sharp McKinsey
 consultant named Jeffrey Skilling.
 
 24
-00:01:11,797 --> 00:01:16,227
-Skilling's big idea was a "Gas
-Bank." Enron wouldn't just move energy.
+00:01:13,852 --> 00:01:16,487
+Skilling’s big idea was a “Gas Bank.”
 
 25
-00:01:16,247 --> 00:01:18,778
-It would trade it, the way a
-bank trades money.
+00:01:16,527 --> 00:01:18,437
+Enron wouldn’t just move energy.
 
 26
-00:01:19,048 --> 00:01:19,567
-It worked.
+00:01:18,477 --> 00:01:21,027
+It would trade it,
+the way a bank trades money.
 
 27
-00:01:19,587 --> 00:01:23,017
-By the late nineties, Enron was
-trading natural gas,
+00:01:21,067 --> 00:01:24,714
+It worked. By the late ’90s,
+Enron was trading natural gas,
 
 28
-00:01:23,037 --> 00:01:25,012
+00:01:24,754 --> 00:01:27,268
 electricity, even internet bandwidth.
 
 29
-00:01:25,282 --> 00:01:30,180
-Fortune magazine named it "America's
-Most Innovative Company" six years in a row.
+00:01:27,308 --> 00:01:29,518
+Fortune magazine named it “America’s
 
 30
-00:01:30,450 --> 00:01:35,670
-In 2000, Enron reported revenue
-of about one hundred billion dollars.
+00:01:29,558 --> 00:01:32,428
+Most Innovative Company”
+six years in a row.
 
 31
-00:01:35,690 --> 00:01:38,260
-That August, its
-stock hit an all-time high.
+00:01:32,468 --> 00:01:37,335
+In 2000, Enron reported
+revenue of about $100 billion.
 
 32
-00:01:38,280 --> 00:01:40,203
-More than ninety dollars a share.
+00:01:37,375 --> 00:01:40,310
+That August, its stock
+hit an all-time high.
 
 33
-00:01:40,473 --> 00:01:41,794
-Enron looked like the future.
+00:01:40,350 --> 00:01:42,451
+More than $90 a share.
 
 34
-00:01:42,064 --> 00:01:45,816
-But underneath that success was
-a question almost nobody was asking.
+00:01:42,491 --> 00:01:44,043
+Enron looked like the future.
 
 35
-00:01:46,086 --> 00:01:48,891
-How much of that profit
-had actually arrived as cash?
+00:01:44,083 --> 00:01:48,062
+But underneath that success was a
+question almost nobody was asking.
 
 36
-00:01:51,261 --> 00:01:54,135
+00:01:48,102 --> 00:01:51,226
+How much of that profit had
+actually arrived as cash?
+
+37
+00:01:53,277 --> 00:01:56,426
 To answer that,
 we have to go back to 1992.
 
-37
-00:01:54,405 --> 00:01:57,991
-Skilling wanted Enron
-to use mark-to-market accounting.
-
 38
-00:01:58,011 --> 00:02:01,759
+00:01:56,466 --> 00:01:59,839
+Skilling wanted Enron to use
+mark-to-market accounting.
+
+39
+00:01:59,879 --> 00:02:03,802
 In January 1992, the Securities
 and Exchange Commission
 
-39
-00:02:01,779 --> 00:02:04,881
-approved it for Enron's
+40
+00:02:03,842 --> 00:02:07,118
+approved it for Enron’s
 natural gas contracts.
 
-40
-00:02:05,151 --> 00:02:08,473
-Imagine Enron signs
-a ten-year contract it expects
-
 41
-00:02:08,493 --> 00:02:10,952
-to earn one hundred million
-dollars in profit.
+00:02:07,158 --> 00:02:09,836
+Imagine Enron signs a 10-year contract
 
 42
-00:02:11,222 --> 00:02:14,749
-Under traditional accounting, that
-profit shows up gradually,
+00:02:09,876 --> 00:02:13,189
+it expects to earn $100 million in profit.
 
 43
-00:02:14,769 --> 00:02:17,482
-as the gas is delivered and
-the money comes in.
+00:02:13,229 --> 00:02:16,783
+Under traditional accounting,
+that profit shows up gradually,
 
 44
-00:02:17,752 --> 00:02:22,702
-Under mark-to-market, Enron could estimate
-what the whole contract was worth today,
+00:02:16,823 --> 00:02:19,720
+as the gas is delivered
+and the money comes in.
 
 45
-00:02:22,722 --> 00:02:24,481
-and book that value as profit now.
+00:02:19,760 --> 00:02:20,848
+Under mark-to-market,
 
 46
-00:02:24,751 --> 00:02:26,374
-Year one. One giant number.
+00:02:20,888 --> 00:02:24,310
+Enron could estimate what the
+whole contract was worth today,
 
 47
-00:02:27,194 --> 00:02:29,112
-Now, mark-to-market isn't fraud.
+00:02:24,350 --> 00:02:26,722
+and book that value as profit now.
 
 48
-00:02:29,132 --> 00:02:32,323
-It's widely used for
-things with clear market prices.
+00:02:26,762 --> 00:02:28,704
+Year one. One giant number.
 
 49
-00:02:32,593 --> 00:02:34,697
-The danger is in one word. Estimate.
+00:02:29,229 --> 00:02:31,239
+Now, mark-to-market isn’t fraud.
 
 50
-00:02:35,417 --> 00:02:39,577
-Many of Enron's long-term deals had no
-market price to check against.
+00:02:31,279 --> 00:02:34,563
+It’s widely used for things
+with clear market prices.
 
 51
-00:02:39,597 --> 00:02:42,570
-Their value rested
-on Enron's own assumptions.
+00:02:34,603 --> 00:02:37,028
+The danger is in one word. Estimate.
 
 52
-00:02:42,840 --> 00:02:47,029
+00:02:37,451 --> 00:02:41,761
+Many of Enron’s long-term deals had
+no market price to check against.
+
+53
+00:02:41,801 --> 00:02:44,819
+Their value rested on
+Enron’s own assumptions.
+
+54
+00:02:44,859 --> 00:02:48,756
 Make those assumptions a little more
 optimistic, and the profit gets bigger.
 
-53
-00:02:47,049 --> 00:02:47,583
+55
+00:02:48,796 --> 00:02:49,823
 Instantly.
 
-54
-00:02:47,853 --> 00:02:49,524
-And here's the crucial part.
-
-55
-00:02:49,544 --> 00:02:51,155
+56
+00:02:49,863 --> 00:02:53,347
+And here’s the crucial part.
 The profit is reported now.
 
-56
-00:02:51,175 --> 00:02:53,209
+57
+00:02:53,387 --> 00:02:55,297
 The cash might arrive years later.
 
-57
-00:02:53,229 --> 00:02:55,323
+58
+00:02:55,337 --> 00:02:57,653
 Or never match the estimate at all.
 
-58
-00:02:56,043 --> 00:02:59,548
+59
+00:02:58,061 --> 00:03:01,474
 Accounting profit is what the
 financial statements say you earned.
 
-59
-00:02:59,568 --> 00:03:02,752
+60
+00:03:01,514 --> 00:03:04,993
 Cash flow is the money that
 actually comes through the door.
 
-60
-00:03:03,022 --> 00:03:05,015
+61
+00:03:05,033 --> 00:03:07,342
 At Enron, the two drifted far apart.
 
-61
-00:03:05,285 --> 00:03:06,228
-One real example:
-
 62
-00:03:06,248 --> 00:03:09,795
-in July 2000, Enron
-announced a twenty-year
+00:03:07,382 --> 00:03:11,967
+One real example: in July 2000,
+Enron announced a 20-year deal
 
 63
-00:03:09,815 --> 00:03:12,230
-deal with Blockbuster for
-movies on demand.
+00:03:12,007 --> 00:03:14,543
+with Blockbuster for movies on demand.
 
 64
-00:03:12,500 --> 00:03:17,181
+00:03:14,583 --> 00:03:19,494
 It never got beyond small pilot tests,
 and it ended in March 2001.
 
 65
-00:03:17,451 --> 00:03:20,611
+00:03:19,534 --> 00:03:24,045
 But Enron had already booked
-about one hundred
+about $111 million in profit
 
 66
-00:03:20,631 --> 00:03:23,078
-and eleven million dollars
-in profit from it,
+00:03:24,085 --> 00:03:27,838
+from it, based largely on
+projected future earnings.
 
 67
-00:03:23,098 --> 00:03:25,435
-based largely on projected
-future earnings.
+00:03:28,438 --> 00:03:31,743
+And once you’ve reported a
+contract’s future profit today,
 
 68
-00:03:26,355 --> 00:03:29,645
-And once you've reported
-a contract's future profit today,
+00:03:31,783 --> 00:03:33,992
+you can’t report it again tomorrow.
 
 69
-00:03:29,665 --> 00:03:31,643
-you can't report it again tomorrow.
+00:03:34,032 --> 00:03:36,705
+So to keep growing,
+Enron needed more deals.
 
 70
-00:03:31,913 --> 00:03:34,870
-So to keep growing, Enron
-needed more deals.
-
-71
-00:03:34,890 --> 00:03:36,730
+00:03:36,745 --> 00:03:39,044
 Bigger deals. Every single quarter.
 
-72
-00:03:37,000 --> 00:03:38,882
+71
+00:03:39,084 --> 00:03:40,914
 The accounting had built a treadmill.
 
-73
-00:03:38,902 --> 00:03:40,065
+72
+00:03:40,954 --> 00:03:42,468
 And it was speeding up.
 
+73
+00:03:44,524 --> 00:03:48,390
+In 1999, Enron’s stock rose 56%.
+
 74
-00:03:42,435 --> 00:03:46,446
-In 1999, Enron's stock rose
-fifty-six percent.
+00:03:48,430 --> 00:03:51,533
+In 2000, another 87%.
 
 75
-00:03:46,466 --> 00:03:48,951
-In 2000, another eighty-seven percent.
+00:03:51,573 --> 00:03:54,995
+Stock tickers were installed
+in the lobbies and elevators.
 
 76
-00:03:49,221 --> 00:03:52,624
-Stock tickers were installed in
-the lobbies and elevators.
+00:03:55,035 --> 00:03:58,056
+Executives were paid
+heavily in stock options.
 
 77
-00:03:52,644 --> 00:03:55,339
-Executives were paid heavily
-in stock options.
+00:03:58,096 --> 00:03:59,944
+The share price wasn’t just a number.
 
 78
-00:03:55,609 --> 00:03:57,539
-The share price wasn't just a number.
-
-79
-00:03:57,559 --> 00:03:58,699
+00:03:59,984 --> 00:04:01,548
 It was the scoreboard.
 
-80
-00:03:58,969 --> 00:04:02,425
-Analysts expected Enron
-to hit its targets every quarter.
+79
+00:04:01,588 --> 00:04:04,998
+Analysts expected Enron to
+hit its targets every quarter.
 
-81
-00:04:02,445 --> 00:04:04,944
+80
+00:04:05,038 --> 00:04:07,997
 And Enron delivered. Again. And again.
 
-82
-00:04:05,214 --> 00:04:07,754
-But every success raised the
-bar for the next one.
+81
+00:04:08,037 --> 00:04:10,875
+But every success raised
+the bar for the next one.
 
-83
-00:04:08,024 --> 00:04:09,877
+82
+00:04:10,915 --> 00:04:12,813
 Meanwhile, some of its biggest bets,
 
-84
-00:04:09,897 --> 00:04:13,415
-like overseas power plants and
-a broadband network, were struggling.
+83
+00:04:12,853 --> 00:04:16,730
+like overseas power plants and a
+broadband network, were struggling.
 
-85
-00:04:13,685 --> 00:04:15,627
+84
+00:04:16,770 --> 00:04:18,816
 The machine needed constant growth.
 
+85
+00:04:18,856 --> 00:04:21,557
+And real growth was
+getting harder to find.
+
 86
-00:04:15,647 --> 00:04:18,037
-And real growth
-was getting harder to find.
+00:04:21,597 --> 00:04:23,619
+So where do you put the
+losses, and the debt,
 
 87
-00:04:18,307 --> 00:04:21,836
-So where do you put the losses, and the debt,
-when your story can't afford them?
+00:04:23,659 --> 00:04:25,651
+when your story can’t afford them?
 
 88
-00:04:24,206 --> 00:04:28,662
-Enter Andrew Fastow, Enron's chief
-financial officer from 1998.
+00:04:27,701 --> 00:04:32,386
+Enter Andrew Fastow, Enron’s
+chief financial officer from 1998.
 
 89
-00:04:28,932 --> 00:04:31,089
+00:04:32,426 --> 00:04:34,814
 His specialty: special-purpose entities.
 
 90
-00:04:31,359 --> 00:04:35,085
+00:04:34,854 --> 00:04:38,766
 Basically, a separate company
 created for one specific job.
 
 91
-00:04:35,105 --> 00:04:37,942
+00:04:38,806 --> 00:04:41,668
 Companies use them
 legitimately all the time.
 
 92
-00:04:38,212 --> 00:04:42,187
-Under the rules back then, an
-outside investor with as little as three
+00:04:41,708 --> 00:04:45,912
+Under the rules back then,
+an outside investor with as little as 3%
 
 93
-00:04:42,207 --> 00:04:46,411
-percent of the capital at risk could make
+00:04:45,952 --> 00:04:50,137
+of the capital at risk could make
 the entity count as independent.
 
 94
-00:04:46,681 --> 00:04:47,492
+00:04:50,177 --> 00:04:51,057
 And that mattered.
 
 95
-00:04:47,512 --> 00:04:51,326
-Because its assets, and its debt, could
-stay off Enron's balance sheet.
+00:04:51,097 --> 00:04:55,048
+Because its assets, and its debt,
+could stay off Enron’s balance sheet.
 
 96
-00:04:51,596 --> 00:04:55,254
-Enron used them again and again. Chewco.
+00:04:55,088 --> 00:04:57,348
+Enron used them again and again.
 
 97
-00:04:55,274 --> 00:04:55,488
-LJM.
+00:04:57,388 --> 00:05:02,712
+Chewco. LJM. And the Raptors, named
+after the dinosaurs in Jurassic Park.
 
 98
-00:04:55,508 --> 00:04:58,991
-And the Raptors, named after the
-dinosaurs in Jurassic Park.
+00:05:02,752 --> 00:05:06,568
+But in several cases, the outside
+money wasn’t really outside.
 
 99
-00:04:59,261 --> 00:05:02,818
-But in several cases, the
-outside money wasn't really outside.
+00:05:06,608 --> 00:05:10,445
+Chewco, it later emerged,
+didn’t meet the 3% rule at all.
 
 100
-00:05:03,088 --> 00:05:06,634
-Chewco, it later emerged, didn't meet
-the three percent rule at all.
+00:05:10,745 --> 00:05:14,151
+The Raptors made Enron’s
+investment losses look hedged,
 
 101
-00:05:07,254 --> 00:05:12,019
-The Raptors made Enron's investment
-losses look hedged, covered by someone else.
+00:05:14,191 --> 00:05:15,765
+covered by someone else.
 
 102
-00:05:12,039 --> 00:05:16,075
+00:05:15,805 --> 00:05:19,801
 But that someone else was effectively
-backed by Enron's own stock.
+backed by Enron’s own stock.
 
 103
-00:05:16,345 --> 00:05:20,867
-A later investigation for Enron's
+00:05:19,841 --> 00:05:23,901
+A later investigation for Enron’s
 board found these deals inflated
 
 104
-00:05:20,887 --> 00:05:24,885
-reported earnings by almost one billion
-dollars, in just over a year.
+00:05:23,941 --> 00:05:28,696
+reported earnings by almost $1
+billion, in just over a year.
 
 105
-00:05:25,805 --> 00:05:27,601
+00:05:29,296 --> 00:05:31,320
 Then there was the conflict of interest.
 
 106
-00:05:27,871 --> 00:05:31,215
-Fastow didn't just
-design the LJM partnerships.
+00:05:31,360 --> 00:05:34,696
+Fastow didn’t just design
+the LJM partnerships.
 
 107
-00:05:31,235 --> 00:05:33,268
-He ran them, while serving as C.F.O.
+00:05:34,736 --> 00:05:37,208
+He ran them, while serving as CFO.
 
 108
-00:05:33,288 --> 00:05:37,943
-Enron's board approved it, as
-an exception to its own code of conduct.
+00:05:37,248 --> 00:05:41,649
+Enron’s board approved it, as an
+exception to its own code of conduct.
 
 109
-00:05:38,213 --> 00:05:42,736
-The investigation found Fastow
-was involved on both sides of these deals,
+00:05:41,689 --> 00:05:46,369
+The investigation found Fastow was
+involved on both sides of these deals,
 
 110
-00:05:42,756 --> 00:05:45,516
-and made more than thirty
-million dollars from them.
+00:05:46,409 --> 00:05:49,312
+and made more than $30 million from them.
 
 111
-00:05:46,336 --> 00:05:48,525
+00:05:49,812 --> 00:05:52,229
 On paper, Enron looked stronger than ever.
 
 112
-00:05:48,795 --> 00:05:52,616
-In reality, risk was piling up
-in places investors could barely see.
+00:05:52,269 --> 00:05:56,410
+In reality, risk was piling up in
+places investors could barely see.
 
 113
-00:05:54,986 --> 00:05:56,629
+00:05:58,460 --> 00:06:00,348
 But some people started looking.
 
 114
-00:05:56,899 --> 00:05:58,089
+00:06:00,388 --> 00:06:02,060
 March 2001.
 
 115
-00:05:58,109 --> 00:06:02,142
-In Fortune, the same magazine
-that kept calling Enron innovative,
+00:06:02,100 --> 00:06:05,923
+In Fortune, the same magazine that
+kept calling Enron innovative,
 
 116
-00:06:02,162 --> 00:06:04,405
+00:06:05,963 --> 00:06:08,123
 reporter Bethany McLean asked:
 
 117
-00:06:04,425 --> 00:06:06,194
-"Is Enron Overpriced?"
+00:06:08,163 --> 00:06:09,988
+“Is Enron Overpriced?”
 
 118
-00:06:07,014 --> 00:06:07,877
-The real question:
+00:06:10,488 --> 00:06:14,033
+The real question: how exactly
+does Enron make its money?
 
 119
-00:06:07,897 --> 00:06:10,329
-how exactly does Enron make its money?
+00:06:14,073 --> 00:06:17,598
+The financial statements were
+nearly impossible to decode.
 
 120
-00:06:10,599 --> 00:06:13,881
-The financial statements
-were nearly impossible to decode.
+00:06:17,638 --> 00:06:21,797
+The debt was growing. And the cash
+didn’t seem to line up with the profits.
 
 121
-00:06:13,901 --> 00:06:15,076
-The debt was growing.
+00:06:21,837 --> 00:06:24,879
+In August, just six
+months after becoming CEO,
 
 122
-00:06:15,096 --> 00:06:18,093
-And the cash didn't seem
-to line up with the profits.
-
-123
-00:06:18,363 --> 00:06:21,318
-In August, just six
-months after becoming C.E.O.,
-
-124
-00:06:21,338 --> 00:06:24,415
+00:06:24,919 --> 00:06:28,120
 Jeffrey Skilling resigned,
 citing personal reasons.
 
-125
-00:06:24,685 --> 00:06:27,933
+123
+00:06:28,160 --> 00:06:30,975
 Kenneth Lay took the job back,
 and assured the market:
 
-126
-00:06:27,953 --> 00:06:29,715
+124
+00:06:31,015 --> 00:06:33,419
 no change in performance or outlook.
 
-127
-00:06:29,985 --> 00:06:34,852
-The next day, a vice president named
-Sherron Watkins sent Lay an anonymous letter.
+125
+00:06:33,459 --> 00:06:35,578
+The next day, a vice
+president named Sherron
 
-128
-00:06:35,122 --> 00:06:36,622
+126
+00:06:35,618 --> 00:06:38,559
+Watkins sent Lay an anonymous letter.
+
+127
+00:06:38,599 --> 00:06:40,412
 One line would become famous.
 
+128
+00:06:40,812 --> 00:06:43,470
+“I am incredibly nervous
+that we will implode
+
 129
-00:06:37,342 --> 00:06:42,026
-"I am incredibly nervous that we will implode
-in a wave of accounting scandals."
+00:06:43,510 --> 00:06:45,817
+in a wave of accounting scandals.”
 
 130
-00:06:43,196 --> 00:06:46,320
-By the end of August, the
-stock was below thirty-five dollars.
+00:06:46,667 --> 00:06:50,021
+By the end of August,
+the stock was below $35.
 
 131
-00:06:46,590 --> 00:06:48,330
+00:06:50,061 --> 00:06:52,124
 The cracks were no longer invisible.
 
 132
-00:06:50,700 --> 00:06:52,636
-October sixteenth, 2001.
+00:06:54,176 --> 00:06:56,339
+October 16, 2001.
 
 133
-00:06:52,906 --> 00:06:58,114
-Enron reports a third-quarter loss
-of six hundred and eighteen million dollars,
+00:06:56,379 --> 00:07:01,114
+Enron reports a third-quarter
+loss of $618 million,
 
 134
-00:06:58,134 --> 00:07:00,642
-after one point zero one
-billion in charges.
+00:07:01,154 --> 00:07:04,345
+after $1.01 billion in charges.
 
 135
-00:07:00,912 --> 00:07:05,663
-It also reveals a one point two
-billion dollar cut to shareholders' equity,
+00:07:04,385 --> 00:07:08,852
+It also reveals a $1.2 billion
+cut to shareholders’ equity,
 
 136
-00:07:05,683 --> 00:07:08,335
-tied to partnerships run by its own C.F.O.
+00:07:08,892 --> 00:07:12,062
+tied to partnerships run by its own CFO.
 
 137
-00:07:08,605 --> 00:07:10,644
-October twenty-second. The S.E.C.
-
-138
-00:07:10,664 --> 00:07:12,142
+00:07:12,102 --> 00:07:15,837
+October 22. The SEC
 starts asking questions.
 
+138
+00:07:15,877 --> 00:07:18,426
+The stock falls to around $20.
+
 139
-00:07:12,162 --> 00:07:14,701
-The stock falls to around twenty dollars.
+00:07:18,466 --> 00:07:20,637
+October 24. Fastow is out.
 
 140
-00:07:14,971 --> 00:07:16,918
-October twenty-fourth. Fastow is out.
+00:07:20,677 --> 00:07:26,074
+November 8. Enron restates its
+results all the way back to 1997.
 
 141
-00:07:17,188 --> 00:07:18,104
-November eighth.
+00:07:26,114 --> 00:07:29,299
+Hundreds of millions in
+reported profit, erased.
 
 142
-00:07:18,124 --> 00:07:22,841
-Enron restates its results all
-the way back to 1997.
+00:07:29,339 --> 00:07:32,695
+Hundreds of millions in debt,
+suddenly back on the books.
 
 143
-00:07:22,861 --> 00:07:25,648
-Hundreds of millions
-in reported profit, erased.
-
-144
-00:07:25,668 --> 00:07:28,981
-Hundreds of millions in
-debt, suddenly back on the books.
-
-145
-00:07:29,251 --> 00:07:31,358
+00:07:32,735 --> 00:07:35,000
 And a trading company runs on trust.
 
-146
-00:07:31,378 --> 00:07:33,485
-Partners have to believe you'll pay.
+144
+00:07:35,040 --> 00:07:37,200
+Partners have to believe you’ll pay.
 
-147
-00:07:33,755 --> 00:07:34,997
+145
+00:07:37,240 --> 00:07:38,711
 That trust was vanishing.
 
-148
-00:07:35,267 --> 00:07:36,543
-November ninth. A lifeline.
+146
+00:07:38,751 --> 00:07:43,619
+November 9. A lifeline. Dynegy,
+a Houston rival, agrees to buy Enron.
 
-149
-00:07:36,563 --> 00:07:39,904
-Dynegy, a Houston
-rival, agrees to buy Enron.
-
-150
-00:07:40,174 --> 00:07:42,304
+147
+00:07:43,659 --> 00:07:46,019
 But the more Dynegy looked,
 the worse it got.
 
-151
-00:07:42,574 --> 00:07:43,659
-November twenty-eighth.
+148
+00:07:46,059 --> 00:07:49,505
+November 28. Credit
+agencies cut Enron to junk.
 
-152
-00:07:43,679 --> 00:07:45,870
-Credit agencies cut Enron to junk.
-
-153
-00:07:45,890 --> 00:07:47,360
+149
+00:07:49,545 --> 00:07:51,076
 Dynegy walks away.
 
-154
-00:07:47,630 --> 00:07:50,319
-That day, Enron's stock closes
-at sixty-one cents.
+150
+00:07:51,116 --> 00:07:54,123
+That day, Enron’s stock
+closes at 61 cents.
 
-155
-00:07:51,389 --> 00:07:53,224
-December second, 2001.
+151
+00:07:54,873 --> 00:08:00,476
+December 2, 2001. Enron files for
+Chapter 11 bankruptcy protection.
 
-156
-00:07:53,244 --> 00:07:56,771
-Enron files for Chapter 11
-bankruptcy protection.
+152
+00:08:00,516 --> 00:08:03,827
+With $63.4 billion in assets,
 
-157
-00:07:57,041 --> 00:08:00,108
-With sixty-three point
-four billion dollars in assets,
-
-158
-00:08:00,128 --> 00:08:03,652
+153
+00:08:03,867 --> 00:08:07,448
 it was the largest bankruptcy
 in American history at the time.
 
-159
-00:08:04,272 --> 00:08:07,579
-From more than ninety dollars a
-share, to under one dollar.
+154
+00:08:07,748 --> 00:08:10,918
+From more than $90 a share, to under $1.
 
-160
-00:08:07,599 --> 00:08:08,933
-In about fifteen months.
+155
+00:08:10,958 --> 00:08:12,729
+In about 15 months.
 
-161
-00:08:11,603 --> 00:08:13,812
+156
+00:08:15,079 --> 00:08:17,608
 But Enron was never just a stock chart.
 
-162
-00:08:14,632 --> 00:08:19,309
-Within days of the filing, about four thousand
+157
+00:08:18,108 --> 00:08:23,042
+Within days of the filing, about 4,000
 employees in Houston were laid off.
 
-163
-00:08:19,579 --> 00:08:22,719
+158
+00:08:23,082 --> 00:08:26,392
 Many had built their
 retirement on Enron stock.
 
+159
+00:08:26,432 --> 00:08:30,768
+It made up roughly 60% of
+the company’s 401(k) plan.
+
+160
+00:08:30,808 --> 00:08:34,833
+Employees lost more than $1
+billion in retirement savings.
+
+161
+00:08:35,337 --> 00:08:39,028
+Investors lost tens of billions
+of dollars in market value.
+
+162
+00:08:39,068 --> 00:08:41,760
+And Enron’s auditor, Arthur Andersen,
+
+163
+00:08:41,800 --> 00:08:45,631
+one of the five biggest accounting
+firms in the world, went down with it.
+
 164
-00:08:22,739 --> 00:08:27,058
-It made up roughly sixty percent of
-the company's 401(k) plan.
-
-165
-00:08:27,328 --> 00:08:31,034
-Employees lost more than a
-billion dollars in retirement savings.
-
-166
-00:08:31,854 --> 00:08:35,318
-Investors lost tens of billions of
-dollars in market value.
-
-167
-00:08:35,588 --> 00:08:38,807
-And Enron's auditor, Arthur Andersen,
-
-168
-00:08:38,827 --> 00:08:41,918
-one of the five biggest accounting firms
-in the world, went down with it.
-
-169
-00:08:42,188 --> 00:08:45,121
+00:08:45,671 --> 00:08:48,465
 Its staff had shredded Enron documents.
 
-170
-00:08:45,141 --> 00:08:49,464
-In June 2002, the firm was convicted
-of obstruction of justice,
+165
+00:08:48,505 --> 00:08:52,952
+In June 2002, the firm was
+convicted of obstruction of justice,
 
-171
-00:08:49,484 --> 00:08:51,027
+166
+00:08:52,992 --> 00:08:54,740
 and its business collapsed.
 
-172
-00:08:51,297 --> 00:08:54,417
+167
+00:08:54,780 --> 00:08:57,640
 The Supreme Court later
 overturned the conviction.
 
-173
-00:08:54,437 --> 00:08:56,490
+168
+00:08:57,680 --> 00:09:00,293
 By then, almost nothing was left.
 
-174
-00:08:57,410 --> 00:08:59,464
+169
+00:09:00,925 --> 00:09:02,560
 Fastow pleaded guilty.
 
-175
-00:08:59,484 --> 00:09:03,918
-Skilling was convicted and sentenced to
-twenty-four years, later reduced.
+170
+00:09:02,600 --> 00:09:07,113
+Skilling was convicted and sentenced
+to 24 years, later reduced.
 
-176
-00:09:03,938 --> 00:09:06,968
+171
+00:09:07,153 --> 00:09:10,768
 Lay was convicted too,
 but died before sentencing.
 
-177
-00:09:09,438 --> 00:09:11,056
+172
+00:09:12,954 --> 00:09:14,857
 So what really destroyed Enron?
 
-178
-00:09:11,976 --> 00:09:13,531
+173
+00:09:15,466 --> 00:09:18,151
 Not one accounting method.
+Not one partnership.
 
-179
-00:09:13,551 --> 00:09:15,894
-Not one partnership. Not one executive.
+174
+00:09:18,191 --> 00:09:19,606
+Not one executive.
 
-180
-00:09:16,164 --> 00:09:17,425
+175
+00:09:19,646 --> 00:09:21,061
 It was a combination.
 
-181
-00:09:17,445 --> 00:09:21,390
+176
+00:09:21,101 --> 00:09:24,724
 Aggressive estimates that pulled
 future profits into the present.
 
-182
-00:09:21,410 --> 00:09:25,050
+177
+00:09:24,764 --> 00:09:28,411
 Debt and losses moved where
 investors could barely see them.
 
-183
-00:09:25,070 --> 00:09:27,185
-A C.F.O. on both sides of the deal.
+178
+00:09:28,451 --> 00:09:31,082
+A CFO on both sides of the deal.
 
-184
-00:09:27,205 --> 00:09:29,808
-Disclosures almost no one
-could understand.
+179
+00:09:31,122 --> 00:09:33,819
+Disclosures almost no
+one could understand.
 
-185
-00:09:29,828 --> 00:09:33,041
-And relentless pressure to keep
-the numbers climbing.
+180
+00:09:33,859 --> 00:09:36,768
+And relentless pressure to
+keep the numbers climbing.
 
-186
-00:09:33,311 --> 00:09:36,337
-Mark-to-market didn't
+181
+00:09:36,808 --> 00:09:39,843
+Mark-to-market didn’t
 destroy Enron on its own.
 
-187
-00:09:36,357 --> 00:09:39,176
-But it helped open the
-gap at the center of this story.
+182
+00:09:39,883 --> 00:09:42,887
+But it helped open the gap
+at the center of this story.
 
-188
-00:09:39,446 --> 00:09:43,160
+183
+00:09:42,927 --> 00:09:46,961
 The gap between looking profitable,
 and actually generating cash.
 
+184
+00:09:47,711 --> 00:09:51,055
+Enron spent years showing Wall
+Street what it wanted to see.
+
+185
+00:09:51,095 --> 00:09:53,269
+But accounting could only delay the moment
+
+186
+00:09:53,309 --> 00:09:56,104
+when expectations collided with reality.
+
+187
+00:09:56,144 --> 00:09:58,637
+And once investors stopped
+believing the numbers,
+
+188
+00:09:58,677 --> 00:10:00,868
+Enron didn’t have years left.
+
 189
-00:09:44,230 --> 00:09:47,344
-Enron spent years showing
-Wall Street what it wanted to see.
-
-190
-00:09:47,614 --> 00:09:52,390
-But accounting could only delay the
-moment when expectations collided with reality.
-
-191
-00:09:52,660 --> 00:09:57,065
-And once investors stopped believing
-the numbers, Enron didn't have years left.
-
-192
-00:09:57,885 --> 00:09:58,778
+00:10:01,368 --> 00:10:02,580
 It had weeks.

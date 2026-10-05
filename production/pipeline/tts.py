@@ -47,7 +47,7 @@ DEFAULT_GAP = 0.25
 PAUSE_AFTER = {
     "Enron wasn't destroyed": 0.55,
     "The cash didn't have to arrive yet": 0.6,
-    "Then, in less than two months, it was gone.": 0.85,
+    "Then, in the fall of 2001": 0.85,
     "To understand how, you need": 1.9,
     "How much of that profit had actually arrived": 0.95,
     "Year one. One giant number.": 0.8,
@@ -82,7 +82,7 @@ LEAD_IN = 0.5          # silence before the first word
 
 # Per-act speaking speed (Kokoro speed multiplier). Collapse runs a touch faster,
 # the human-consequences act a touch slower.
-ACT_SPEED = {"ACT0": 1.02, "ACT1": 1.04, "ACT2": 1.02, "ACT3": 1.05, "ACT4": 1.03,
+ACT_SPEED = {"ACT0": 1.02, "ACT1": 1.04, "ACT2": 1.02, "ACT3": 1.00, "ACT4": 1.03,
              "ACT5": 1.04, "ACT6": 1.07, "ACT7": 0.97, "ACT8": 0.98}
 LINE_SPEED = {"\"I am incredibly nervous": 0.9, "It had weeks.": 0.88}
 
