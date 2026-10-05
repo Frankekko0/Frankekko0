@@ -1,0 +1,67 @@
+[project]
+name = "flipfinder-backend"
+version = "0.1.0"
+description = "Vinted FlipFinder - marketplace intelligence & reselling opportunity engine (API + workers)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.120,<1.0",
+    "uvicorn[standard]>=0.34",
+    "sqlalchemy[asyncio]>=2.0.40,<2.2",
+    "asyncpg>=0.30",
+    "alembic>=1.15",
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2.8",
+    "email-validator>=2.2",
+    "arq>=0.26",
+    "redis>=5.2",
+    "structlog>=25.1",
+    "argon2-cffi>=23.1",
+    "pyjwt>=2.10",
+    "httpx>=0.28",
+    "pillow>=11.0",
+    "rapidfuzz>=3.12",
+    "anthropic>=0.50",
+    "aiosmtplib>=4.0",
+    "pywebpush>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "ruff>=0.9",
+    "mypy>=1.15",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S", "SIM", "RUF"]
+ignore = ["S101", "B008", "RUF001", "RUF002", "RUF003", "S311", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106"]
+"alembic/**" = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+check_untyped_defs = true
