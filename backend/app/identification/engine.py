@@ -261,10 +261,15 @@ class IdentificationEngine:
         if chosen:
             brand, alias = chosen
             res.brand_name = brand.name
-            if alias in SUB_LINES:
-                res.line = Attribute(
-                    SUB_LINES[alias], res.brand.certainty, res.brand.source, res.brand.confidence
-                )
+            # A sub-line ("Polo Ralph Lauren", "Tommy Jeans") can appear in any text field.
+            for match, source in (
+                (field_match, "provider_field"),
+                (title_match, "title"),
+                (desc_match, "description"),
+            ):
+                if match and match[0].slug == brand.slug and match[1] in SUB_LINES:
+                    res.line = Attribute(SUB_LINES[match[1]], Certainty.PROBABLE, source, 0.8)
+                    break
             if vision and vision.brand and vision.brand.certainty == Certainty.CERTAIN:
                 vb = self._match_brand(fold(vision.brand.value))
                 if vb and vb[0].slug == brand.slug:

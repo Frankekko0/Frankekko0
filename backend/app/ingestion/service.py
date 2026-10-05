@@ -137,7 +137,7 @@ def listing_columns(
         "favourite_count": pl.favourite_count,
         "view_count": pl.view_count,
         "photo_count": len(pl.images),
-        "status": pl.status.value,
+        "status": ListingStatus(pl.status).value,
         "published_at": pl.published_at or now,
         "first_seen_at": now,
         "last_seen_at": now,
@@ -185,7 +185,7 @@ class IngestionService:
         for pl in listings:
             ex = existing.get(pl.external_id)
             if ex is not None:
-                status = pl.status.value
+                status = ListingStatus(pl.status).value
                 upd: dict[str, Any] = {
                     "id": ex.id,
                     "last_seen_at": now,
