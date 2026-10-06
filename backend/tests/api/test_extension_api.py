@@ -44,7 +44,12 @@ async def test_cards_seen_while_scrolling_are_stored_and_evaluated(
     headers = await _paired(auth_client)
     cards = [
         {**CARD, "url": "https://www.vinted.it/items/9001-polo", "title": "Polo Ralph Lauren", "price": 9},
-        {**CARD, "url": "https://www.vinted.it/items/9002-polo", "title": "Polo Ralph Lauren slim", "price": 60},
+        {
+            **CARD,
+            "url": "https://www.vinted.it/items/9002-polo",
+            "title": "Polo Ralph Lauren slim",
+            "price": 60,
+        },
         # Not Vinted: ignored.
         {**CARD, "url": "https://example.com/items/9003", "title": "Altro sito", "price": 5},
     ]
@@ -113,6 +118,13 @@ async def test_item_capture_full_analysis_and_track(auth_client: httpx.AsyncClie
     detail = (await auth_client.get(f"{API}/items/9100")).json()
     assert len(detail["images"]) == 2 and detail["view_count"] == 140
     assert detail["seller"]["review_count"] == 40
+
+    panel = await auth_client.get(f"{API}/capture/items/9100", headers=headers)
+    assert panel.status_code == 200, panel.text
+    pd = panel.json()
+    assert [i["url"] for i in pd["images"]] == item["image_urls"]
+    assert pd["evaluation"]["vinted_id"] == "9100" and pd["analysis"]["market"]
+    assert (await auth_client.get(f"{API}/capture/items/0000", headers=headers)).status_code == 404
 
     tr = await auth_client.post(
         f"{API}/capture/track", json={"url": item["url"], "track": True}, headers=headers

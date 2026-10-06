@@ -1,7 +1,6 @@
-/* FlipFinder for Vinted - toolbar popup. */
+/* FlipFinder for Vinted - toolbar popup: sync state, live panel, open the page in FlipFinder. */
 "use strict";
 
-const DEFAULT_APP_URL = "http://localhost:3000";
 const $ = (id) => document.getElementById(id);
 
 function setStatus(message, isError = false) {
@@ -10,34 +9,49 @@ function setStatus(message, isError = false) {
   el.classList.toggle("error", isError);
 }
 
-function normalizeAppUrl(value) {
-  const trimmed = value.trim().replace(/\/+$/, "");
-  if (!trimmed) return DEFAULT_APP_URL;
-  const url = new URL(trimmed); // throws on invalid input
-  if (!/^https?:$/.test(url.protocol)) throw new Error("protocol");
-  return url.origin + url.pathname.replace(/\/+$/, "");
+const LABEL = {
+  idle: ["Pronta", ""],
+  ok: ["Sincronizzata", "ok"],
+  offline: ["FlipFinder non raggiungibile", "warn"],
+  error: ["Errore di sincronizzazione", "warn"],
+  unpaired: ["Non associata: apri le opzioni", "err"],
+};
+
+async function activeTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab && tab.id !== undefined ? tab : null;
 }
 
 async function load() {
-  const { appUrl } = await chrome.storage.sync.get({ appUrl: DEFAULT_APP_URL });
-  $("appUrl").value = appUrl;
+  const st = await chrome.runtime.sendMessage({ type: "ff:status" });
+  if (!st) return;
+  const state = st.paired ? st.sync.state : "unpaired";
+  const [text, tone] = LABEL[state] || [state, ""];
+  $("state").textContent = st.paired && st.account ? `${text} · ${st.account}` : text;
+  const pending = $("pending");
+  pending.hidden = !st.sync.pending;
+  pending.textContent = `${st.sync.pending} in coda`;
+  pending.className = `pill ${tone}`;
+  if (st.deep.pausedUntil > Date.now()) $("sub").textContent = "Letture di altre pagine in pausa dopo un rifiuto di Vinted.";
+  $("panel").disabled = !chrome.sidePanel;
 }
 
-$("save").addEventListener("click", async () => {
+$("panel").addEventListener("click", async () => {
+  const tab = await activeTab();
+  if (!tab || !chrome.sidePanel) return setStatus("Pannello laterale non disponibile in questo browser.", true);
   try {
-    const appUrl = normalizeAppUrl($("appUrl").value);
-    await chrome.storage.sync.set({ appUrl });
-    $("appUrl").value = appUrl;
-    $("saved").textContent = "Salvato";
+    await chrome.sidePanel.open({ tabId: tab.id });
+    window.close();
   } catch {
-    $("saved").textContent = "URL non valido";
+    setStatus("Non riesco ad aprire il pannello. Usa Alt+Shift+F.", true);
   }
 });
 
+// Works without pairing: the page's data travels in the URL fragment (never sent to a server).
 $("analyze").addEventListener("click", async () => {
   setStatus("Leggo la pagina…");
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || tab.id === undefined) return setStatus("Nessuna scheda attiva.", true);
+  const tab = await activeTab();
+  if (!tab) return setStatus("Nessuna scheda attiva.", true);
   let res;
   try {
     res = await chrome.tabs.sendMessage(tab.id, { type: "flipfinder:prepare" });
@@ -48,5 +62,12 @@ $("analyze").addEventListener("click", async () => {
   await chrome.tabs.create({ url: res.url, index: tab.index + 1, openerTabId: tab.id });
   window.close();
 });
+
+$("app").addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({ type: "ff:open", path: "/items" });
+  window.close();
+});
+
+$("options").addEventListener("click", () => chrome.runtime.openOptionsPage());
 
 load();

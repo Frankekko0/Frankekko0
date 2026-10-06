@@ -318,8 +318,9 @@
         e.stopPropagation();
         e.preventDefault();
       };
-      // The badge sits on a link: its clicks must not open the listing.
-      for (const type of ["click", "mousedown", "pointerdown", "mouseup", "touchstart"]) host.addEventListener(type, (e) => e.stopPropagation(), true);
+      // The badge sits on the card: its clicks must not reach the card (no navigation, no
+      // Vinted handlers). Bubble phase, so the badge's own buttons still get them first.
+      for (const type of ["click", "mousedown", "pointerdown", "mouseup", "pointerup", "touchstart"]) host.addEventListener(type, (e) => e.stopPropagation());
       shadow.querySelector(".b").addEventListener("click", (e) => {
         stop(e);
         toggleMenu(vid);

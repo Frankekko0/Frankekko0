@@ -52,7 +52,10 @@ def upgrade() -> None:
         b.add_column(sa.Column("unchanged_checks", sa.SmallInteger(), server_default="0", nullable=False))
     op.create_index("ix_listings_next_check_at", "listings", ["next_check_at"])
     op.create_index(
-        "ix_listings_tracked_at", "listings", ["tracked_at"], postgresql_where=sa.text("tracked_at IS NOT NULL")
+        "ix_listings_tracked_at",
+        "listings",
+        ["tracked_at"],
+        postgresql_where=sa.text("tracked_at IS NOT NULL"),
     )
 
     # ------------------------------------------------------------------ new tables

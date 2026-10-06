@@ -214,7 +214,7 @@ async function addToSession(tabId, evals, fresh) {
     const now = Date.now();
     for (const ev of evals) {
       const prev = s.evals[ev.vinted_id];
-      s.evals[ev.vinted_id] = { ...ev, seenAt: prev ? prev.seenAt : now };
+      s.evals[ev.vinted_id] = { ...ev, seenAt: prev ? prev.seenAt : now, saved: Boolean((prev && prev.saved) || fresh) };
       if (ev.net_margin !== null && ev.net_margin !== undefined && ev.flip_score !== null) {
         s.bestMargin = s.bestMargin === null ? ev.net_margin : Math.max(s.bestMargin, ev.net_margin);
       }
@@ -223,7 +223,8 @@ async function addToSession(tabId, evals, fresh) {
         hot.push(ev);
       }
     }
-    if (fresh) s.saved += evals.length;
+    // Items of this session stored in FlipFinder (each counted once, however often re-analysed).
+    s.saved = Object.values(s.evals).filter((e) => e.saved).length;
     // Bound the session (a very long scroll): keep the most recent 1500 items.
     const ids = Object.keys(s.evals);
     if (ids.length > 1500) {
@@ -589,6 +590,7 @@ const HANDLERS = {
         await sessionStore.set({ tabs });
       });
       await touchSession(tabId, msg.url, msg.pageType, 0);
+      sendToPanel({ type: "ff:tab-update", tabId });
     }
     const { parserConfig } = await local.get("parserConfig");
     return { options: await getOptions(), paired: Boolean(await getKey()), parserConfig: parserConfig || null, tabId };
@@ -643,6 +645,15 @@ const HANDLERS = {
     if (!OPENABLE.some((rx) => rx.test(path))) return { ok: false };
     await chrome.tabs.create({ url: `${opts.appUrl}${path}` });
     return { ok: true };
+  },
+
+  async "ff:item-detail"(msg) {
+    if (!/^\d+$/.test(String(msg.vid))) return { error: "Annuncio non valido." };
+    try {
+      return await api(`/capture/items/${msg.vid}`);
+    } catch (err) {
+      return { error: err.status === 404 ? "Articolo non trovato." : err.message };
+    }
   },
 
   async "ff:open-options"() {

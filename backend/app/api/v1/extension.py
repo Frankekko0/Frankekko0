@@ -20,6 +20,7 @@ from app.acquisition.identity import listing_identity
 from app.acquisition.service import import_links
 from app.acquisition.vinted_parser import config_json, load_config
 from app.api.deps import DB, CaptureEconomics, CaptureUser, CurrentUser
+from app.api.v1.items import item_detail
 from app.api.v1.listings import manual_to_provider, persist_observations
 from app.core.cache import NS_FEED, cache
 from app.core.config import get_settings
@@ -247,6 +248,22 @@ async def capture_track(body: TrackIn, user: CaptureUser, econ: CaptureEconomics
         "tracked": body.track,
         "evaluation": evaluation.model_dump(mode="json") if evaluation else None,
     }
+
+
+@router.get("/capture/items/{vinted_id}", response_model=dict[str, Any])
+async def capture_item_detail(
+    vinted_id: str, user: CaptureUser, econ: CaptureEconomics, db: DB
+) -> dict[str, Any]:
+    """Item detail for the live panel: evaluation, analysis summary, every photo, history."""
+    if not vinted_id.isdigit():
+        raise NotFoundError("Articolo non trovato.")
+    detail = await item_detail(vinted_id, user, db)
+    evaluation = (await quick_evaluations(db, user.id, econ, [detail.item.id]) or [None])[0]
+    out = detail.model_dump(mode="json")
+    # Photos as published on Vinted (the internal copies are served to signed-in web sessions).
+    out["images"] = [{"position": i["position"], "url": i["url"]} for i in out["images"]]
+    out["evaluation"] = evaluation.model_dump(mode="json") if evaluation else None
+    return out
 
 
 @router.get("/capture/refresh-queue", response_model=dict[str, Any])

@@ -3,11 +3,15 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { decodeBatchHash, MAX_BATCH } from "./batch-import";
 
-// The real encoder of the browser extension: what it writes, this page must read.
-const extension = createRequire(import.meta.url)(path.resolve(__dirname, "../../../extension/src/parse.js")) as {
+// The real parser and encoder of the browser extension: what it writes, this page must read.
+const load = createRequire(import.meta.url);
+load(path.resolve(__dirname, "../../../extension/src/parser-config.js"));
+const extension = load(path.resolve(__dirname, "../../../extension/src/parse.js")) as {
+  compileConfig: (raw: unknown) => unknown;
   encodeBatch: (data: unknown) => Promise<string>;
-  parseCatalog: (cards: unknown[], location: string) => { data: unknown };
+  parseCards: (cards: unknown[], base: string, config: unknown) => { items: unknown[] };
 };
+const config = extension.compileConfig((globalThis as { FF_PARSER_CONFIG?: unknown }).FF_PARSER_CONFIG);
 
 async function deflate(text: string): Promise<string> {
   const zipped = await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream("deflate-raw"))).arrayBuffer();
@@ -37,7 +41,8 @@ describe("decodeBatchHash", () => {
       summary: `Felpa Ralph Lauren ${i}, brand: Ralph Lauren, condizioni: Ottime, taglia: L, ${15 + i},00 €, 16,45 €`,
       image: `https://images1.vinted.net/t/${i}.jpeg`,
     }));
-    const { data } = extension.parseCatalog(cards, "https://www.vinted.it/catalog?search_text=felpa+ralph+lauren");
+    const { items } = extension.parseCards(cards, "https://www.vinted.it/catalog?search_text=felpa+ralph+lauren", config);
+    const data = { v: 1, source: "vinted_search", query: "felpa ralph lauren", items };
     const res = await decodeBatchHash("#batch=" + (await extension.encodeBatch(data)));
     expect(res?.source).toBe("vinted_search");
     expect(res?.query).toBe("felpa ralph lauren");

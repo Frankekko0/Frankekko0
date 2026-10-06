@@ -1,246 +1,213 @@
 // Run with: node --test extension/tests
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
+const here = dirname(fileURLToPath(import.meta.url));
+require("../src/parser-config.js");
 const P = require("../src/parse.js");
+const C = P.compileConfig(globalThis.FF_PARSER_CONFIG);
 
-const ITEM = "https://www.vinted.it/items/4242424242-felpa-ralph-lauren-blu";
+// Fixtures shared with the server's parser tests: both sides must read them the same way.
+const FIX = join(here, "..", "..", "backend", "tests", "fixtures", "vinted");
+const fixture = (name) => readFileSync(join(FIX, name), "utf8");
+const NOW = Date.parse("2026-10-06T12:00:00Z");
 
-function page(overrides = {}) {
-  return {
-    location: `${ITEM}?referrer=catalog`,
-    canonical: ITEM,
-    jsonLd: [
-      {
-        "@context": "https://schema.org",
-        "@type": "Product",
-        name: "Felpa Ralph Lauren blu",
-        description: "Felpa in ottime condizioni.\n\nIndossata poche volte.",
-        url: ITEM,
-        image: ["https://images1.vinted.net/t/a.jpeg", "https://images1.vinted.net/t/b.jpeg"],
-        brand: { "@type": "Brand", name: "Ralph Lauren" },
-        offers: { "@type": "Offer", price: "18.00", priceCurrency: "EUR" },
-      },
-    ],
-    meta: { "og:title": ["Felpa Ralph Lauren blu | Vinted"], "og:image": ["https://images1.vinted.net/t/a.jpeg"] },
-    pairs: [
-      ["Brand", "Ralph Lauren"],
-      ["Taglia", "M"],
-      ["Condizioni", "Ottime"],
-      ["Colore", "Blu"],
-    ],
-    heading: "Felpa Ralph Lauren blu",
-    description: "",
-    seller: "armadio_8832",
-    ...overrides,
-  };
-}
-
-test("parses a complete Vinted item page", () => {
-  const { ok, data, missing, staleItem } = P.parseListing(page());
-  assert.equal(ok, true);
-  assert.deepEqual(missing, []);
-  assert.equal(staleItem, false);
-  assert.equal(data.url, ITEM); // canonical, without tracking query
-  assert.equal(data.title, "Felpa Ralph Lauren blu");
-  assert.equal(data.price, 18);
-  assert.equal(data.currency, "EUR");
-  assert.equal(data.brand, "Ralph Lauren");
-  assert.equal(data.size, "M");
-  assert.equal(data.condition, "very_good");
-  assert.equal(data.color, "Blu");
-  assert.equal(data.description, "Felpa in ottime condizioni.\n\nIndossata poche volte.");
-  assert.deepEqual(data.image_urls, ["https://images1.vinted.net/t/a.jpeg", "https://images1.vinted.net/t/b.jpeg"]);
-  assert.equal(data.seller_username, "armadio_8832");
+test("the bundled parser configuration is the server's file", async () => {
+  const { render } = await import("../tools/sync-parser-config.mjs");
+  const wanted = render(readFileSync(join(here, "..", "..", "backend", "app", "acquisition", "vinted_parser.json"), "utf8"));
+  assert.equal(readFileSync(join(here, "..", "src", "parser-config.js"), "utf8"), wanted, "run node extension/tools/sync-parser-config.mjs");
 });
 
-test("falls back to meta tags and page text when JSON-LD is missing", () => {
-  const { ok, data } = P.parseListing(
-    page({
-      jsonLd: [],
-      meta: {
-        "og:title": ["Nike Air Max 90 - Vinted"],
-        "product:price:amount": ["45,50"],
-        "og:description": ["Scarpe usate due volte"],
-        "og:image": ["https://images1.vinted.net/t/c.jpeg", "javascript:alert(1)"],
-      },
-      heading: "",
-      pairs: [["Marca", "Nike"], ["Condizioni", "Nuovo con cartellino"]],
-    }),
+test("the extension runs on exactly the Vinted domains of the configuration", () => {
+  const manifest = JSON.parse(readFileSync(join(here, "..", "manifest.json"), "utf8"));
+  const hosts = manifest.content_scripts[0].matches.map((m) => new URL(m.replace("/*", "/")).hostname.replace(/^www\./, ""));
+  assert.deepEqual([...hosts].sort(), [...C.domains].sort());
+  assert.deepEqual(manifest.permissions.sort(), ["alarms", "sidePanel", "storage"]);
+  assert.equal(manifest.host_permissions, undefined); // FlipFinder's address is asked at pairing time only
+});
+
+test("item page: every field matches the shared expectation (same as the server)", async () => {
+  const expected = JSON.parse(fixture("item_active.expected.json"));
+  const item = P.parseItem(P.collectHtml(fixture("item_active.html")), `${expected.url}?referrer=catalog&time=1`, NOW, C);
+  const num = (v) => (v === null ? null : Number(v));
+  assert.deepEqual(
+    {
+      vinted_id: item.vinted_id,
+      url: item.url,
+      title: item.title,
+      price: item.price,
+      currency: item.currency,
+      brand: item.brand,
+      size: item.size,
+      condition: item.condition,
+      condition_label: item.condition_label,
+      color: item.color,
+      material: item.material,
+      category_path: item.category_path,
+      favourite_count: item.favourite_count,
+      view_count: item.view_count,
+      published_at: item.published_at,
+      status: item.status,
+      buyer_protection_fee: item.buyer_protection_fee,
+      shipping_fee: item.shipping_fee,
+      images: item.images,
+      seller_rating: item.seller_rating,
+      seller_review_count: item.seller_review_count,
+    },
+    {
+      ...Object.fromEntries(Object.entries(expected).filter(([k]) => k !== "seller_key_from_member")),
+      price: num(expected.price),
+      buyer_protection_fee: num(expected.buyer_protection_fee),
+      shipping_fee: num(expected.shipping_fee),
+      seller_rating: num(expected.seller_rating),
+    },
   );
-  assert.equal(ok, true);
-  assert.equal(data.title, "Nike Air Max 90");
-  assert.equal(data.price, 45.5);
-  assert.equal(data.brand, "Nike");
-  assert.equal(data.condition, "new_with_tags");
-  assert.deepEqual(data.image_urls, ["https://images1.vinted.net/t/c.jpeg"]); // only http(s)
+  assert.equal(item.complete, true);
+  // The seller becomes the same one-way hash the server computes; the member id stays here.
+  assert.equal(item.member_id, expected.seller_key_from_member);
+  const payload = await P.itemPayload(item, C);
+  assert.equal(payload.seller_key, "h:2a1e19267046c92a7d19c32d");
+  assert.ok(!JSON.stringify(payload).includes("98765") && !JSON.stringify(payload).includes("armadio"));
+  assert.equal(payload.category_path, "Uomo > Abbigliamento > Felpe e maglioni");
+  assert.equal(payload.condition, "Ottime");
 });
 
-test("handles @graph JSON-LD and array offers", () => {
-  const { data } = P.parseListing(
-    page({
-      jsonLd: [{ "@graph": [{ "@type": "BreadcrumbList" }, { "@type": ["Product"], name: "Giacca", url: ITEM, offers: [{ price: 30 }] }] }],
-    }),
+test("sold and removed pages", () => {
+  const sold = P.parseItem(P.collectHtml(fixture("item_sold.html")), "https://www.vinted.fr/items/5555-pull", NOW, C);
+  assert.deepEqual([sold.status, sold.vinted_id, sold.price], ["sold", "5555", 35]);
+  const gone = P.parseItem(P.collectHtml(fixture("item_removed.html")), "https://www.vinted.it/items/777-x", NOW, C);
+  assert.equal(gone.status, "removed");
+  assert.equal(gone.complete, false);
+});
+
+test("after client-side navigation, the previous item's data is never used", () => {
+  const html = fixture("item_active.html");
+  const collected = P.collectHtml(html);
+  // Same document, but the user is now on another item: scripts and JSON-LD describe the old one.
+  const other = P.parseItem({ ...collected, texts: ["Giacca nuova", "45,00 €"], heading: "Giacca nuova", canonical: null, meta: {} }, "https://www.vinted.it/items/1111-giacca", NOW, C, {
+    useScripts: false,
+  });
+  assert.equal(other.title, "Giacca nuova");
+  assert.equal(other.price, 45);
+  assert.equal(other.favourite_count, null); // not the old item's 17
+  assert.deepEqual(other.images, []);
+  assert.ok(other.sources.includes("stale-jsonld"));
+});
+
+test("HTML collector: entities, comments, scripts and odd markup", () => {
+  const c = P.collectHtml(
+    '<!doctype html><title>T &amp; co</title><!-- <h1>no</h1> --><script>var x = "<h1>no</h1>";</script>' +
+      '<meta property="og:title" content="A &quot;B&quot;"><h1>Felpa <b>blu</b> &euro;</h1><svg><text>skip</text></svg><p>1 &lt; 2</p><a href="/member/12-x">x</a> < stray',
   );
-  assert.equal(data.title, "Giacca");
-  assert.equal(data.price, 30);
+  assert.equal(c.heading, "Felpa blu €");
+  assert.deepEqual(c.meta["og:title"], ['A "B"']);
+  assert.ok(c.texts.includes("1 < 2") && !c.texts.includes("skip") && !c.texts.some((t) => t.includes("no</h1>")));
+  assert.deepEqual(c.memberLinks, ["/member/12-x"]);
+  assert.equal(c.scripts.length, 1);
 });
 
-test("ignores structured data left over from the previous item (client-side navigation)", () => {
-  const other = "https://www.vinted.it/items/1111-old-item";
-  const res = P.parseListing(
-    page({
-      canonical: other,
-      jsonLd: [{ "@type": "Product", name: "Old item", url: other, offers: { price: "99" } }],
-      heading: "Nuovo articolo",
-      meta: {},
-    }),
-  );
-  assert.equal(res.staleItem, true);
-  assert.equal(res.data.title, "Nuovo articolo");
-  assert.equal(res.data.price, null); // never the old item's price
-  assert.deepEqual(res.missing, ["price"]);
-  assert.equal(res.data.url, ITEM);
-});
-
-test("price parsing across formats", () => {
-  assert.equal(P.parsePrice("18,00 €"), 18);
-  assert.equal(P.parsePrice("€1.234,50"), 1234.5);
-  assert.equal(P.parsePrice("1,234.50"), 1234.5);
-  assert.equal(P.parsePrice("1.234"), 1234);
-  assert.equal(P.parsePrice("12.5"), 12.5);
-  assert.equal(P.parsePrice(20), 20);
+test("prices, currencies and conditions across Vinted markets", () => {
+  for (const [text, price, currency] of [
+    ["18,00 €", 18, "EUR"],
+    ["€1.234,50", 1234.5, "EUR"],
+    ["1 234,50 zł", 1234.5, "PLN"],
+    ["£12.00", 12, "GBP"],
+    ["19,60 € include la Protezione acquisti", 19.6, "EUR"],
+  ]) {
+    const hit = P.findPrice(text, C);
+    assert.deepEqual([hit.price, hit.currency], [price, currency], text);
+  }
   assert.equal(P.parsePrice("gratis"), null);
   assert.equal(P.parsePrice("0"), null);
-});
-
-test("condition labels in several Vinted languages", () => {
-  const cases = {
+  const conditions = {
     "Nuovo senza cartellino": "new_without_tags",
     "New with tags": "new_with_tags",
     "Très bon état": "very_good",
     "Sehr gut": "very_good",
     "Buone condizioni": "good",
-    "Bon état": "good",
-    "Discrete condizioni": "satisfactory",
     Satisfactory: "satisfactory",
-    "": "",
   };
-  for (const [label, expected] of Object.entries(cases)) assert.equal(P.normalizeCondition(label), expected, label);
+  for (const [label, want] of Object.entries(conditions)) assert.equal(P.normalizeCondition(label, C), want, label);
+  assert.equal(P.labelKey("Taglia:", C), "size");
+  assert.equal(P.labelKey("Größe", C), "size");
+  assert.equal(P.labelKey("Caricato", C), "uploaded");
+  assert.equal(P.relativeTime("3 giorni fa", NOW, C).toISOString(), "2026-10-03T12:00:00.000Z");
+  assert.equal(P.relativeTime("ieri", NOW, C).toISOString(), "2026-10-05T12:00:00.000Z");
 });
 
-test("label keys match multilingual attribute names", () => {
-  assert.equal(P.labelKey("Taglia:"), "size");
-  assert.equal(P.labelKey("Marque"), "brand");
-  assert.equal(P.labelKey("Farbe"), "color");
-  assert.equal(P.labelKey("Caricato"), null);
+test("page types from the configuration", () => {
+  assert.equal(P.pageType("/items/123-felpa", C), "item");
+  assert.equal(P.pageType("/member/items/favourite_list", C), "favourites");
+  assert.equal(P.pageType("/member/123-armadio", C), "closet");
+  assert.equal(P.pageType("/catalog", C), "catalog");
 });
 
-test("import payload round-trips through base64url (UTF-8 safe)", () => {
-  const data = { v: 1, title: "Felpa “blu” — è perfetta", price: 18 };
-  const url = P.analyzeUrl("http://localhost:3000/", data);
-  assert.match(url, /^http:\/\/localhost:3000\/analyze#import=[A-Za-z0-9_-]+$/);
-  const payload = url.split("#import=")[1];
-  const json = Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
-  assert.deepEqual(JSON.parse(json), data);
-});
-
-// ------------------------------------------------------------------ search-results pages
-const SEARCH = "https://www.vinted.it/catalog?search_text=polo%20ralph%20lauren&order=newest_first";
-
+// ------------------------------------------------------------------ cards
 function card(id, summary, extra = {}) {
-  return {
-    href: `/items/${id}-polo-ralph-lauren?referrer=catalog`,
-    summary,
-    alt: summary,
-    image: `https://images1.vinted.net/t/${id}.jpeg`,
-    testids: {},
-    texts: [],
-    ...extra,
-  };
+  return { href: `/items/${id}-polo-ralph-lauren?referrer=catalog`, summary, alt: summary, image: `https://images1.vinted.net/t/${id}.jpeg`, testids: {}, texts: [], ...extra };
 }
+const SEARCH = "https://www.vinted.it/catalog?search_text=polo";
 
-test("reads Vinted's card summary: title, attributes and the item price (not the protection total)", () => {
-  const s = P.parseCardSummary(
-    "Polo Ralph Lauren, slim fit, brand: Ralph Lauren, condizioni: Ottime, taglia: M, 15,00 €, 16,45 € include la Protezione acquisti",
-  );
+test("card summary: title, attributes, item price and buyer-protection total", () => {
+  const s = P.parseCardSummary("Polo Ralph Lauren, slim fit, brand: Ralph Lauren, condizioni: Ottime, taglia: M, 15,00 €, 16,45 € include la Protezione acquisti", C);
   assert.equal(s.title, "Polo Ralph Lauren, slim fit");
   assert.deepEqual(s.attrs, { brand: "Ralph Lauren", condition: "Ottime", size: "M" });
-  assert.equal(s.price, 15);
-  assert.equal(s.currency, "EUR");
-  const fr = P.parseCardSummary("Pull, marque: Lacoste, état: Très bon état, taille: L / 40 / 12, 1 234,50 €, 1 297,00 € inclut");
-  assert.deepEqual([fr.title, fr.price, fr.attrs.size], ["Pull", 1234.5, "L / 40 / 12"]);
-  const uk = P.parseCardSummary("Levi's 501, brand: Levi's, condition: Good, size: W32, £12.00, £13.35 includes Buyer Protection");
+  assert.deepEqual([s.price, s.currency, s.total], [15, "EUR", 16.45]);
+  const uk = P.parseCardSummary("Levi's 501, brand: Levi's, condition: Good, size: W32, £12.00, £13.35 includes Buyer Protection", C);
   assert.deepEqual([uk.price, uk.currency], [12, "GBP"]);
-  // A decimal shoe size is not a price.
-  assert.equal(P.parseCardSummary("Air Max, brand: Nike, taglia: 42,5, 30,00 €").price, 30);
+  assert.equal(P.parseCardSummary("Air Max, brand: Nike, taglia: 42,5, 30,00 €", C).price, 30); // a shoe size is not a price
 });
 
-test("parses every loaded result card, once each, with clean URLs", () => {
-  const cards = [
-    card("111", "Polo Ralph Lauren blu, brand: Ralph Lauren, condizioni: Ottime, taglia: M, 15,00 €, 16,45 €"),
-    card("222", "Polo Ralph Lauren rossa, brand: Ralph Lauren, condizioni: Nuovo senza cartellino, taglia: L, 9,00 €"),
-    // The same listing promoted at the top and again in the organic results.
-    card("111", "Polo Ralph Lauren blu, brand: Ralph Lauren, condizioni: Ottime, taglia: M, 15,00 €, 16,45 €"),
-    // No summary: falls back to the card's own fields.
-    card("333", "", {
-      alt: "",
-      testids: { "description-title": "Ralph Lauren", "description-subtitle": "S · Buone", "price-text": "12,50 €" },
-      texts: ["Ralph Lauren", "S · Buone", "12,50 €", "13,83 € incl."],
-    }),
-    // Unreadable (no price anywhere): skipped, not guessed.
+test("cards: once each, status badges, favourites, protection fee; unreadable ones skipped", () => {
+  const raw = [
+    card("111", "Polo Ralph Lauren blu, brand: Ralph Lauren, condizioni: Ottime, taglia: M, 15,00 €, 16,45 € include la Protezione acquisti", { favourites: "Aggiunto ai preferiti da 12 persone" }),
+    card("111", "Polo Ralph Lauren blu, brand: Ralph Lauren, condizioni: Ottime, taglia: M, 15,00 €"), // promoted + organic
+    card("222", "Polo rossa, brand: Ralph Lauren, condizioni: Nuovo senza cartellino, taglia: L, 9,00 €", { texts: ["Venduto", "Polo rossa"] }),
+    card("333", "", { alt: "", testids: { "description-title": "Ralph Lauren", "description-subtitle": "S · Buone", "price-text": "12,50 €" }, texts: ["Riservato", "12,50 €", "13,83 € incl."] }),
     card("444", "Polo, brand: Ralph Lauren", { alt: "" }),
-    // Not a listing link.
     { href: "/member/123-armadio", summary: "Armadio" },
   ];
-  const res = P.parseCatalog(cards, SEARCH);
-  assert.equal(res.total, 3);
-  assert.equal(res.unreadable, 2);
-  assert.equal(res.overLimit, 0);
-  assert.equal(res.data.source, "vinted_search");
-  assert.equal(res.data.query, "polo ralph lauren");
-  const [a, b, c] = res.data.items;
-  assert.deepEqual(
-    { url: a.url, title: a.title, price: a.price, brand: a.brand, size: a.size, condition: a.condition },
-    {
-      url: "https://www.vinted.it/items/111-polo-ralph-lauren",
-      title: "Polo Ralph Lauren blu",
-      price: 15,
-      brand: "Ralph Lauren",
-      size: "M",
-      condition: "very_good",
-    },
-  );
-  assert.equal(b.condition, "new_without_tags");
-  assert.deepEqual([c.title, c.price, c.size, c.condition], ["Ralph Lauren S", 12.5, "S", "good"]);
-  assert.deepEqual(a.image_urls, ["https://images1.vinted.net/t/111.jpeg"]);
+  const { items, unreadable } = P.parseCards(raw, SEARCH, C);
+  assert.equal(unreadable, 2);
+  assert.deepEqual(items.map((i) => [i.vinted_id, i.status]), [["111", "active"], ["222", "sold"], ["333", "reserved"]]);
+  const [a, , c] = items;
+  assert.deepEqual([a.url, a.price, a.favourite_count, a.buyer_protection_fee, a.condition], ["https://www.vinted.it/items/111-polo-ralph-lauren", 15, 12, 1.45, "very_good"]);
+  assert.deepEqual([c.title, c.price, c.size, c.buyer_protection_fee], ["Ralph Lauren S", 12.5, "S", 1.33]);
 });
 
-test("caps a batch at the server's limit and reports the rest", () => {
-  const many = Array.from({ length: P.MAX_BATCH + 15 }, (_, i) =>
-    card(String(1000 + i), `Polo ${i}, brand: Ralph Lauren, 10,00 €`),
+test("capture payload stays within the server's limits", () => {
+  const ok = P.capturePayload(
+    { url: "https://www.vinted.it/items/9-x?ref=2", title: "  Felpa  ", price: 12.345, brand: "B".repeat(300), image_urls: ["javascript:alert(1)", "https://images1.vinted.net/a.jpg"], seller_rating: 7, favourite_count: -1, status: "sold" },
+    C,
   );
-  const res = P.parseCatalog(many, SEARCH);
-  assert.equal(res.data.items.length, P.MAX_BATCH);
-  assert.equal(res.overLimit, 15);
+  assert.equal(ok.url, "https://www.vinted.it/items/9-x");
+  assert.equal(ok.title, "Felpa");
+  assert.equal(ok.price, 12.35);
+  assert.equal(ok.brand.length, 120);
+  assert.deepEqual(ok.image_urls, ["https://images1.vinted.net/a.jpg"]);
+  assert.equal(ok.seller_rating, undefined);
+  assert.equal(ok.favourite_count, undefined);
+  assert.equal(ok.status, "sold");
+  assert.equal(P.capturePayload({ url: "https://evil.example/items/9", title: "Felpa", price: 5 }, C), null);
+  assert.equal(P.capturePayload({ url: "https://www.vinted.it.evil.com/items/9", title: "Felpa", price: 5 }, C), null);
+  assert.equal(P.capturePayload({ url: "https://www.vinted.pl/items/9", title: "Bluza", price: 50, currency: "PLN" }, C), null); // euro only
+  assert.equal(P.capturePayload({ url: "https://www.vinted.it/items/9", title: "Fe", price: 5 }, C), null);
 });
 
-test("batch payload is compressed base64url that round-trips", async () => {
-  const res = P.parseCatalog(
-    Array.from({ length: 96 }, (_, i) =>
-      card(String(5000 + i), `Felpa Ralph Lauren ${i}, brand: Ralph Lauren, condizioni: Ottime, taglia: M, 18,00 €`),
-    ),
-    SEARCH,
-  );
-  const url = await P.importUrl("https://flip.example.com/", res.data);
-  assert.match(url, /^https:\/\/flip\.example\.com\/import#batch=[A-Za-z0-9_-]+$/);
-  const payload = url.split("#batch=")[1];
-  const raw = JSON.stringify(res.data);
-  assert.ok(payload.length < raw.length / 3, `compressed ${payload.length} vs ${raw.length}`);
-  const b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+test("links without pairing round-trip (UTF-8 safe, compressed batch)", async () => {
+  const url = P.analyzeUrl("http://localhost:3000/", { title: "Felpa “blu” — è perfetta", price: 18 });
+  const payload = url.split("#import=")[1];
+  const json = Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+  assert.deepEqual(JSON.parse(json), { v: 1, source: "vinted", title: "Felpa “blu” — è perfetta", price: 18 });
+  const { items } = P.parseCards(Array.from({ length: 60 }, (_, i) => card(String(5000 + i), `Felpa ${i}, brand: Ralph Lauren, 18,00 €`)), SEARCH, C);
+  const batchUrl = await P.importUrl("https://flip.example.com/", items, "felpa");
+  const b64 = batchUrl.split("#batch=")[1].replace(/-/g, "+").replace(/_/g, "/");
   const bytes = Uint8Array.from(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)), (ch) => ch.charCodeAt(0));
   const text = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).text();
-  assert.deepEqual(JSON.parse(text), res.data);
+  assert.deepEqual(JSON.parse(text), { v: 1, source: "vinted_search", query: "felpa", items });
 });

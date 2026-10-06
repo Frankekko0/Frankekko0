@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FlipFinder live</title>
+    <link rel="stylesheet" href="ui.css" />
+    <style>
+      body { padding: 12px 12px 24px; min-width: 280px; }
+      header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+      .sync { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-3); }
+      .sync i { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
+      .sync.ok i { background: var(--success); } .sync.warn i { background: var(--warning); } .sync.err i { background: var(--danger); }
+      .live { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; cursor: pointer; }
+      .live input { appearance: none; width: 30px; height: 18px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); position: relative; margin: 0; cursor: pointer; }
+      .live input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform 160ms var(--ease-out); }
+      .live input:checked { background: var(--accent); border-color: transparent; }
+      .live input:checked::after { transform: translateX(12px); }
+      .context { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 12px; color: var(--text-2); margin-bottom: 8px; }
+      .context .grow { flex: 1 1 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+      .counters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 10px; }
+      .counters div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 7px 9px; }
+      .counters b { display: block; font-size: 16px; font-variant-numeric: tabular-nums; }
+      .counters span { font-size: 11px; color: var(--text-3); }
+      details.filters { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; margin-bottom: 10px; }
+      details.filters summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--text-2); list-style: none; display: flex; justify-content: space-between; }
+      details.filters summary::-webkit-details-marker { display: none; }
+      details.filters .grid2 { margin-top: 8px; }
+      details.filters input[type="number"], details.filters input[type="text"] { padding: 6px 8px; font-size: 12px; }
+      .alert { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 12px; background: var(--success-soft); color: var(--success); font-size: 12px; font-weight: 600; margin-bottom: 10px; cursor: pointer; }
+      .alert[hidden] { display: none; }
+      .alert.flash { animation: flash 900ms var(--ease-out); }
+      @keyframes flash { from { transform: scale(0.97); box-shadow: 0 0 0 4px var(--success-soft); } to { transform: none; box-shadow: none; } }
+      ol.rank { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+      .entry { display: grid; grid-template-columns: 56px 1fr; gap: 10px; padding: 8px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); cursor: pointer; text-align: left; width: 100%; font: inherit; color: inherit; }
+      .entry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      .entry.best { grid-template-columns: 84px 1fr; border-color: var(--success); box-shadow: 0 0 0 1px var(--success); }
+      .entry img, .entry .ph { width: 100%; aspect-ratio: 4 / 5; object-fit: cover; border-radius: 10px; background: var(--surface-2); display: block; }
+      .entry .t { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .entry .r { font-size: 11px; color: var(--text-3); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+      .entry > div { min-width: 0; }
+      .more { all: unset; cursor: pointer; font-size: 11px; font-weight: 600; color: var(--accent); padding: 2px 4px; border-radius: 6px; }
+      .more:focus-visible { outline: 2px solid var(--accent); }
+      .nums { display: grid; grid-template-columns: repeat(3, auto); justify-content: start; gap: 2px 12px; font-size: 11px; margin: 3px 0; }
+      .nums span { color: var(--text-3); } .nums b { font-size: 12px; font-variant-numeric: tabular-nums; }
+      .score { display: inline-flex; align-items: center; gap: 4px; }
+      .pos { color: var(--success); } .neg { color: var(--danger); }
+      .tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+      .empty { padding: 18px 8px; text-align: center; color: var(--text-3); font-size: 13px; }
+      .detail img.main { width: 100%; border-radius: 12px; aspect-ratio: 4 / 5; object-fit: cover; background: var(--surface-2); }
+      .thumbs { display: flex; gap: 6px; overflow-x: auto; margin: 6px 0 10px; }
+      .thumbs button { all: unset; cursor: pointer; flex: none; width: 46px; height: 58px; border-radius: 8px; overflow: hidden; border: 2px solid transparent; }
+      .thumbs button[aria-current="true"] { border-color: var(--accent); }
+      .thumbs button:focus-visible { outline: 2px solid var(--accent); }
+      .thumbs img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .facts { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; font-size: 12px; margin: 8px 0; }
+      .facts dt { color: var(--text-3); } .facts dd { margin: 0; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+      .signals li { font-size: 12px; padding: 4px 0; border-top: 1px solid var(--line); }
+      .signals li:first-child { border-top: 0; }
+      .bar { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+      .note { font-size: 11px; color: var(--text-3); margin-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="logo" style="width:26px;height:26px;border-radius:8px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg></span>
+      <div class="grow">
+        <h1 style="font-size:14px">FlipFinder live</h1>
+        <span class="sync" id="sync"><i></i><span>…</span></span>
+      </div>
+      <label class="live" title="Valuta le schede mentre scorri"><input type="checkbox" id="live" /> Live</label>
+    </header>
+
+    <div id="view-rank">
+      <div class="context">
+        <span class="grow" id="context">Apri una ricerca o un armadio su Vinted e scorri: le schede vengono valutate quando entrano a schermo.</span>
+        <button class="btn small ghost" id="lock" type="button" aria-pressed="false" title="Blocca la classifica (non si azzera cambiando ricerca)">Blocca</button>
+        <button class="btn small ghost" id="reset" type="button" title="Azzera la classifica di questa scheda">Azzera</button>
+        <button class="btn small ghost" id="export" type="button" title="Esporta la classifica in CSV">CSV</button>
+      </div>
+      <div class="counters" aria-live="polite">
+        <div><b id="c-seen">0</b><span>visti</span></div>
+        <div><b id="c-saved">0</b><span>salvati</span></div>
+        <div><b id="c-best">—</b><span>miglior margine</span></div>
+      </div>
+      <details class="filters" id="filters">
+        <summary><span>Filtri</span><span class="muted" id="filters-summary"></span></summary>
+        <div class="grid2">
+          <label class="field"><span>Budget (costo totale €)</span><input type="number" min="1" step="1" data-f="budget" placeholder="nessuno" /></label>
+          <label class="field"><span>Margine netto min. (€)</span><input type="number" step="1" data-f="minMargin" /></label>
+          <label class="field"><span>Brand</span><input type="text" data-f="brands" placeholder="tutti" /></label>
+          <label class="field"><span>Taglie</span><input type="text" data-f="sizes" placeholder="tutte" /></label>
+        </div>
+        <label class="switch"><input type="checkbox" data-f="excludeFakeRisk" /><span><b>Escludi rischio contraffazione</b><small>Medio o alto.</small></span></label>
+        <button class="btn small ghost" id="filters-reset" type="button">Ripristina i filtri predefiniti</button>
+      </details>
+      <div class="alert" id="alert" role="status" hidden></div>
+      <ol class="rank" id="rank" aria-label="Classifica live"></ol>
+      <p class="note">Score e margini usano i tuoi costi. "Dati insufficienti": pochi comparabili, nessuna stima inventata. Le schede viste scorrendo sono "visto in scorrimento"; un annuncio aperto o letto su tuo comando è "analizzato a fondo".</p>
+    </div>
+
+    <div id="view-detail" hidden>
+      <div class="row" style="margin-bottom:8px">
+        <button class="btn small ghost" id="back" type="button">← Classifica</button>
+        <span class="grow"></span>
+        <span class="pill" id="d-depth"></span>
+      </div>
+      <div class="detail" id="detail"></div>
+    </div>
+
+    <script src="core.js"></script>
+    <script src="panel.js"></script>
+  </body>
+</html>
