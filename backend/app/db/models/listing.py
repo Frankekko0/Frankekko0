@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     SmallInteger,
     String,
     Text,
@@ -96,8 +97,27 @@ class Listing(Base):
     first_seen_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
     status_changed_at: Mapped[datetime | None] = mapped_column()
+    # Sale: estimated moment (midpoint of the window below), first observation of "sold",
+    # last price seen while open, days from publication to the estimated sale.
     sold_at: Mapped[datetime | None] = mapped_column()
+    sold_detected_at: Mapped[datetime | None] = mapped_column()
+    last_active_at: Mapped[datetime | None] = mapped_column()
+    last_active_price: Mapped[Decimal | None] = mapped_column()
+    days_to_sell: Mapped[Decimal | None] = mapped_column(Numeric(7, 1))
     removed_at: Mapped[datetime | None] = mapped_column()
+
+    # Traceability: how the listing first reached FlipFinder and how much of it is known.
+    acquisition_mode: Mapped[str] = mapped_column(
+        String(24), default="provider_scan", server_default="provider_scan"
+    )
+    capture_level: Mapped[str] = mapped_column(String(8), default="full", server_default="full")
+    # Tracking: set when the user captured/tracked it (periodic checks), null for market data
+    # seen only while scrolling or scanned from the provider.
+    tracked_at: Mapped[datetime | None] = mapped_column()
+    last_checked_at: Mapped[datetime | None] = mapped_column()
+    next_check_at: Mapped[datetime | None] = mapped_column(index=True)
+    check_failures: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")
+    unchanged_checks: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")
 
     duplicate_of_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("listings.id", ondelete="SET NULL"), index=True
@@ -131,6 +151,27 @@ class ListingImage(Base):
     height: Mapped[int | None] = mapped_column(Integer)
 
     listing: Mapped[Listing] = relationship(back_populates="images")
+
+
+class ListingSnapshot(Base):
+    """One observation of a listing (append-only: a new check adds a row, never overwrites)."""
+
+    __tablename__ = "listing_snapshots"
+    __table_args__ = (Index("ix_listing_snapshots_listing_observed", "listing_id", "observed_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    listing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"))
+    observed_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
+    acquisition_mode: Mapped[str] = mapped_column(String(24))
+    capture_level: Mapped[str | None] = mapped_column(String(8))
+    # Null when the observation could not tell (e.g. a price-only email, an unreachable page).
+    status: Mapped[str | None] = mapped_column(String(16))
+    price: Mapped[Decimal | None] = mapped_column()
+    currency: Mapped[str] = mapped_column(String(3), default="EUR", server_default="EUR")
+    favourite_count: Mapped[int | None] = mapped_column(Integer)
+    view_count: Mapped[int | None] = mapped_column(Integer)
+    photo_count: Mapped[int | None] = mapped_column(SmallInteger)
+    note: Mapped[str | None] = mapped_column(String(200))
 
 
 class ListingPriceHistory(Base):

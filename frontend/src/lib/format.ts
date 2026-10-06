@@ -99,3 +99,32 @@ export const ACTION_LABEL: Record<string, string> = {
 export function plural(count: number, noun: string, pluralNoun = `${noun}s`): string {
   return `${count.toLocaleString("en-US")} ${count === 1 ? noun : pluralNoun}`;
 }
+
+export const STATUS_LABEL: Record<string, string> = {
+  active: "Active",
+  reserved: "Reserved",
+  sold: "Sold",
+  removed: "Removed",
+  unknown: "Unknown",
+};
+
+export const MODE_LABEL: Record<string, string> = {
+  provider_scan: "Market scan",
+  extension_item: "Extension · item page",
+  extension_card: "Extension · seen while scrolling",
+  extension_deep: "Extension · deep analysis",
+  extension_refresh: "Extension · status check",
+  batch_import: "Search page import",
+  link_import: "Link import",
+  manual_form: "Analyze form",
+  bookmarklet: "Bookmarklet",
+  email: "Vinted email",
+  public_fetch: "Public page (server)",
+  migrated: "Before tracking",
+};
+
+export const CAPTURE_LABEL: Record<string, string> = {
+  link: "Link only",
+  card: "Card data",
+  full: "Full listing",
+};

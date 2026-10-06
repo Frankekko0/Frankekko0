@@ -28,7 +28,7 @@ SEGMENT_SQL = text(
            GROUPING(model_name) AS g_model, GROUPING(size_normalized) AS g_size,
            count(*) AS sample_size,
            count(*) FILTER (WHERE status = 'sold') AS sold_count,
-           count(*) FILTER (WHERE status = 'possibly_sold') AS possibly_sold_count,
+           count(*) FILTER (WHERE status = 'removed') AS removed_count,
            count(*) FILTER (WHERE status = 'active') AS active_count,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY price) AS median_all,
            percentile_cont(0.25) WITHIN GROUP (ORDER BY price) AS p25_all,
@@ -68,7 +68,7 @@ def segment_row(r: Any, window_days: int, now: datetime) -> dict[str, Any] | Non
         return None  # "unknown model/size" buckets are not meaningful segments
     sold = int(r.sold_count)
     active = int(r.active_count)
-    possibly = int(r.possibly_sold_count)
+    removed = int(r.removed_count)
     ask_ratio = None
     if sold >= MIN_SAMPLE and active >= MIN_SAMPLE and r.median_active:
         ask_ratio = min(
@@ -98,8 +98,9 @@ def segment_row(r: Any, window_days: int, now: datetime) -> dict[str, Any] | Non
     def adj(v: Any) -> Decimal:
         return (Decimal(str(v)) * k).quantize(Decimal("0.01"))
 
-    denominator = sold + possibly + active
-    sell_through = (Decimal(sold) + Decimal(possibly) / 2) / denominator if denominator else Decimal(0)
+    # Removed listings count as not sold: a sale is only ever counted on evidence.
+    denominator = sold + removed + active
+    sell_through = Decimal(sold) / denominator if denominator else Decimal(0)
     return {
         "segment_key": segment_key(r.brand_id, r.category_id, model, size),
         "brand_id": r.brand_id,

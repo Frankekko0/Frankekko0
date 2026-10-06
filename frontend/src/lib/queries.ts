@@ -14,6 +14,8 @@ import type {
   Flip,
   ImportResult,
   Insights,
+  Item,
+  ItemFilters,
   ManualListingInput,
   MarketSegment,
   NotificationSettings,
@@ -346,6 +348,29 @@ export function useImportListing() {
       qc.invalidateQueries({ queryKey: ["opportunities"] });
       qc.invalidateQueries({ queryKey: qk.stats });
     },
+  });
+}
+
+export function useItems(filters: ItemFilters) {
+  return useQuery({
+    queryKey: ["items", filters],
+    queryFn: ({ signal }) => api<Page<Item>>("/items", { query: { ...filters }, signal }),
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useTrackItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, track }: { id: string; track: boolean }) =>
+      api<{ tracked: boolean }>(`/items/${id}/track`, { method: track ? "POST" : "DELETE" }),
+    onSuccess: (r, v) => {
+      qc.invalidateQueries({ queryKey: ["items"] });
+      qc.invalidateQueries({ queryKey: ["item", v.id] });
+      qc.invalidateQueries({ queryKey: ["opportunities"] });
+      toast.success(r.tracked ? "Tracking on: FlipFinder will check its status" : "Tracking off: history kept");
+    },
+    onError: (e) => toast.error(errorMessage(e)),
   });
 }
 

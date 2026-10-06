@@ -18,7 +18,6 @@ export interface ListingDraft {
   color: string;
   description: string;
   images: string;
-  sellerName: string;
   sellerRating: string;
   sellerReviews: string;
 }
@@ -35,7 +34,6 @@ export const EMPTY_DRAFT: ListingDraft = {
   color: "",
   description: "",
   images: "",
-  sellerName: "",
   sellerRating: "",
   sellerReviews: "",
 };
@@ -104,7 +102,6 @@ export function decodeImportHash(hash: string): ImportedListing | null {
     color: str(d.color, 60),
     description: typeof d.description === "string" ? d.description.slice(0, 5000).trim() : "",
     images: images.join("\n"),
-    sellerName: str(d.seller_username, 120),
   };
   const missing = (["url", "title", "price"] as const).filter((k) => !draft[k]);
   return { source: str(d.source, 30) || "import", draft, missing };

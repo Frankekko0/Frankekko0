@@ -404,7 +404,7 @@ export function SellerSection({ d }: { d: OpportunityDetail }) {
   }
   const score = s.reliability_score ?? 50;
   return (
-    <Section id="seller" icon={<Store />} title="Seller analysis" description={s.username ?? undefined}>
+    <Section id="seller" icon={<Store />} title="Seller analysis" description="Rating and reviews only: no personal data is kept">
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <KV label="Rating" value={s.rating !== null ? <span className="inline-flex items-center gap-1">{s.rating.toFixed(1)} <Star className="size-3.5 fill-current text-warning" /></span> : "No reviews"} sub={`${s.review_count} reviews`} />
         <KV label="Member since" value={shortDate(s.account_created_at)} />

@@ -40,6 +40,14 @@ class Opportunity(Base):
     listing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), unique=True)
     product_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("products.id", ondelete="SET NULL"))
     algorithm_version: Mapped[str] = mapped_column(String(32))
+    # How the analysed data was acquired and how deep the analysis is: "quick" for a card seen
+    # while scrolling (title, price, one photo), "full" for an item page or a provider listing.
+    acquisition_mode: Mapped[str | None] = mapped_column(String(24))
+    analysis_depth: Mapped[str] = mapped_column(String(8), default="full", server_default="full")
+    # "ok" | "limited" (few comparables: indicative) | "insufficient" (no reliable estimate:
+    # the score is not shown and no alert is sent).
+    data_quality: Mapped[str] = mapped_column(String(16), default="ok", server_default="ok")
+    insufficient_reason: Mapped[str | None] = mapped_column(String(300))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
     listing_price: Mapped[Decimal] = mapped_column()
@@ -114,6 +122,9 @@ class OpportunityScore(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     opportunity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("opportunities.id", ondelete="CASCADE"))
     algorithm_version: Mapped[str] = mapped_column(String(32))
+    acquisition_mode: Mapped[str | None] = mapped_column(String(24))
+    analysis_depth: Mapped[str | None] = mapped_column(String(8))
+    data_quality: Mapped[str | None] = mapped_column(String(16))
     listing_price: Mapped[Decimal] = mapped_column()
     flip_score: Mapped[int] = mapped_column(SmallInteger)
     confidence_score: Mapped[int] = mapped_column(SmallInteger)

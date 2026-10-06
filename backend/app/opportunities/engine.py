@@ -84,6 +84,9 @@ class AnalysisResult:
     explanation: list[dict[str, Any]]
     analysis: DealAnalysis
     pool_size: int = 0
+    # "ok" | "limited" | "insufficient": insufficient means no reliable estimate (score hidden).
+    data_quality: str = "ok"
+    insufficient_reason: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
     def scenario(self, name: str) -> Scenario | None:
@@ -115,7 +118,7 @@ def run_analysis(
 
     # ---- demand & velocity (whole similar pool, not only the pricing sample) ----------------
     sold = sum(1 for c in pool if c.item.status == "sold")
-    possibly = sum(1 for c in pool if c.item.status == "possibly_sold")
+    removed = sum(1 for c in pool if c.item.status == "removed")
     active = sum(1 for c in pool if c.item.status == "active")
     if not pool and prior and prior.sell_through_rate is not None:
         approx_n = min(prior.sample_size, 20)
@@ -129,7 +132,7 @@ def run_analysis(
     demand = analyze_demand(
         sold,
         active,
-        possibly,
+        removed,
         favourites=subject.favourite_count,
         listing_age_hours=subject.listing_age_hours,
         segment_avg_favourites_per_day=(sum(fav_rates) / len(fav_rates)) if fav_rates else None,

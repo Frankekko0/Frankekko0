@@ -12,7 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Field, Input, InputAffix, Select, Textarea } from "@/components/ui/input";
 import { errorMessage } from "@/lib/api";
 import { ACTION_LABEL, CONDITION_LABEL, DEMAND_LABEL, days, eur, pct } from "@/lib/format";
-import { useBrands, useCategories, useImportListing, useQuickAnalysis } from "@/lib/queries";
+import { useBrands, useCategories, useImportListing, useQuickAnalysis, useTrackItem } from "@/lib/queries";
 import { EMPTY_DRAFT, decodeImportHash, type ImportedListing, type ListingDraft } from "@/lib/listing-import";
 import type { ManualListingInput, QuickAnalysis } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -27,7 +27,7 @@ function num(v: string): number | undefined {
 }
 
 /** Client-side checks mirror the API's; returns the payload or a readable error. */
-function toPayload(f: ListingDraft): { body?: ManualListingInput; error?: string } {
+function toPayload(f: ListingDraft, source: ManualListingInput["source"] = "manual_form"): { body?: ManualListingInput; error?: string } {
   const url = f.url.trim();
   if (!/^https?:\/\/\S+\.\S+/i.test(url)) return { error: "Enter the listing link (it must start with https://)." };
   if (f.title.trim().length < 3) return { error: "Enter the listing title (at least 3 characters)." };
@@ -50,9 +50,9 @@ function toPayload(f: ListingDraft): { body?: ManualListingInput; error?: string
     color: f.color.trim() || undefined,
     description: f.description.trim() || undefined,
     image_urls: images.length ? images : undefined,
-    seller_username: f.sellerName.trim() || undefined,
     seller_rating: num(f.sellerRating),
     seller_review_count: num(f.sellerReviews),
+    source,
   };
   if (body.seller_rating !== undefined && (body.seller_rating < 0 || body.seller_rating > 5)) {
     return { error: "Seller rating must be between 0 and 5." };
@@ -76,6 +76,7 @@ export default function AnalyzeView() {
   const categories = useCategories();
   const importer = useImportListing();
   const quick = useQuickAnalysis();
+  const trackItem = useTrackItem();
   const set = (patch: Partial<ListingDraft>) => setF((prev) => ({ ...prev, ...patch }));
   const leafCategories = useMemo(() => (categories.data ?? []).filter((c) => c.parent), [categories.data]);
   const busy = importer.isPending || quick.isPending;
@@ -87,7 +88,7 @@ export default function AnalyzeView() {
     // Clean URL (a refresh must not re-import) without adding a history entry.
     window.history.replaceState(null, "", window.location.pathname + window.location.search);
     if (imported.missing.length) return;
-    const { body } = toPayload(imported.draft);
+    const { body } = toPayload(imported.draft, "extension_item");
     if (body) quick.mutate(body, { onSuccess: (result) => setChecked({ result, body }), onError: (err) => toast.error(errorMessage(err)) });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on mount
   }, []);
@@ -104,7 +105,7 @@ export default function AnalyzeView() {
 
   function submit(e: FormEvent, mode: "track" | "check") {
     e.preventDefault();
-    const { body, error } = toPayload(f);
+    const { body, error } = toPayload(f, imported ? "extension_item" : "manual_form");
     setFormError(error ?? null);
     if (!body) return;
     if (mode === "track") return track(body);
@@ -203,14 +204,11 @@ export default function AnalyzeView() {
                 className="flex w-full items-center justify-between px-4 py-3 text-left text-[13px] font-medium text-fg-2"
                 aria-expanded={showSeller}
               >
-                Seller details (optional)
+                Seller rating (optional)
                 <ChevronDown className={cn("size-4 transition-transform", showSeller && "rotate-180")} />
               </button>
               {showSeller && (
-                <div className="grid grid-cols-1 gap-3 border-t border-line p-4 sm:grid-cols-3">
-                  <Field label="Username" htmlFor="seller">
-                    <Input id="seller" value={f.sellerName} onChange={(e) => set({ sellerName: e.target.value })} maxLength={120} />
-                  </Field>
+                <div className="grid grid-cols-1 gap-3 border-t border-line p-4 sm:grid-cols-2">
                   <Field label="Rating (0–5)" htmlFor="rating">
                     <Input id="rating" inputMode="decimal" value={f.sellerRating} onChange={(e) => set({ sellerRating: e.target.value })} />
                   </Field>
@@ -235,15 +233,25 @@ export default function AnalyzeView() {
               </Button>
             </div>
             <p className="text-xs text-fg-3">
-              Quick check computes everything without saving. Analyze &amp; track adds the listing to your feed, so you can save it, watch its price
-              and record the purchase. FlipFinder never contacts the seller or buys for you.
+              Both save the listing and its analysis to your Archive. Analyze &amp; track also checks its status periodically and adds it to your
+              feed. Only the seller&apos;s rating and review count are kept. FlipFinder never contacts the seller or buys for you.
             </p>
           </form>
         </Card>
 
         <div className="space-y-4 lg:sticky lg:top-20 lg:h-fit">
           {checked ? (
-            <QuickResult key={checked.body.url + checked.body.price} data={checked.result} onTrack={() => track(checked.body)} tracking={importer.isPending} />
+            <QuickResult
+              key={checked.body.url + checked.body.price}
+              data={checked.result}
+              onTrack={() =>
+                trackItem.mutate(
+                  { id: checked.result.listing_id, track: true },
+                  { onSuccess: () => router.push(checked.result.opportunity_id ? `/deals/${checked.result.opportunity_id}` : "/items") },
+                )
+              }
+              tracking={trackItem.isPending}
+            />
           ) : quick.isPending ? (
             <Card className="p-5">
               <div className="flex items-center gap-3">
@@ -287,7 +295,7 @@ function QuickResult({ data, onTrack, tracking }: { data: QuickAnalysis; onTrack
     <Card className="animate-scale-in p-5">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-medium text-fg-3">Quick check · not saved</p>
+          <p className="text-xs font-medium text-fg-3">Quick check · saved to your Archive</p>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             <Badge tone="outline">Confidence {data.confidence_score}</Badge>
             <RiskBadge level={data.risk.level} score={data.risk.score} />

@@ -131,7 +131,8 @@ class ImageOut(Schema):
 
 
 class SellerOut(Schema):
-    username: str | None
+    """Only what the analysis needs: no username or other personal data."""
+
     rating: float | None
     review_count: int
     account_created_at: datetime | None

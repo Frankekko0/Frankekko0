@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 from datetime import UTC, datetime
@@ -20,10 +21,11 @@ from app.core.errors import InsufficientDataError, NotFoundError
 from app.core.rate_limit import RateLimit
 from app.core.serialization import jsonable
 from app.db.models import Brand, Category, Listing, ListingImage, Opportunity
+from app.domain.enums import AcquisitionMode, CaptureLevel, ListingStatus
 from app.identification.engine import ListingText
 from app.ingestion.catalog import load_catalog
 from app.ingestion.normalizer import normalize_condition, title_fingerprint
-from app.ingestion.service import IngestionService, get_engine, listing_columns
+from app.ingestion.service import IngestionService, IngestResult, get_engine, listing_columns
 from app.marketplace.base import (
     BatchImportInput,
     ManualListingInput,
@@ -70,7 +72,7 @@ async def list_listings(
     q: str | None = Query(None, max_length=120),
     brand: str | None = None,
     category: str | None = None,
-    status: str | None = Query(None, pattern="^(active|reserved|sold|possibly_sold|removed|unknown)$"),
+    status: str | None = Query(None, pattern="^(active|reserved|sold|removed|unknown)$"),
     min_price: float | None = Query(None, ge=0),
     max_price: float | None = Query(None, ge=0),
     page: int = Query(1, ge=1),
@@ -163,18 +165,47 @@ async def get_listing(listing_id: uuid.UUID, user: CurrentUser, db: DB) -> dict[
     }
 
 
-def manual_to_provider(body: ManualListingInput, origin: str = "manual_import") -> ProviderListing:
-    url = str(body.url)
+# Vinted's own domains only (``vinted.it.example.com`` is not Vinted).
+VINTED_TLDS = "it|fr|de|es|be|nl|lu|pt|at|pl|cz|sk|lt|co\\.uk|com|se|fi|dk|gr|hr|ro|hu|ie|si|lv|ee"
+VINTED_HOST = re.compile(rf"^https?://(?:www\.)?vinted\.(?:{VINTED_TLDS})(?::\d+)?/", re.IGNORECASE)
+SELLER_KEY = re.compile(r"[^A-Za-z0-9:_-]")
+
+
+def listing_identity(url: str) -> tuple[str, str]:
+    """``(provider, external_id)``: Vinted links map to the single ``vinted`` provider keyed by the
+    Vinted item id (the same on every Vinted domain), anything else to ``manual``."""
     m = VINTED_ID.search(url)
-    external_id = m.group(1) if m else title_fingerprint(url)[:24]
-    seller = None
-    if body.seller_username:
-        seller = ProviderSeller(
-            external_id=f"manual:{body.seller_username.lower()}"[:64],
-            username=body.seller_username,
-            rating=body.seller_rating,
-            review_count=body.seller_review_count or 0,
-        )
+    if m and VINTED_HOST.match(url):
+        return "vinted", m.group(1)
+    return "manual", (m.group(1) if m else title_fingerprint(url)[:24])
+
+
+def _hash(value: str) -> str:
+    return "h:" + hashlib.sha256(value.encode()).hexdigest()[:24]
+
+
+def seller_for(body: ManualListingInput, url: str) -> ProviderSeller | None:
+    """Only rating and review count are kept. The key is opaque: the extension sends a one-way
+    hash; a username sent by an old client is hashed here and dropped."""
+    if body.seller_key:
+        key = SELLER_KEY.sub("", body.seller_key)[:64]
+        key = key if key.startswith("h:") else _hash(key)
+    elif body.seller_username:
+        key = _hash(body.seller_username.strip().lower())
+    elif body.seller_rating is not None or body.seller_review_count is not None:
+        key = _hash("listing:" + url)  # unknown seller: rating/reviews of this listing's seller
+    else:
+        return None
+    return ProviderSeller(
+        external_id=key[:64], rating=body.seller_rating, review_count=body.seller_review_count or 0
+    )
+
+
+def manual_to_provider(
+    body: ManualListingInput, origin: str = "manual_import", capture_level: CaptureLevel = CaptureLevel.FULL
+) -> ProviderListing:
+    url = str(body.url).split("#")[0]
+    _provider, external_id = listing_identity(url)
     return ProviderListing(
         external_id=external_id,
         url=url,
@@ -182,31 +213,65 @@ def manual_to_provider(body: ManualListingInput, origin: str = "manual_import") 
         description=body.description,
         price=body.price,
         brand=body.brand,
-        category=body.category,
+        category=body.category or body.category_path,
         size=body.size,
         condition=body.condition,
         color=body.color,
+        material=body.material,
         images=[ProviderImage(url=str(u)) for u in body.image_urls],
-        seller=seller,
+        seller=seller_for(body, url),
         country=body.country,
-        published_at=datetime.now(UTC),
+        published_at=body.published_at,
+        status=ListingStatus(body.status),
         shipping_fee=body.shipping_fee,
-        buyer_protection_fee=(Decimal("0.70") + body.price * Decimal("0.05")).quantize(Decimal("0.01")),
+        buyer_protection_fee=body.buyer_protection_fee
+        if body.buyer_protection_fee is not None
+        else (Decimal("0.70") + body.price * Decimal("0.05")).quantize(Decimal("0.01")),
+        favourite_count=body.favourite_count,
+        view_count=body.view_count,
+        capture_level=capture_level,
         raw={"source": origin},
     )
 
 
+async def persist_observations(
+    db: DB, listings: list[ProviderListing], mode: AcquisitionMode, track: bool | None = None
+) -> tuple[IngestResult, list[Any]]:
+    """Store observations (grouped by provider) and analyse every listing they touch.
+
+    Nothing is analysed without being saved: the listing, a snapshot of what was seen and the
+    analysis with its algorithm version and acquisition mode.
+    """
+    by_provider: dict[str, list[ProviderListing]] = {}
+    for pl in listings:
+        by_provider.setdefault(listing_identity(pl.url)[0], []).append(pl)
+    merged = IngestResult(received=len(listings))
+    for provider, items in by_provider.items():
+        res = await IngestionService(db, provider, mode, track=track).ingest(items)
+        merged.new_ids += res.new_ids
+        merged.updated_ids += res.updated_ids
+        merged.price_changes += res.price_changes
+        merged.status_changes += res.status_changes
+        merged.duplicates |= res.duplicates
+        merged.enriched_ids += res.enriched_ids
+        merged.status_updates |= res.status_updates
+        merged.ids_by_external |= res.ids_by_external
+    ids = list(dict.fromkeys([*merged.new_ids, *merged.updated_ids]))
+    outcomes = await AnalysisPipeline(db).analyze_many(ids, mode=mode)
+    return merged, outcomes
+
+
 @router.post("/listings/import", response_model=dict[str, Any], status_code=201)
 async def import_listing(body: ManualListingInput, user: CurrentUser, db: DB) -> dict[str, Any]:
-    """Manual import of a listing found by the user (URL + key data), analysed immediately."""
-    pl = manual_to_provider(body)
-    result = await IngestionService(db, "manual").ingest([pl])
-    listing_id = (result.new_ids or result.updated_ids)[0]
-    outcome = await AnalysisPipeline(db).analyze_listing(listing_id)
+    """Import one listing found by the user (form, extension or bookmarklet), analysed and tracked."""
+    pl = manual_to_provider(body, body.source)
+    result, outcomes = await persist_observations(db, [pl], AcquisitionMode(body.source), track=True)
     await db.commit()
     await cache.bump(NS_FEED)
+    listing_id = result.ids_by_external[pl.external_id]
+    outcome = next((o for o in outcomes if o.listing_id == listing_id), None)
     if outcome is None:
-        raise InsufficientDataError("Annuncio importato ma non analizzabile.")
+        raise InsufficientDataError("Annuncio salvato ma non analizzabile (non è attivo).")
     return {
         "listing_id": str(listing_id),
         "opportunity_id": str(outcome.opportunity_id),
@@ -238,15 +303,15 @@ batch_limit = RateLimit("import-batch", per_minute=20)
 async def import_batch(body: BatchImportInput, user: CurrentUser, econ: Economics, db: DB) -> BatchImportOut:
     """Import up to 200 listings the user is looking at, analyse them all, return them ranked.
 
-    Listings already known are updated (price history included), so re-importing the same
+    Listings already known are updated (a snapshot is added each time), so re-importing the same
     search later surfaces price drops. Results use the user's own costs and targets.
     """
     origin = "vinted_search_import" if body.source == "vinted_search" else "manual_import"
     # The same item can appear twice on a page (promoted + organic): keep its last occurrence.
-    by_id = {pl.external_id: pl for pl in (manual_to_provider(i, origin) for i in body.items)}
-    result = await IngestionService(db, "manual").ingest(list(by_id.values()))
-    ids = list(dict.fromkeys([*result.new_ids, *result.updated_ids]))
-    outcomes = await AnalysisPipeline(db).analyze_many(ids)
+    by_id = {
+        pl.external_id: pl for pl in (manual_to_provider(i, origin, CaptureLevel.CARD) for i in body.items)
+    }
+    result, outcomes = await persist_observations(db, list(by_id.values()), AcquisitionMode.BATCH_IMPORT)
     await db.commit()
     await cache.bump(NS_FEED)
     cards = await OpportunityQueries(db, user.id, econ).card_by_listing_ids([o.listing_id for o in outcomes])
@@ -289,8 +354,15 @@ async def reanalyze(listing_id: uuid.UUID, user: CurrentUser, db: DB) -> dict[st
 async def analyze_adhoc(
     body: ManualListingInput, user: CurrentUser, econ: Economics, db: DB
 ) -> dict[str, Any]:
-    """What-if analysis of listing data without saving anything (uses your costs and targets)."""
-    pl = manual_to_provider(body)
+    """Analysis with your costs and targets. The listing and its standard analysis are always
+    saved to the archive (nothing analysed is lost), without turning on tracking; the response is
+    computed with your personal economics."""
+    pl = manual_to_provider(body, body.source)
+    result, outcomes = await persist_observations(db, [pl], AcquisitionMode(body.source), track=False)
+    await db.commit()
+    await cache.bump(NS_FEED)
+    listing_id = result.ids_by_external[pl.external_id]
+    saved = next((o for o in outcomes if o.listing_id == listing_id), None)
     catalog = await load_catalog(db)
     ident = get_engine(catalog.taxonomy).identify(
         ListingText(
@@ -332,6 +404,8 @@ async def analyze_adhoc(
     r = run_analysis(subject, candidates, now, econ.costs, econ.targets, prior)
     return jsonable(
         {
+            "listing_id": listing_id,
+            "opportunity_id": saved.opportunity_id if saved else None,
             "identification": ident.as_dict(),
             "condition": normalize_condition(pl.condition).value,
             "fair_market_value": r.market.fair_market_value,

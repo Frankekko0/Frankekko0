@@ -19,7 +19,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
-from app.domain.enums import ListingStatus
+from app.domain.enums import CaptureLevel, ListingStatus
 
 
 class ProviderImage(BaseModel):
@@ -30,8 +30,10 @@ class ProviderImage(BaseModel):
 
 
 class ProviderSeller(BaseModel):
+    """Seller data kept by FlipFinder. Real sources supply only an opaque id (a one-way hash),
+    the rating and the review count: no username or other personal data."""
+
     external_id: str
-    username: str | None = None
     rating: Decimal | None = Field(default=None, ge=0, le=5)
     review_count: int = Field(default=0, ge=0)
     account_created_at: datetime | None = None
@@ -66,8 +68,11 @@ class ProviderListing(BaseModel):
     buyer_protection_fee: Decimal | None = Field(default=None, ge=0)
     shipping_fee: Decimal | None = Field(default=None, ge=0)
     buyer_protection_available: bool = True
-    favourite_count: int = Field(default=0, ge=0)
-    view_count: int = Field(default=0, ge=0)
+    # None = not visible in this capture (a card may not show views): never overwrites a value.
+    favourite_count: int | None = Field(default=None, ge=0)
+    view_count: int | None = Field(default=None, ge=0)
+    # How much of the listing this capture contains (a search card vs the full item page).
+    capture_level: CaptureLevel = CaptureLevel.FULL
     raw: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("currency")
@@ -130,11 +135,23 @@ class ManualListingInput(BaseModel):
     color: str | None = Field(default=None, max_length=60)
     description: str = Field(default="", max_length=5000)
     image_urls: list[HttpUrl] = Field(default_factory=list, max_length=20)
+    # Opaque seller key (the extension sends a one-way hash of the member id). A username, if
+    # sent by an old client, is hashed on arrival and never stored.
+    seller_key: str | None = Field(default=None, max_length=80)
     seller_username: str | None = Field(default=None, max_length=120)
     seller_rating: Decimal | None = Field(default=None, ge=0, le=5)
     seller_review_count: int | None = Field(default=None, ge=0)
     country: str | None = Field(default=None, min_length=2, max_length=2)
     shipping_fee: Decimal | None = Field(default=None, ge=0, le=1000)
+    buyer_protection_fee: Decimal | None = Field(default=None, ge=0, le=1000)
+    favourite_count: int | None = Field(default=None, ge=0)
+    view_count: int | None = Field(default=None, ge=0)
+    material: str | None = Field(default=None, max_length=120)
+    category_path: str | None = Field(default=None, max_length=200)
+    published_at: datetime | None = None
+    status: Literal["active", "reserved", "sold", "removed"] = "active"
+    # Where the data comes from (recorded with the listing and every analysis).
+    source: Literal["manual_form", "extension_item", "bookmarklet"] = "manual_form"
 
 
 MAX_BATCH_IMPORT = 200

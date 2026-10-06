@@ -33,12 +33,59 @@ CONDITION_LABELS_IT: dict[Condition, str] = {
 
 
 class ListingStatus(StrEnum):
+    """Lifecycle of a listing.
+
+    ``sold`` is only ever set on positive evidence (the page, a notification email or the provider
+    says so). A listing that disappears without that evidence is ``removed``: no sale is inferred.
+    """
+
     ACTIVE = "active"
     RESERVED = "reserved"
     SOLD = "sold"
-    POSSIBLY_SOLD = "possibly_sold"
     REMOVED = "removed"
     UNKNOWN = "unknown"
+
+
+OPEN_STATUSES = frozenset({ListingStatus.ACTIVE, ListingStatus.RESERVED, ListingStatus.UNKNOWN})
+CLOSED_STATUSES = frozenset({ListingStatus.SOLD, ListingStatus.REMOVED})
+
+
+class AcquisitionMode(StrEnum):
+    """How a piece of data reached FlipFinder (stored on listings, snapshots, analyses, attempts)."""
+
+    PROVIDER_SCAN = "provider_scan"  # configured provider (demo market or authorized feed)
+    EXTENSION_ITEM = "extension_item"  # browser extension, item page the user opened
+    EXTENSION_CARD = "extension_card"  # browser extension, card seen while scrolling
+    EXTENSION_DEEP = "extension_deep"  # browser extension, deep analysis on the user's command
+    EXTENSION_REFRESH = "extension_refresh"  # browser extension, slow background status check
+    BATCH_IMPORT = "batch_import"  # a whole search page sent in one click
+    LINK_IMPORT = "link_import"  # pasted link(s)
+    MANUAL_FORM = "manual_form"  # data typed in the Analyze form
+    BOOKMARKLET = "bookmarklet"
+    EMAIL = "email"  # Vinted notification email
+    PUBLIC_FETCH = "public_fetch"  # server-side read of a public page (opt-in)
+    MIGRATED = "migrated"  # existed before acquisition modes were recorded
+
+
+class CaptureLevel(StrEnum):
+    """How much of a listing is known. Never downgraded by a poorer capture."""
+
+    LINK = "link"  # only the link (Vinted ID + slug)
+    CARD = "card"  # a search/catalog card: title, price, brand, size, condition, one photo
+    FULL = "full"  # the item page: every field and photo
+
+
+CAPTURE_RANK: dict[str, int] = {CaptureLevel.LINK: 0, CaptureLevel.CARD: 1, CaptureLevel.FULL: 2}
+
+
+class StatusEvidence(StrEnum):
+    """Where an observed status comes from."""
+
+    PAGE = "page"  # read on the listing page/card
+    EMAIL = "email"  # "your favourite has been sold" notification
+    PROVIDER = "provider"  # a structured provider field
+    NOT_FOUND = "not_found"  # the page no longer exists (removed, sale not inferred)
+    UNREACHABLE = "unreachable"  # could not check (blocked, network): status unchanged
 
 
 class Certainty(StrEnum):

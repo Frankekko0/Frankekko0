@@ -75,7 +75,7 @@ class ItemProfile:
 
     @property
     def is_sold(self) -> bool:
-        return self.status in ("sold", "possibly_sold")
+        return self.status == "sold"
 
     def observed_at(self) -> datetime | None:
         return self.sold_at or self.last_seen_at or self.published_at

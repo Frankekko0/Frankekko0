@@ -483,7 +483,6 @@ class OpportunityQueries:
             is_vintage=listing.is_vintage,
             images=[ImageOut(url=i.url, position=i.position) for i in listing.images],
             seller=SellerOut(
-                username=seller.username,
                 rating=float(seller.rating) if seller.rating is not None else None,
                 review_count=seller.review_count,
                 account_created_at=seller.account_created_at,

@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from arq import Retry
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, OperationalError
 
@@ -27,14 +27,26 @@ from app.core.config import get_settings
 from app.core.errors import ProviderUnavailableError
 from app.core.logging import get_logger
 from app.core.redis import redis_lock
-from app.db.models import AnalysisJob, Listing, MarketStatistic, Opportunity, OpportunityScore, SystemState
+from app.db.models import (
+    AcquisitionAttempt,
+    AnalysisJob,
+    Listing,
+    ListingSnapshot,
+    MarketStatistic,
+    Opportunity,
+    OpportunityScore,
+    SystemState,
+)
 from app.db.session import session_scope
-from app.domain.enums import JobStatus, ListingStatus
+from app.domain.enums import AcquisitionMode, JobStatus, ListingStatus, StatusEvidence
 from app.ingestion.catalog import load_catalog
 from app.ingestion.service import IngestionService, IngestResult
 from app.marketplace.base import SearchQuery
 from app.marketplace.registry import get_provider
 from app.opportunities.pipeline import AnalysisPipeline
+from app.tracking.policy import SYNTHETIC_PROVIDERS
+from app.tracking.service import Attempt, TrackingService, record_attempts
+from app.tracking.status import Observation
 from app.workers.queue import backoff_seconds, enqueue
 
 log = get_logger(__name__)
@@ -349,42 +361,47 @@ async def recompute_market_statistics_task(ctx: dict[str, Any]) -> int:
 
 
 async def refresh_listings(ctx: dict[str, Any]) -> dict[str, int]:
-    """Lifecycle: re-check active listings (best opportunities first), detect sales/removals and
-    price changes. Disappeared listings are kept and marked, never deleted."""
-    settings = get_settings()
-    stale_before = datetime.now(UTC) - timedelta(minutes=10)
+    """Periodic status checks of the listings the configured provider can re-read.
+
+    Picks the listings whose adaptive ``next_check_at`` is due (recent, popular, reserved and
+    promising listings first come due more often; closed ones never). A listing the provider no
+    longer returns becomes ``removed`` - a sale is recorded only when the provider says so.
+    Checks of tracked Vinted items that no server-side source can read are left to the other
+    acquisition modes (browser extension, email, opt-in public fetch).
+    """
+    now = datetime.now(UTC)
     async with session_scope() as s:
         provider = await get_provider(s)
         rows = (
             await s.execute(
                 select(Listing.id, Listing.external_id)
-                .outerjoin(Opportunity, Opportunity.listing_id == Listing.id)
-                .where(
-                    Listing.provider == provider.name,
-                    Listing.status == ListingStatus.ACTIVE,
-                    Listing.last_seen_at < stale_before,
-                )
-                .order_by(func.coalesce(Opportunity.flip_score, 0).desc(), Listing.last_seen_at)
+                .where(Listing.provider == provider.name, Listing.next_check_at <= now)
+                .order_by(Listing.next_check_at)
                 .limit(LIFECYCLE_BATCH)
             )
         ).all()
     if not rows:
         return {"checked": 0}
     found = []
-    missing = []
-    for r in rows:
+    missing: list[uuid.UUID] = []
+    unreachable: list[Any] = []
+    for i, r in enumerate(rows):
         try:
             pl = await provider.get_listing(r.external_id)
-        except ProviderUnavailableError:
+        except ProviderUnavailableError as exc:
+            unreachable = list(rows[i:])
+            log.warning("lifecycle.provider_unavailable", provider=provider.name, error=str(exc))
             break
         if pl is None:
             missing.append(r.id)
         else:
             found.append(pl)
-    stats = {"checked": len(found) + len(missing), "missing": len(missing)}
+    stats = {"checked": len(found) + len(missing), "missing": len(missing), "unreachable": len(unreachable)}
     if found:
         async with session_scope() as s:
-            result = await IngestionService(s, provider.name).ingest(found)
+            result = await IngestionService(s, provider.name, AcquisitionMode.PROVIDER_SCAN).ingest(
+                found, now=now
+            )
         await _apply_status_changes(result)
         h, d = await _enqueue_analyses(result, await _segment_medians())
         stats.update(
@@ -392,19 +409,38 @@ async def refresh_listings(ctx: dict[str, Any]) -> dict[str, int]:
             status_changes=len(result.status_changes),
             reanalyze=h + d,
         )
-    if missing:
-        new_status = ListingStatus.REMOVED if provider.capabilities.sold_data else ListingStatus.POSSIBLY_SOLD
-        now = datetime.now(UTC)
+    if missing or unreachable:
+        observations = {lid: Observation(now, StatusEvidence.NOT_FOUND) for lid in missing}
+        observations |= {r.id: Observation(now, StatusEvidence.UNREACHABLE) for r in unreachable}
         async with session_scope() as s:
-            await s.execute(
-                update(Listing)
-                .where(Listing.id.in_(missing))
-                .values(status=new_status.value, status_changed_at=now, removed_at=now)
+            await TrackingService(s).observe(observations, AcquisitionMode.PROVIDER_SCAN)
+            await record_attempts(
+                s,
+                [
+                    Attempt(
+                        AcquisitionMode.PROVIDER_SCAN,
+                        "refresh",
+                        listing_id=lid,
+                        outcome="not_found",
+                        message="L'annuncio non è più disponibile presso la fonte: segnato come rimosso.",
+                    )
+                    for lid in missing
+                ]
+                + [
+                    Attempt(
+                        AcquisitionMode.PROVIDER_SCAN,
+                        "refresh",
+                        listing_id=r.id,
+                        vinted_id=r.external_id,
+                        outcome="error",
+                        message="Fonte dati non raggiungibile: controllo rimandato.",
+                    )
+                    for r in unreachable
+                ],
             )
-            await AnalysisPipeline(s).deactivate(missing)
     if stats.get("status_changes") or missing:
         await cache.bump(NS_FEED)
-    log.info("lifecycle.completed", stale_hours=settings.lifecycle_stale_hours, **stats)
+    log.info("lifecycle.completed", **stats)
     return stats
 
 
@@ -416,10 +452,27 @@ async def recompute_learning(ctx: dict[str, Any]) -> int:
 
 
 async def prune(ctx: dict[str, Any]) -> None:
-    """Retention: job logs 7 days, score history 30 days (current opportunity rows are kept)."""
+    """Retention. Real listings keep their whole history (snapshots, every analysis): only the
+    generated demo market is trimmed (score history after 30 days, snapshots after 60), plus
+    technical job logs after 7 days and acquisition logs after 180."""
     now = datetime.now(UTC)
+    synthetic = select(Listing.id).where(Listing.provider.in_(SYNTHETIC_PROVIDERS))
     async with session_scope() as s:
         await s.execute(delete(AnalysisJob).where(AnalysisJob.queued_at < now - timedelta(days=7)))
         await s.execute(
-            delete(OpportunityScore).where(OpportunityScore.computed_at < now - timedelta(days=30))
+            delete(OpportunityScore).where(
+                OpportunityScore.computed_at < now - timedelta(days=30),
+                OpportunityScore.opportunity_id.in_(
+                    select(Opportunity.id).where(Opportunity.listing_id.in_(synthetic))
+                ),
+            )
+        )
+        await s.execute(
+            delete(ListingSnapshot).where(
+                ListingSnapshot.observed_at < now - timedelta(days=60),
+                ListingSnapshot.listing_id.in_(synthetic),
+            )
+        )
+        await s.execute(
+            delete(AcquisitionAttempt).where(AcquisitionAttempt.started_at < now - timedelta(days=180))
         )

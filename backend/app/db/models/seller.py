@@ -19,7 +19,6 @@ class Seller(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     provider: Mapped[str] = mapped_column(String(32))
     external_id: Mapped[str] = mapped_column(String(64))
-    username: Mapped[str | None] = mapped_column(String(120))
     rating: Mapped[Decimal | None] = mapped_column(Numeric(3, 2))
     review_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     account_created_at: Mapped[datetime | None] = mapped_column()

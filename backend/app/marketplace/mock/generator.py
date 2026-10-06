@@ -178,7 +178,6 @@ class SimSeller:
     def to_provider(self) -> ProviderSeller:
         return ProviderSeller(
             external_id=str(9_000_000 + self.index),
-            username=self.username,
             rating=self.rating,
             review_count=self.review_count,
             account_created_at=self.account_created_at,

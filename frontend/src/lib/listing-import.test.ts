@@ -35,7 +35,6 @@ describe("decodeImportHash", () => {
       brand: "Ralph Lauren",
       size: "M",
       condition: "very_good",
-      sellerName: "armadio_8832",
       images: "https://images1.vinted.net/a.jpg\nhttps://images1.vinted.net/b.jpg",
     });
   });

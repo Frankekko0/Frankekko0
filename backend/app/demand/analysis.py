@@ -1,7 +1,7 @@
 """Demand (sell-through) and sales-velocity estimation.
 
-Sell-through rate = sold / (sold + still active) among comparable listings in the window.
-Listings that vanished without a confirmed sale ("possibly_sold") count as half a sale.
+Sell-through rate = sold / (sold + still active + removed) among comparable listings in the window.
+Only confirmed sales count: listings removed without evidence of a sale count as not sold.
 Rates are smoothed with a weak prior so 2 sold out of 2 is not reported as 100% demand.
 
 Velocity combines the observed time-to-sale of comparable sold items with a category baseline
@@ -61,15 +61,14 @@ def demand_level(str_value: float) -> DemandLevel:
 def analyze_demand(
     sold: int,
     active: int,
-    possibly_sold: int = 0,
+    removed: int = 0,
     favourites: int = 0,
     listing_age_hours: float | None = None,
     segment_avg_favourites_per_day: float | None = None,
 ) -> DemandResult:
-    effective_sold = sold + 0.5 * possibly_sold
-    n = sold + possibly_sold + active
-    raw = effective_sold / n if n else None
-    smoothed = (effective_sold + PRIOR_STR * PRIOR_STRENGTH) / (n + PRIOR_STRENGTH)
+    n = sold + removed + active
+    raw = sold / n if n else None
+    smoothed = (sold + PRIOR_STR * PRIOR_STRENGTH) / (n + PRIOR_STRENGTH)
 
     # Favourites on the subject listing: interest relative to the segment's usual pace.
     fav_signal = 0.0

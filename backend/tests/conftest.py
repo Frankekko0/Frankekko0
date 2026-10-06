@@ -76,7 +76,8 @@ async def _seeded(_migrated_database: None) -> AsyncIterator[None]:
 
 DATA_TABLES = (
     "alert_deliveries, alerts, favorites, inventory, sales, purchases, user_affinities, market_comparables, "
-    "opportunity_scores, opportunities, analysis_jobs, listing_price_history, listing_images, listings, products, "
+    "opportunity_scores, opportunities, analysis_jobs, listing_price_history, listing_snapshots, "
+    "acquisition_attempts, listing_images, listings, products, "
     "sellers, market_statistics, watchlists, push_subscriptions, notification_settings, user_preferences, users, "
     "system_state"
 )
@@ -160,7 +161,6 @@ def make_listing() -> Callable[..., ProviderListing]:
             ],
             seller=ProviderSeller(
                 external_id=seller_id or f"s{n % 40}",
-                username=f"seller{n % 40}",
                 rating=Decimal(seller_rating) if seller_reviews else None,
                 review_count=seller_reviews,
                 account_created_at=now - timedelta(days=700),

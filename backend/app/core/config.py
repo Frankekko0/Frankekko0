@@ -73,6 +73,28 @@ class Settings(BaseSettings):
     comparables_window_days: int = 120
     lifecycle_stale_hours: int = 6
     algorithm_version: str = "2026.10-1"
+
+    # --- Acquisition modes beyond the extension (all opt-in, see docs/ACQUISITION.md) --------
+    # Server-side read of public Vinted item pages. Off by default: Vinted's terms forbid
+    # automated collection; when enabled it honours robots.txt, never bypasses a block and stops.
+    vinted_public_fetch_enabled: bool = False
+    vinted_public_fetch_min_interval_seconds: int = Field(default=30, ge=30)
+    vinted_public_fetch_daily_cap: int = Field(default=300, ge=1, le=2000)
+    vinted_public_fetch_cache_hours: int = Field(default=6, ge=1, le=72)
+    vinted_public_fetch_block_pause_hours: int = Field(default=6, ge=1, le=168)
+    vinted_public_fetch_contact: str = "FlipFinder personal tool (no automation of purchases)"
+    # Vinted notification emails (favourite sold / price reduced): read-only IMAP mailbox.
+    imap_host: str | None = None
+    imap_port: int = 993
+    imap_user: str | None = None
+    imap_password: SecretStr | None = None
+    imap_folder: str = "INBOX"
+    imap_poll_minutes: int = Field(default=15, ge=5, le=1440)
+
+    @property
+    def email_import_enabled(self) -> bool:
+        return bool(self.imap_host and self.imap_user and self.imap_password)
+
     # Opportunity/watchlist alerts only for listings published within this window
     alert_max_listing_age_hours: float = 72.0
 

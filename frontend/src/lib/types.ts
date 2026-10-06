@@ -209,8 +209,8 @@ export interface AiAnalysis {
   model: string | null;
 }
 
+/** Only what the analysis needs: no username or other personal data. */
 export interface Seller {
-  username: string | null;
   rating: number | null;
   review_count: number;
   account_created_at: string | null;
@@ -602,10 +602,84 @@ export interface ManualListingInput {
   color?: string;
   description?: string;
   image_urls?: string[];
-  seller_username?: string;
   seller_rating?: number;
   seller_review_count?: number;
   shipping_fee?: number;
+  /** Where the data comes from: recorded with the listing and its analyses. */
+  source?: "manual_form" | "extension_item" | "bookmarklet";
+}
+
+export type ListingStatus = "active" | "reserved" | "sold" | "removed" | "unknown";
+export type AcquisitionMode =
+  | "provider_scan"
+  | "extension_item"
+  | "extension_card"
+  | "extension_deep"
+  | "extension_refresh"
+  | "batch_import"
+  | "link_import"
+  | "manual_form"
+  | "bookmarklet"
+  | "email"
+  | "public_fetch"
+  | "migrated";
+export type CaptureLevel = "link" | "card" | "full";
+export type DataQuality = "ok" | "limited" | "insufficient";
+
+/** A listing in the archive: everything FlipFinder has seen or analysed. */
+export interface Item {
+  id: Uuid;
+  vinted_id: string | null;
+  provider: string;
+  url: string;
+  title: string;
+  brand: string | null;
+  size: string | null;
+  condition: string;
+  price: number;
+  currency: string;
+  status: ListingStatus;
+  favourite_count: number;
+  image_url: string | null;
+  acquisition_mode: AcquisitionMode;
+  capture_level: CaptureLevel;
+  tracked: boolean;
+  first_seen_at: string;
+  last_checked_at: string | null;
+  next_check_at: string | null;
+  sold_at: string | null;
+  days_to_sell: number | null;
+  last_active_price: number | null;
+  opportunity_id: Uuid | null;
+  flip_score: number | null;
+  confidence_score: number | null;
+  risk_level: RiskLevel | null;
+  data_quality: DataQuality | null;
+  expected_profit: number | null;
+  expected_roi: number | null;
+  fair_market_value: number | null;
+  analyzed_at: string | null;
+  algorithm_version: string | null;
+  analysis_depth: "quick" | "full" | null;
+}
+
+export interface ItemFilters {
+  q?: string;
+  brand?: string;
+  status?: ListingStatus | "";
+  mode?: AcquisitionMode | "";
+  capture_level?: CaptureLevel | "";
+  data_quality?: DataQuality | "";
+  tracked?: boolean;
+  analyzed?: boolean;
+  date_field?: "first_seen" | "analyzed" | "last_checked" | "published";
+  date_from?: string;
+  date_to?: string;
+  min_score?: number;
+  max_score?: number;
+  sort?: "recent" | "score" | "price_asc" | "price_desc" | "profit" | "last_checked";
+  page?: number;
+  page_size?: number;
 }
 
 export interface BatchImportInput {
@@ -634,6 +708,9 @@ export interface ImportResult {
 }
 
 export interface QuickAnalysis {
+  /** The listing and its analysis are always saved. */
+  listing_id: Uuid;
+  opportunity_id: Uuid | null;
   fair_market_value: number | null;
   market: { n_used: number; n_sold: number; n_active: number; n_outliers: number; notes: string[] };
   scenarios: {

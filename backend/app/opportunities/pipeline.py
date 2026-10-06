@@ -17,7 +17,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.db.models import Listing, MarketComparable, MarketStatistic, Opportunity, OpportunityScore, Seller
-from app.domain.enums import ListingStatus
+from app.domain.enums import AcquisitionMode, CaptureLevel, ListingStatus
 from app.ingestion.catalog import Catalog, load_catalog
 from app.opportunities.engine import (
     AnalysisResult,
@@ -177,7 +177,7 @@ class AnalysisPipeline:
         active listings crowd out the sold ones).
         """
         since = now - timedelta(days=self.settings.comparables_window_days)
-        sold_states = [ListingStatus.SOLD.value, ListingStatus.POSSIBLY_SOLD.value]
+        sold_states = [ListingStatus.SOLD.value]
         event_time = func.coalesce(Listing.sold_at, Listing.status_changed_at, Listing.last_seen_at)
         sold_stmt = (
             base.where(Listing.status.in_(sold_states), event_time >= since)
@@ -353,7 +353,10 @@ class AnalysisPipeline:
         return outcomes[0] if outcomes else None
 
     async def analyze_many(
-        self, listing_ids: Sequence[uuid.UUID], now: datetime | None = None
+        self,
+        listing_ids: Sequence[uuid.UUID],
+        now: datetime | None = None,
+        mode: AcquisitionMode | str | None = None,
     ) -> list[AnalysisOutcome]:
         """Analyse a batch of listings with a handful of queries instead of a dozen per listing.
 
@@ -407,15 +410,22 @@ class AnalysisPipeline:
                     pools[key] = await self.candidate_pool(listing.brand_id, cat_ids, catalog, now)
                 cands = pools[key].for_subject(listing.id)
             results.append((listing, run_analysis(subject, cands, now, cost, targets, prior)))
-        return await self.persist_many(results, now)
+        return await self.persist_many(results, now, mode)
 
     async def persist(self, listing: Listing, result: AnalysisResult, now: datetime) -> AnalysisOutcome:
         return (await self.persist_many([(listing, result)], now))[0]
 
     async def persist_many(
-        self, items: list[tuple[Listing, AnalysisResult]], now: datetime
+        self,
+        items: list[tuple[Listing, AnalysisResult]],
+        now: datetime,
+        mode: AcquisitionMode | str | None = None,
     ) -> list[AnalysisOutcome]:
-        """Upsert opportunities, append score history and replace comparables, all in bulk."""
+        """Upsert opportunities, append score history and replace comparables, all in bulk.
+
+        Every analysis is recorded permanently in the score history with its algorithm version,
+        the acquisition mode of the data and the analysis depth.
+        """
         version = self.settings.algorithm_version
         ids = [listing.id for listing, _ in items]
         previous = {
@@ -431,7 +441,7 @@ class AnalysisPipeline:
         # Sorted by key: concurrent batches lock opportunity rows in the same order.
         ordered = sorted(items, key=lambda it: str(it[0].id))
         rows = [
-            {"id": uuid.uuid4(), "created_at": now, **opportunity_values(listing, result, version, now)}
+            {"id": uuid.uuid4(), "created_at": now, **opportunity_values(listing, result, version, now, mode)}
             for listing, result in ordered
         ]
         # One single-row statement run with many parameter sets ("insertmanyvalues"): compiled
@@ -451,6 +461,9 @@ class AnalysisPipeline:
                 {
                     "opportunity_id": opp_ids[listing.id],
                     "algorithm_version": version,
+                    "acquisition_mode": str(mode or listing.acquisition_mode),
+                    "analysis_depth": analysis_depth(listing),
+                    "data_quality": result.data_quality,
                     "listing_price": listing.price,
                     "flip_score": result.flip.score,
                     "confidence_score": result.confidence.score,
@@ -516,7 +529,18 @@ class AnalysisPipeline:
             )
 
 
-def opportunity_values(listing: Listing, r: AnalysisResult, version: str, now: datetime) -> dict[str, Any]:
+def analysis_depth(listing: Listing) -> str:
+    """ "quick" when only a search card (or a link) is known, "full" with the item page data."""
+    return "quick" if listing.capture_level in (CaptureLevel.CARD, CaptureLevel.LINK) else "full"
+
+
+def opportunity_values(
+    listing: Listing,
+    r: AnalysisResult,
+    version: str,
+    now: datetime,
+    mode: AcquisitionMode | str | None = None,
+) -> dict[str, Any]:
     m = r.market
     st = m.stats
     cons = r.scenario("conservative")
@@ -530,6 +554,10 @@ def opportunity_values(listing: Listing, r: AnalysisResult, version: str, now: d
         "listing_id": listing.id,
         "product_id": listing.product_id,
         "algorithm_version": version,
+        "acquisition_mode": str(mode or listing.acquisition_mode),
+        "analysis_depth": analysis_depth(listing),
+        "data_quality": r.data_quality,
+        "insufficient_reason": r.insufficient_reason,
         "is_active": listing.status == ListingStatus.ACTIVE,
         "listing_price": listing.price,
         "currency": listing.currency,

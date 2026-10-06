@@ -14,19 +14,19 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 from rapidfuzz import fuzz
-from sqlalchemy import and_, select, update
+from sqlalchemy import delete, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.db.models import Listing, ListingImage, ListingPriceHistory, Product, Seller
-from app.domain.enums import Condition, ListingStatus
+from app.db.models import Listing, ListingImage, ListingPriceHistory, ListingSnapshot, Product, Seller
+from app.domain.enums import CAPTURE_RANK, AcquisitionMode, CaptureLevel, Condition, ListingStatus
 from app.identification.engine import IdentificationEngine, IdentificationResult, ListingText
 from app.identification.taxonomy import Taxonomy
 from app.ingestion.catalog import Catalog, load_catalog
@@ -39,6 +39,8 @@ from app.ingestion.normalizer import (
 )
 from app.marketplace.base import ProviderListing, ProviderSeller
 from app.scoring.seller import SellerProfile, seller_reliability
+from app.tracking.policy import SYNTHETIC_PROVIDERS, TRACKING_MODES, evidence_for, schedule
+from app.tracking.status import Observation, StatusState, StatusUpdate, apply_observation
 
 log = get_logger(__name__)
 
@@ -71,6 +73,11 @@ class IngestResult:
     duplicates: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)
     duplicates_of_active: set[uuid.UUID] = field(default_factory=set)
     new_active_ids: set[uuid.UUID] = field(default_factory=set)
+    # Existing listings whose descriptive data was replaced by a richer capture (re-analyse).
+    enriched_ids: list[uuid.UUID] = field(default_factory=list)
+    status_updates: dict[uuid.UUID, StatusUpdate] = field(default_factory=dict)
+    # Vinted/external id -> internal id, for every listing of the batch.
+    ids_by_external: dict[str, uuid.UUID] = field(default_factory=dict)
     received: int = 0
 
     @property
@@ -134,8 +141,8 @@ def listing_columns(
         "buyer_protection_fee": pl.buyer_protection_fee,
         "shipping_fee": pl.shipping_fee,
         "buyer_protection_available": pl.buyer_protection_available,
-        "favourite_count": pl.favourite_count,
-        "view_count": pl.view_count,
+        "favourite_count": pl.favourite_count or 0,
+        "view_count": pl.view_count or 0,
         "photo_count": len(pl.images),
         "status": ListingStatus(pl.status).value,
         "published_at": pl.published_at or now,
@@ -146,13 +153,85 @@ def listing_columns(
         "removed_at": now if pl.status == ListingStatus.REMOVED else None,
         "title_fingerprint": title_fingerprint(pl.title),
         "raw": pl.raw or None,
+        "capture_level": CaptureLevel(pl.capture_level).value,
+    }
+
+
+def descriptive_columns(pl: ProviderListing, ident: IdentificationResult, catalog: Catalog) -> dict[str, Any]:
+    """Columns a richer capture may replace on an existing listing (not ids, dates or lifecycle)."""
+    cols = listing_columns(pl, ident, catalog, "", datetime.now(UTC))
+    keep = (
+        "url",
+        "title",
+        "description",
+        "currency",
+        "brand_raw",
+        "brand_id",
+        "category_raw",
+        "subcategory_raw",
+        "category_id",
+        "size_raw",
+        "size_normalized",
+        "condition_raw",
+        "condition",
+        "color_raw",
+        "color",
+        "material_raw",
+        "material",
+        "country",
+        "model_name",
+        "gender",
+        "is_vintage",
+        "product_code",
+        "identification_confidence",
+        "identification",
+        "buyer_protection_fee",
+        "shipping_fee",
+        "buyer_protection_available",
+        "photo_count",
+        "title_fingerprint",
+    )
+    out = {k: cols[k] for k in keep}
+    if pl.published_at is not None:
+        out["published_at"] = pl.published_at
+    return out
+
+
+def _lifecycle(update: StatusUpdate) -> dict[str, Any]:
+    return {
+        "status": update.status.value,
+        "last_active_at": update.last_active_at,
+        "last_active_price": update.last_active_price,
+        "sold_at": update.sold_at,
+        "sold_detected_at": update.sold_detected_at,
+        "removed_at": update.removed_at,
+        "days_to_sell": update.days_to_sell,
+        "check_failures": update.check_failures,
+        "unchanged_checks": update.unchanged_checks,
     }
 
 
 class IngestionService:
-    def __init__(self, session: AsyncSession, provider: str) -> None:
+    """Persists observations of listings.
+
+    Every observation (new or known listing) appends a :class:`ListingSnapshot`; known listings
+    are updated in place (dedup by ``(provider, external_id)``, i.e. the Vinted ID). A capture
+    richer than what is stored (a full item page after a search card) replaces the descriptive
+    data and photos; a poorer one never downgrades them.
+    """
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        provider: str,
+        mode: AcquisitionMode | str = AcquisitionMode.PROVIDER_SCAN,
+        track: bool | None = None,
+    ) -> None:
         self.session = session
         self.provider = provider
+        self.mode = AcquisitionMode(mode)
+        self.track = self.mode in TRACKING_MODES if track is None else track
+        self.evidence = evidence_for(self.mode)
 
     async def ingest(self, listings: list[ProviderListing], now: datetime | None = None) -> IngestResult:
         now = now or datetime.now(UTC)
@@ -168,9 +247,27 @@ class IngestionService:
         seller_ids = await self._upsert_sellers([pl.seller for pl in listings if pl.seller], now)
         existing_rows = (
             await self.session.execute(
-                select(Listing.id, Listing.external_id, Listing.price, Listing.status).where(
-                    Listing.provider == self.provider, Listing.external_id.in_(list(by_ext))
-                )
+                select(
+                    Listing.id,
+                    Listing.external_id,
+                    Listing.price,
+                    Listing.status,
+                    Listing.capture_level,
+                    Listing.acquisition_mode,
+                    Listing.published_at,
+                    Listing.last_active_at,
+                    Listing.last_active_price,
+                    Listing.sold_at,
+                    Listing.sold_detected_at,
+                    Listing.removed_at,
+                    Listing.check_failures,
+                    Listing.unchanged_checks,
+                    Listing.tracked_at,
+                    Listing.favourite_count,
+                    Listing.view_count,
+                    Listing.photo_count,
+                    Listing.seller_id,
+                ).where(Listing.provider == self.provider, Listing.external_id.in_(list(by_ext)))
             )
         ).all()
         existing = {r.external_id: r for r in existing_rows}
@@ -178,40 +275,137 @@ class IngestionService:
         new_rows: list[dict[str, Any]] = []
         new_images: list[dict[str, Any]] = []
         history_rows: list[dict[str, Any]] = []
+        snapshot_rows: list[dict[str, Any]] = []
         updates: list[dict[str, Any]] = []
+        enrich_updates: list[dict[str, Any]] = []
+        replace_images: dict[uuid.UUID, list[dict[str, Any]]] = {}
         product_specs: dict[str, dict[str, Any]] = {}
         row_product_key: dict[uuid.UUID, str] = {}
 
         for pl in listings:
             ex = existing.get(pl.external_id)
+            obs = Observation(
+                observed_at=now,
+                evidence=self.evidence,
+                status=ListingStatus(pl.status),
+                price=pl.price,
+                provider_sold_at=pl.sold_at if pl.status == ListingStatus.SOLD else None,
+            )
             if ex is not None:
-                status = ListingStatus(pl.status).value
+                result.ids_by_external[pl.external_id] = ex.id
+                upd_status = apply_observation(
+                    StatusState(
+                        status=ListingStatus(ex.status),
+                        published_at=ex.published_at,
+                        last_active_at=ex.last_active_at,
+                        last_active_price=ex.last_active_price,
+                        sold_at=ex.sold_at,
+                        sold_detected_at=ex.sold_detected_at,
+                        removed_at=ex.removed_at,
+                        check_failures=ex.check_failures,
+                        unchanged_checks=ex.unchanged_checks,
+                    ),
+                    obs,
+                )
+                price_changed = pl.price != ex.price
+                if price_changed and upd_status.unchanged_checks:
+                    # A price change is a change: the listing is alive, check it sooner.
+                    upd_status = replace(upd_status, unchanged_checks=0)
+                result.status_updates[ex.id] = upd_status
+                favourites = pl.favourite_count if pl.favourite_count is not None else ex.favourite_count
+                tracked_at = ex.tracked_at or (now if self.track else None)
                 upd: dict[str, Any] = {
                     "id": ex.id,
                     "last_seen_at": now,
+                    "last_checked_at": now,
                     "price": pl.price,
-                    "status": status,
-                    "favourite_count": pl.favourite_count,
-                    "view_count": pl.view_count,
+                    "favourite_count": favourites,
+                    "view_count": pl.view_count if pl.view_count is not None else ex.view_count,
+                    "capture_level": max(
+                        (ex.capture_level, CaptureLevel(pl.capture_level).value), key=CAPTURE_RANK.__getitem__
+                    ),
+                    "tracked_at": tracked_at,
+                    "status_changed_at": now if upd_status.changed else None,
+                    "next_check_at": schedule(
+                        status=upd_status.status,
+                        tracked_at=tracked_at,
+                        acquisition_mode=ex.acquisition_mode,
+                        now=now,
+                        published_at=ex.published_at,
+                        favourite_count=favourites,
+                        unchanged_checks=upd_status.unchanged_checks,
+                        check_failures=upd_status.check_failures,
+                    ),
                     "updated_at": now,
+                    **_lifecycle(upd_status),
                 }
+                if not upd_status.changed:
+                    del upd["status_changed_at"]
                 updates.append(upd)
                 result.updated_ids.append(ex.id)
-                if pl.price != ex.price:
+                if price_changed:
                     history_rows.append(
                         {"listing_id": ex.id, "price": pl.price, "currency": pl.currency, "observed_at": now}
                     )
                     result.price_changes.append(PriceChange(ex.id, ex.price, pl.price))
-                if status != ex.status:
-                    result.status_changes.append((ex.id, ex.status, status))
+                if upd_status.changed:
+                    result.status_changes.append((ex.id, ex.status, upd_status.status.value))
+
+                incoming_rank = CAPTURE_RANK[CaptureLevel(pl.capture_level)]
+                stored_rank = CAPTURE_RANK.get(ex.capture_level, 2)
+                richer = incoming_rank > stored_rank or (
+                    incoming_rank == stored_rank and self.mode != AcquisitionMode.PROVIDER_SCAN
+                )
+                if richer:
+                    ident = identify_listing(engine, pl)
+                    cols = descriptive_columns(pl, ident, catalog)
+                    if not pl.images:
+                        cols.pop("photo_count")  # this capture has no photos: keep the stored ones
+                    elif len(pl.images) >= (ex.photo_count or 0) or incoming_rank > stored_rank:
+                        replace_images[ex.id] = [
+                            {
+                                "listing_id": ex.id,
+                                "position": pos,
+                                "url": img.url,
+                                "phash": img.phash,
+                                "width": img.width,
+                                "height": img.height,
+                            }
+                            for pos, img in enumerate(pl.images[:20])
+                        ]
+                    else:
+                        cols.pop("photo_count")
+                    seller_id = seller_ids.get(pl.seller.external_id) if pl.seller else None
+                    enrich_updates.append(
+                        {"id": ex.id, **cols, **({"seller_id": seller_id} if seller_id else {})}
+                    )
+                    result.enriched_ids.append(ex.id)
+                snapshot_rows.append(self._snapshot(ex.id, pl, upd_status.status, now))
                 continue
 
             ident = identify_listing(engine, pl)
             row = listing_columns(pl, ident, catalog, self.provider, now)
             row["id"] = uuid.uuid4()
+            result.ids_by_external[pl.external_id] = row["id"]
             row["seller_id"] = seller_ids.get(pl.seller.external_id) if pl.seller else None
+            first = apply_observation(
+                StatusState(status=ListingStatus.UNKNOWN, published_at=row["published_at"]), obs
+            )
+            row.update(_lifecycle(first))
+            row["acquisition_mode"] = self.mode.value
+            row["tracked_at"] = now if self.track else None
+            row["last_checked_at"] = now
+            row["next_check_at"] = schedule(
+                status=first.status,
+                tracked_at=row["tracked_at"],
+                acquisition_mode=self.mode,
+                now=now,
+                published_at=row["published_at"],
+                favourite_count=row["favourite_count"],
+            )
             new_rows.append(row)
             result.new_ids.append(row["id"])
+            result.status_updates[row["id"]] = first
             if pl.status == ListingStatus.ACTIVE:
                 result.new_active_ids.add(row["id"])
             history_rows.append(
@@ -222,6 +416,7 @@ class IngestionService:
                     "observed_at": row["published_at"],
                 }
             )
+            snapshot_rows.append(self._snapshot(row["id"], pl, first.status, now))
             for pos, img in enumerate(pl.images[:20]):
                 new_images.append(
                     {
@@ -270,9 +465,39 @@ class IngestionService:
         if history_rows:
             await self.session.execute(pg_insert(ListingPriceHistory.__table__), history_rows)
         if updates:
-            await self.session.execute(update(Listing), sorted(updates, key=lambda u: str(u["id"])))
-            await self._apply_status_timestamps(result, now)
+            # Bulk UPDATE by primary key groups parameter sets with the same keys.
+            for group in _group_by_keys(updates):
+                await self.session.execute(update(Listing), sorted(group, key=lambda u: str(u["id"])))
+        if enrich_updates:
+            for group in _group_by_keys(enrich_updates):
+                await self.session.execute(update(Listing), sorted(group, key=lambda u: str(u["id"])))
+        if replace_images:
+            await self.session.execute(
+                delete(ListingImage).where(ListingImage.listing_id.in_(list(replace_images)))
+            )
+            rows = [img for imgs in replace_images.values() for img in imgs]
+            if rows:
+                await self.session.execute(pg_insert(ListingImage.__table__).on_conflict_do_nothing(), rows)
+        if snapshot_rows:
+            await self.session.execute(insert(ListingSnapshot.__table__), snapshot_rows)
         return result
+
+    def _snapshot(
+        self, listing_id: uuid.UUID, pl: ProviderListing, status: ListingStatus, now: datetime
+    ) -> dict[str, Any]:
+        return {
+            "listing_id": listing_id,
+            "observed_at": now,
+            "acquisition_mode": self.mode.value,
+            "capture_level": CaptureLevel(pl.capture_level).value,
+            "status": status.value,
+            "price": pl.price,
+            "currency": pl.currency,
+            "favourite_count": pl.favourite_count,
+            "view_count": pl.view_count,
+            "photo_count": len(pl.images) if pl.images else None,
+            "note": None,
+        }
 
     async def _upsert_sellers(self, sellers: list[ProviderSeller], now: datetime) -> dict[str, uuid.UUID]:
         if not sellers:
@@ -281,22 +506,33 @@ class IngestionService:
         unique = {s.external_id: s for s in sorted(sellers, key=lambda s: s.external_id)}
         rows = []
         for s in unique.values():
+            synthetic = self.provider in SYNTHETIC_PROVIDERS
             score = seller_reliability(
-                SellerProfile(s.rating, s.review_count, s.account_created_at, s.item_count, s.sold_count), now
+                SellerProfile(s.rating, s.review_count, s.account_created_at, s.item_count, s.sold_count)
+                if synthetic
+                else SellerProfile(s.rating, s.review_count),
+                now,
             )
             rows.append(
                 {
                     "id": uuid.uuid4(),
                     "provider": self.provider,
                     "external_id": s.external_id,
-                    "username": s.username,
                     "rating": s.rating,
                     "review_count": s.review_count,
-                    "account_created_at": s.account_created_at,
-                    "item_count": s.item_count,
-                    "sold_count": s.sold_count,
-                    "country": normalize_country(s.country),
-                    "last_active_at": s.last_active_at,
+                    **(
+                        {
+                            "account_created_at": s.account_created_at,
+                            "item_count": s.item_count,
+                            "sold_count": s.sold_count,
+                            "country": normalize_country(s.country),
+                            "last_active_at": s.last_active_at,
+                        }
+                        if self.provider in SYNTHETIC_PROVIDERS
+                        else dict.fromkeys(
+                            ("account_created_at", "item_count", "sold_count", "country", "last_active_at")
+                        )
+                    ),
                     "reliability_score": score.score,
                     "reliability_details": score.as_dict(),
                     "updated_at": now,
@@ -308,7 +544,6 @@ class IngestionService:
             set_={
                 c: getattr(stmt.excluded, c)
                 for c in (
-                    "username",
                     "rating",
                     "review_count",
                     "item_count",
@@ -452,16 +687,12 @@ class IngestionService:
                 row["duplicate_of_id"] = None
             batch_seen.append(row)
 
-    async def _apply_status_timestamps(self, result: IngestResult, now: datetime) -> None:
-        for listing_id, _old, new in result.status_changes:
-            values: dict[str, Any] = {"status_changed_at": now}
-            if new == ListingStatus.SOLD:
-                values["sold_at"] = now
-            elif new == ListingStatus.REMOVED:
-                values["removed_at"] = now
-            await self.session.execute(
-                update(Listing).where(and_(Listing.id == listing_id, Listing.status == new)).values(**values)
-            )
+
+def _group_by_keys(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    groups: dict[tuple[str, ...], list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        groups[tuple(sorted(r))].append(r)
+    return list(groups.values())
 
 
 @dataclass
