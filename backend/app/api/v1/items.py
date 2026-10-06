@@ -5,13 +5,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, update
 
 from app.api.deps import DB, CurrentUser
 from app.core.cache import NS_FEED, cache
 from app.core.errors import NotFoundError
+from app.core.rate_limit import RateLimit
 from app.db.models import AcquisitionAttempt, Favorite, Listing, ListingSnapshot, Opportunity
 from app.domain.enums import FavoriteState
 from app.schemas.common import Page
@@ -226,6 +227,23 @@ def image_out(img: Any) -> dict[str, Any]:
         "local_url": f"/api/v1/media/{img.id}" if local else None,
         "archive_status": getattr(img, "archive_status", None),
     }
+
+
+refresh_limit = RateLimit("item-refresh", per_minute=30)
+
+
+@router.post("/{ref}/refresh", response_model=dict[str, Any], dependencies=[Depends(refresh_limit)])
+async def refresh_now(ref: str, user: CurrentUser, db: DB) -> dict[str, Any]:
+    """ "Update now": re-read the listing with the best available mode (provider, opt-in server
+    read), or queue it for the browser extension. The result says which mode was used."""
+    from app.acquisition.service import refresh_listing
+
+    listing = await _listing(db, ref)
+    result = await refresh_listing(db, listing)
+    await db.commit()
+    if result.outcome in ("updated", "not_found"):
+        await cache.bump(NS_FEED)
+    return result.as_dict()
 
 
 @router.post("/{ref}/track", response_model=dict[str, Any])

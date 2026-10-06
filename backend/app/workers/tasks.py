@@ -444,6 +444,29 @@ async def refresh_listings(ctx: dict[str, Any]) -> dict[str, int]:
     return stats
 
 
+async def refresh_tracked_public(ctx: dict[str, Any]) -> dict[str, Any] | None:
+    """Opt-in server-side refresh: one overdue tracked Vinted listing per run (the fetcher itself
+    enforces the minimum interval, the daily cap and the circuit breaker)."""
+    from app.acquisition.service import refresh_due_public
+
+    async with session_scope() as s:
+        result = await refresh_due_public(s)
+    if result is not None and result.outcome in ("updated", "not_found"):
+        await cache.bump_throttled(NS_FEED, FEED_BUMP_EVERY_SECONDS)
+    return result.as_dict() if result else None
+
+
+async def poll_email(ctx: dict[str, Any]) -> dict[str, int] | None:
+    """Optional: read new Vinted notification emails (sold / price reduced) from the mailbox."""
+    from app.acquisition.imap_poller import poll_mailbox
+
+    async with session_scope() as s:
+        summary = await poll_mailbox(s)
+    if summary and (summary.sold or summary.price_drops):
+        await cache.bump(NS_FEED)
+    return summary.as_dict() if summary else None
+
+
 async def recompute_learning(ctx: dict[str, Any]) -> int:
     async with session_scope() as s:
         n = await recompute_all_affinities(s)

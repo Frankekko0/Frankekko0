@@ -42,6 +42,8 @@ def _functions() -> list[Any]:
         func(tasks.refresh_listings, keep_result=0, max_tries=2, timeout=600),
         func(tasks.recompute_learning, keep_result=0, max_tries=2, timeout=300),
         func(tasks.prune, keep_result=0, max_tries=1, timeout=300),
+        func(tasks.refresh_tracked_public, keep_result=0, max_tries=1, timeout=90),
+        func(tasks.poll_email, keep_result=0, max_tries=1, timeout=300),
     ]
 
 
@@ -52,7 +54,7 @@ def _scan_seconds(interval: int) -> set[int]:
 
 def _cron_jobs() -> list[Any]:
     settings = get_settings()
-    return [
+    jobs = [
         cron(
             tasks.scan_new_listings,
             second=_scan_seconds(settings.scan_interval_seconds),
@@ -65,6 +67,20 @@ def _cron_jobs() -> list[Any]:
         cron(tasks.recompute_learning, minute={7, 37}, second=20, timeout=300),
         cron(tasks.prune, hour=3, minute=17, second=0, timeout=300),
     ]
+    if settings.vinted_public_fetch_enabled:
+        jobs.append(cron(tasks.refresh_tracked_public, second=40, timeout=90, unique=True))
+    if settings.email_import_enabled:
+        every = settings.imap_poll_minutes
+        jobs.append(
+            cron(
+                tasks.poll_email,
+                minute=set(range(3, 60, every)) if every < 60 else {3},
+                second=50,
+                timeout=300,
+                unique=True,
+            )
+        )
+    return jobs
 
 
 async def _wait_for_catalog(max_wait: float = 120) -> None:

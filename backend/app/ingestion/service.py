@@ -307,7 +307,8 @@ class IngestionService:
                     ),
                     obs,
                 )
-                price_changed = pl.price != ex.price
+                was_link_only = ex.capture_level == CaptureLevel.LINK
+                price_changed = pl.price != ex.price and not was_link_only
                 if price_changed and upd_status.unchanged_checks:
                     # A price change is a change: the listing is alive, check it sooner.
                     upd_status = replace(upd_status, unchanged_checks=0)
@@ -408,14 +409,15 @@ class IngestionService:
             result.status_updates[row["id"]] = first
             if pl.status == ListingStatus.ACTIVE:
                 result.new_active_ids.add(row["id"])
-            history_rows.append(
-                {
-                    "listing_id": row["id"],
-                    "price": pl.price,
-                    "currency": pl.currency,
-                    "observed_at": row["published_at"],
-                }
-            )
+            if pl.capture_level != CaptureLevel.LINK:
+                history_rows.append(
+                    {
+                        "listing_id": row["id"],
+                        "price": pl.price,
+                        "currency": pl.currency,
+                        "observed_at": row["published_at"],
+                    }
+                )
             snapshot_rows.append(self._snapshot(row["id"], pl, first.status, now))
             for pos, img in enumerate(pl.images[:20]):
                 new_images.append(
@@ -485,13 +487,14 @@ class IngestionService:
     def _snapshot(
         self, listing_id: uuid.UUID, pl: ProviderListing, status: ListingStatus, now: datetime
     ) -> dict[str, Any]:
+        link_only = pl.capture_level == CaptureLevel.LINK
         return {
             "listing_id": listing_id,
             "observed_at": now,
             "acquisition_mode": self.mode.value,
             "capture_level": CaptureLevel(pl.capture_level).value,
-            "status": status.value,
-            "price": pl.price,
+            "status": None if link_only else status.value,
+            "price": None if link_only else pl.price,
             "currency": pl.currency,
             "favourite_count": pl.favourite_count,
             "view_count": pl.view_count,

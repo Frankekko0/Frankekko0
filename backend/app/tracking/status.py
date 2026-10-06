@@ -45,6 +45,7 @@ class Observation:
     status: ListingStatus | None = None  # None for not_found / unreachable
     price: Decimal | None = None
     provider_sold_at: datetime | None = None  # only when the source states the sale date
+    note: str | None = None  # readable context for the snapshot (e.g. "email: price reduced")
 
 
 @dataclass(frozen=True)

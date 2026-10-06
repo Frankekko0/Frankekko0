@@ -119,7 +119,7 @@ class TrackingService:
                     "favourite_count": None,
                     "view_count": None,
                     "photo_count": None,
-                    "note": upd.note[:200],
+                    "note": (obs.note or upd.note)[:200],
                 }
             )
         if snapshots:

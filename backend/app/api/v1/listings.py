@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
+from app.acquisition.identity import listing_identity
 from app.ai.nl_search import NaturalLanguageParser
 from app.api.deps import DB, CurrentUser, Economics
 from app.core.cache import NS_FEED, cache
@@ -24,7 +25,7 @@ from app.db.models import Brand, Category, Listing, ListingImage, Opportunity
 from app.domain.enums import AcquisitionMode, CaptureLevel, ListingStatus
 from app.identification.engine import ListingText
 from app.ingestion.catalog import load_catalog
-from app.ingestion.normalizer import normalize_condition, title_fingerprint
+from app.ingestion.normalizer import normalize_condition
 from app.ingestion.service import IngestionService, IngestResult, get_engine, listing_columns
 from app.marketplace.base import (
     BatchImportInput,
@@ -41,7 +42,6 @@ from app.schemas.opportunity import OpportunityCard, OpportunityFilters
 from app.scoring.seller import SellerProfile
 
 router = APIRouter(tags=["listings"])
-VINTED_ID = re.compile(r"/items/(\d+)")
 
 
 class ListingOut(BaseModel):
@@ -165,19 +165,7 @@ async def get_listing(listing_id: uuid.UUID, user: CurrentUser, db: DB) -> dict[
     }
 
 
-# Vinted's own domains only (``vinted.it.example.com`` is not Vinted).
-VINTED_TLDS = "it|fr|de|es|be|nl|lu|pt|at|pl|cz|sk|lt|co\\.uk|com|se|fi|dk|gr|hr|ro|hu|ie|si|lv|ee"
-VINTED_HOST = re.compile(rf"^https?://(?:www\.)?vinted\.(?:{VINTED_TLDS})(?::\d+)?/", re.IGNORECASE)
 SELLER_KEY = re.compile(r"[^A-Za-z0-9:_-]")
-
-
-def listing_identity(url: str) -> tuple[str, str]:
-    """``(provider, external_id)``: Vinted links map to the single ``vinted`` provider keyed by the
-    Vinted item id (the same on every Vinted domain), anything else to ``manual``."""
-    m = VINTED_ID.search(url)
-    if m and VINTED_HOST.match(url):
-        return "vinted", m.group(1)
-    return "manual", (m.group(1) if m else title_fingerprint(url)[:24])
 
 
 def _hash(value: str) -> str:

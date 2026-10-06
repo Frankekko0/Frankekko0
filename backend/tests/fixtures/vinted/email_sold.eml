@@ -1,0 +1,21 @@
+From: Vinted <no-reply@vinted.it>
+To: me@example.com
+Subject: =?utf-8?q?Un_articolo_che_ti_piace_=C3=A8_stato_venduto?=
+Message-ID: <abc123@vinted.it>
+Date: Mon, 05 Oct 2026 10:00:00 +0200
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="b1"
+
+--b1
+Content-Type: text/plain; charset=utf-8
+
+L'articolo "Felpa Ralph Lauren blu" che hai aggiunto ai preferiti =C3=A8 stato venduto.
+https://www.vinted.it/items/4242424242-felpa-ralph-lauren-blu?utm_source=email
+
+--b1
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>L'articolo che hai aggiunto ai preferiti &egrave; stato venduto.</p>
+<a href="https://www.vinted.it/items/4242424242-felpa-ralph-lauren-blu?utm_source=email&amp;utm_campaign=fav">Felpa Ralph Lauren blu</a>
+<p>18,00 &euro;</p></body></html>
+--b1--

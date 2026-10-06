@@ -753,6 +753,60 @@ export interface RiskSignal {
   verifiable: boolean;
 }
 
+export interface LinkImportResult {
+  found: number;
+  created: number;
+  existing: number;
+  items: { vinted_id: string; listing_id: Uuid; url: string }[];
+  public_fetch_enabled?: boolean;
+  message?: string;
+}
+
+export interface EmailImportResult {
+  messages: number;
+  ignored: number;
+  sold: number;
+  price_drops: number;
+  new_items: number;
+  created: number;
+}
+
+export interface RefreshResult {
+  outcome: "updated" | "unchanged" | "not_found" | "queued" | "blocked" | "error" | "closed";
+  message: string;
+  mode: AcquisitionMode | null;
+  status: ListingStatus | null;
+  retry_after: number | null;
+  needs_extension: boolean;
+}
+
+export interface AcquisitionFailure {
+  at: string;
+  mode: AcquisitionMode;
+  outcome: string;
+  message: string | null;
+  vinted_id: string | null;
+  http_status: number | null;
+}
+
+export interface AcquisitionStatus {
+  provider: { name: string; listings: number };
+  extension: { listings: number; last_sync: string | null };
+  public_fetch: {
+    enabled: boolean;
+    paused_for_seconds: number;
+    pause_reason: string | null;
+    used_today: number;
+    daily_cap: number;
+    min_interval_seconds: number;
+  };
+  email: { enabled: boolean; listings: number; last_run?: string | null; last_error?: string | null; last_summary?: EmailImportResult | null };
+  manual: Record<string, number>;
+  tracked_due_now: number;
+  parser_config_version: string;
+  recent_failures: AcquisitionFailure[];
+}
+
 export interface BatchImportInput {
   items: ManualListingInput[];
   source: "vinted_search" | "manual";

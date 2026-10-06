@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     lifecycle_stale_hours: int = 6
     algorithm_version: str = "2026.10-2"
 
+    # Vinted selectors/labels/patterns (shared with the extension). Unset: the bundled file.
+    # Point it to a mounted file to update the parser without rebuilding or republishing.
+    parser_config_path: str | None = None
+
     # --- Acquisition modes beyond the extension (all opt-in, see docs/ACQUISITION.md) --------
     # Server-side read of public Vinted item pages. Off by default: Vinted's terms forbid
     # automated collection; when enabled it honours robots.txt, never bypasses a block and stops.

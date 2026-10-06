@@ -1,0 +1,32 @@
+{
+  "vinted_id": "4242424242",
+  "url": "https://www.vinted.it/items/4242424242-felpa-ralph-lauren-blu",
+  "title": "Felpa Ralph Lauren blu",
+  "price": "18.00",
+  "currency": "EUR",
+  "brand": "Ralph Lauren",
+  "size": "M",
+  "condition": "very_good",
+  "condition_label": "Ottime",
+  "color": "Blu",
+  "material": "Cotone",
+  "category_path": [
+    "Uomo",
+    "Abbigliamento",
+    "Felpe e maglioni"
+  ],
+  "favourite_count": 17,
+  "view_count": 240,
+  "published_at": "2026-10-03T09:15:00+02:00",
+  "status": "active",
+  "buyer_protection_fee": "1.60",
+  "shipping_fee": "2.99",
+  "images": [
+    "https://images1.vinted.net/t/a/f800/1.jpeg",
+    "https://images1.vinted.net/t/a/f800/2.jpeg",
+    "https://images1.vinted.net/t/a/f800/3.jpeg"
+  ],
+  "seller_rating": "4.90",
+  "seller_review_count": 35,
+  "seller_key_from_member": "98765"
+}

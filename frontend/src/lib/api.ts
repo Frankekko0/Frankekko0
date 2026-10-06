@@ -36,11 +36,20 @@ export function buildQuery(query?: Query): string {
 
 export async function api<T>(
   path: string,
-  options: { method?: string; body?: unknown; query?: Query; signal?: AbortSignal } = {},
+  options: {
+    method?: string;
+    body?: unknown;
+    /** Raw request body (e.g. an uploaded file) sent as-is with ``contentType``. */
+    raw?: Blob | ArrayBuffer;
+    contentType?: string;
+    query?: Query;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<T> {
   const method = options.method ?? "GET";
   const headers: Record<string, string> = { Accept: "application/json" };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
+  if (options.raw !== undefined) headers["Content-Type"] = options.contentType ?? "application/octet-stream";
   if (!SAFE.has(method)) {
     const csrf = readCookie("ff_csrf");
     if (csrf) headers["X-CSRF-Token"] = csrf;
@@ -51,7 +60,7 @@ export async function api<T>(
       method,
       headers,
       credentials: "same-origin",
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      body: options.raw !== undefined ? options.raw : options.body !== undefined ? JSON.stringify(options.body) : undefined,
       signal: options.signal,
     });
   } catch (err) {

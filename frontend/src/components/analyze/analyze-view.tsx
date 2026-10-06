@@ -3,6 +3,7 @@
 import { ArrowRight, ChevronDown, CircleCheck, CircleMinus, CirclePlus, Info, PlugZap, ScanSearch, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { BookmarkletCard, PasteLinksCard } from "./acquire-cards";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { toast } from "sonner";
 import { RiskBadge, ScoreRing } from "@/components/deal/score";
@@ -60,6 +61,10 @@ function toPayload(f: ListingDraft, source: ManualListingInput["source"] = "manu
   return { body };
 }
 
+function importSource(source: string): ManualListingInput["source"] {
+  return source === "bookmarklet" ? "bookmarklet" : "extension_item";
+}
+
 /** Reads a one-click import (browser extension) from the URL fragment, once, on the client. */
 function readImport(): ImportedListing | null {
   return typeof window === "undefined" ? null : decodeImportHash(window.location.hash);
@@ -88,7 +93,7 @@ export default function AnalyzeView() {
     // Clean URL (a refresh must not re-import) without adding a history entry.
     window.history.replaceState(null, "", window.location.pathname + window.location.search);
     if (imported.missing.length) return;
-    const { body } = toPayload(imported.draft, "extension_item");
+    const { body } = toPayload(imported.draft, importSource(imported.source));
     if (body) quick.mutate(body, { onSuccess: (result) => setChecked({ result, body }), onError: (err) => toast.error(errorMessage(err)) });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot on mount
   }, []);
@@ -105,7 +110,7 @@ export default function AnalyzeView() {
 
   function submit(e: FormEvent, mode: "track" | "check") {
     e.preventDefault();
-    const { body, error } = toPayload(f, imported ? "extension_item" : "manual_form");
+    const { body, error } = toPayload(f, imported ? importSource(imported.source) : "manual_form");
     setFormError(error ?? null);
     if (!body) return;
     if (mode === "track") return track(body);
@@ -282,6 +287,8 @@ export default function AnalyzeView() {
             </Card>
           )}
           <ExtensionCard />
+          <PasteLinksCard index={5} />
+          <BookmarkletCard index={6} />
         </div>
       </div>
     </div>
@@ -391,7 +398,7 @@ function QuickResult({ data, onTrack, tracking }: { data: QuickAnalysis; onTrack
   );
 }
 
-const SOURCE_LABEL: Record<string, string> = { vinted: "Vinted" };
+const SOURCE_LABEL: Record<string, string> = { vinted: "Vinted", bookmarklet: "Vinted (bookmarklet)" };
 
 function ImportBanner({ imported }: { imported: ImportedListing }) {
   const source = SOURCE_LABEL[imported.source] ?? "your browser";

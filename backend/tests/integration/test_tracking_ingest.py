@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from sqlalchemy import func, select
 
-from app.api.v1.listings import listing_identity
+from app.acquisition.identity import listing_identity
 from app.db.models import (
     AcquisitionAttempt,
     Listing,

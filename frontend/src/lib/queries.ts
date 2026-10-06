@@ -4,18 +4,21 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { toast } from "sonner";
 import { api, errorMessage } from "./api";
 import type {
+  AcquisitionStatus,
   AiAnalysis,
   AlertItem,
   BatchImportInput,
   BatchImportResult,
   Brand,
   Category,
+  EmailImportResult,
   FavoriteState,
   Flip,
   ImportResult,
   Insights,
   Item,
   ItemFilters,
+  LinkImportResult,
   ManualListingInput,
   MarketSegment,
   NotificationSettings,
@@ -28,6 +31,7 @@ import type {
   Preferences,
   QuickAnalysis,
   QuickStats,
+  RefreshResult,
   SearchResponse,
   SegmentStats,
   SystemStatus,
@@ -371,6 +375,52 @@ export function useTrackItem() {
       toast.success(r.tracked ? "Tracking on: FlipFinder will check its status" : "Tracking off: history kept");
     },
     onError: (e) => toast.error(errorMessage(e)),
+  });
+}
+
+export function useImportLinks() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (text: string) => api<LinkImportResult>("/listings/import/links", { method: "POST", body: { text } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["items"] }),
+  });
+}
+
+export function useAcquisitionStatus() {
+  return useQuery({
+    queryKey: ["acquisition-status"],
+    queryFn: () => api<AcquisitionStatus>("/acquisition/status"),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useUploadEmails() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (files: File[]) => {
+      const total: EmailImportResult = { messages: 0, ignored: 0, sold: 0, price_drops: 0, new_items: 0, created: 0 };
+      for (const f of files) {
+        const r = await api<EmailImportResult>("/acquisition/email", { method: "POST", raw: f, contentType: "message/rfc822" });
+        for (const k of Object.keys(total) as (keyof EmailImportResult)[]) total[k] += r[k];
+      }
+      return total;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["items"] });
+      qc.invalidateQueries({ queryKey: ["acquisition-status"] });
+      qc.invalidateQueries({ queryKey: ["opportunities"] });
+    },
+  });
+}
+
+export function useRefreshItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api<RefreshResult>(`/items/${id}/refresh`, { method: "POST" }),
+    onSuccess: (_r, id) => {
+      qc.invalidateQueries({ queryKey: ["item", id] });
+      qc.invalidateQueries({ queryKey: ["items"] });
+    },
   });
 }
 
