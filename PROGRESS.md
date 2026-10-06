@@ -21,11 +21,21 @@ Aggiornato a ogni passo: **fatto**, **in corso**, **ipotesi**.
   - Pagina Analisi: sezione Decisione (motivo in 3 righe, scomposizione margine/domanda/sicurezza/venditore, min/probabile/max, margine, tempo, P(vendita), prezzo massimo, offerta, ognuno con confidenza), Autenticità (prove foto per foto con riquadro sul dettaglio), Domanda/Venditore/Prodotto (preferiti/giorno, ribassi, quota venduti per taglia e colore, stagionalità solo con 12 mesi, tracking, abitudine del venditore a ribassare, brand scritto male e categoria sbagliata come occasioni nascoste, condizione dichiarata vs foto).
   - Condizione effettiva: se le foto mostrano difetti certi/probabili peggiori del dichiarato, il prezzo si stima sulla condizione peggiore.
 
+- **Obiettivo 2 – autenticità da ogni foto** (verificato: 265 test backend; set etichettato).
+  - Ogni foto (fino a 20, URL a piena risoluzione) scaricata e controllata in locale: dimensioni, nitidezza (rapporto dettaglio piena risoluzione/miniatura, indipendente dal contenuto), luce, forma da screenshot. Le foto inutilizzabili rendono i dettagli "non verificabili", mai "coerenti".
+  - Hash percettivo di ogni foto salvato e confrontato con le foto di tutti gli altri annunci (distanza ≤ 4 bit su 64): presente presso 1–2 altri venditori = foto riciclata, presso 3+ = foto di catalogo/stock; i ripubblicati dallo stesso venditore non contano (`app/vision/provenance.py`).
+  - Analisi AI foto per foto (se configurata): foto numerate, regole del brand nel prompt, per ogni dettaglio esito/certezza/riquadro [x,y,l,a]; screenshot, filigrane, foto ritoccate o generate.
+  - Verdetto: "probabilmente autentico" solo con almeno 2 foto chiave lette con certezza e nessun segnale contrario; un difetto su un dettaglio chiave fa scattare "a rischio falso"; parole da replica pesano molto di più.
+  - Venditore: stesso articolo nuovo in più taglie (o 3+ copie) = segnale debole, mai decisivo da solo.
+  - Set di prova etichettato (`tests/fixtures/authenticity/labeled_cases.json`, 16 autentici + 16 falsi, 3 "difficili"; `python -m app.tools.auth_eval`): falsi negativi 0/16, falsi positivi 0/16, falsi segnalati "a rischio" 15/16; l'unico mancato (falso perfetto senza difetti visibili) resta "incerto", mai "autentico".
+
 ## In corso
-- Obiettivo 2: autenticità da ogni foto.
+- Obiettivo 3: estensione veloce.
 
 ## Ipotesi
 - Le misure di errore sono sul mercato simulato (nel DB c'è 1 sola vendita reale): sulle tue vendite reali la calibrazione si attiva da sola dopo 30 vendite osservate; le tue rivendite pesano 5 volte.
+- Il set di prova autenticità è fatto di scenari (esiti dell'analisi foto + prezzo + venditore), non di foto reali: misura le regole di decisione; la qualità della lettura delle foto dipende dal modello AI configurato.
+- Soglie foto: nitidezza 0,30 tarata su immagini sintetiche (nitide ≥ 0,35, sfocate ≤ 0,28); hash ≤ 4 bit = stessa foto.
 - Tempo di risposta del venditore: Vinted non lo mostra nella pagina articolo, quindi è "non disponibile" (non stimato).
 - Prezzo di listino e periodo di uscita: nessuna fonte pubblica affidabile; mostrato solo il prezzo originale dichiarato dal venditore nel testo.
 - La pagina "salvata" del test è costruita sulla struttura nota di Vinted (non ho una tua pagina reale): se ne salvi una (Ctrl+S) in `backend/tests/fixtures/vinted/real/`, va aggiunta ai test.

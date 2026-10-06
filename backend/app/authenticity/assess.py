@@ -2,8 +2,8 @@
 
 The outcome is one of four verdicts, always with a confidence and never "100% authentic":
 
-* ``probably_authentic`` - key photos (label, codes, logo...) were checked and are consistent,
-  nothing points the other way;
+* ``probably_authentic`` - key photos (label, codes, logo...) were read clearly and are
+  consistent (at least two of them with certainty), nothing points the other way;
 * ``uncertain`` - mixed or weak evidence;
 * ``counterfeit_risk`` - concrete red flags (photos, text, price far below the market, seller
   patterns typical of fakes);
@@ -82,6 +82,8 @@ class AuthInput:
     seller_account_age_days: int | None = None
     seller_multi_size_same_item: bool = False
     photos_reused_by_other_seller: bool = False
+    reused_photos: list[int] = field(default_factory=list)  # which photos (when known)
+    catalog_photos: list[int] = field(default_factory=list)
     stock_or_catalog_photos: int = 0
     screenshots: int = 0
     foreign_watermarks: int = 0
@@ -195,10 +197,22 @@ def assess(inp: AuthInput, rules: dict[str, Any] | None = None) -> AuthAssessmen
         )
 
     # ---- photo provenance -------------------------------------------------------------------
-    if inp.photos_reused_by_other_seller:
-        add("-", "Foto identiche in un annuncio di un altro venditore (foto riciclate)", lr["reused_photos"])
-    if inp.stock_or_catalog_photos:
-        add("-", "Foto da catalogo o di stock, non dell'articolo reale", lr["stock_photos"])
+    if inp.photos_reused_by_other_seller or inp.reused_photos:
+        first = inp.reused_photos[0] if inp.reused_photos else None
+        add(
+            "-",
+            f"{_where(first)}foto identica in un annuncio di un altro venditore (foto riciclata)",
+            lr["reused_photos"],
+            first,
+        )
+    if inp.stock_or_catalog_photos or inp.catalog_photos:
+        first = inp.catalog_photos[0] if inp.catalog_photos else None
+        add(
+            "-",
+            f"{_where(first)}foto da catalogo o di stock, non dell'articolo reale",
+            lr["stock_photos"],
+            first,
+        )
     if inp.screenshots:
         add("-", "Screenshot al posto di foto dell'articolo", lr["screenshot"])
     if inp.foreign_watermarks:
@@ -210,6 +224,7 @@ def assess(inp: AuthInput, rules: dict[str, Any] | None = None) -> AuthAssessmen
     usable = {q.photo for q in inp.quality if q.usable}
     unusable = {q.photo: q.reason for q in inp.quality if not q.usable}
     verified_kinds: set[str] = set()
+    certain_kinds: set[str] = set()
     positive = 0.0
     for f in inp.findings:
         if f.photo in unusable or f.verdict == "unreadable" or f.certainty == "unverifiable":
@@ -229,6 +244,8 @@ def assess(inp: AuthInput, rules: dict[str, Any] | None = None) -> AuthAssessmen
             add("-", f"{_where(f.photo)}{f.detail or KIND_LABELS.get(f.kind, f.kind)}", ratio, f.photo, f.box)
         elif f.verdict == "consistent":
             verified_kinds.add(f.kind)
+            if f.certainty == "certain":
+                certain_kinds.add(f.kind)
             ratio = (
                 lr["photo_consistent_certain"]
                 if f.certainty == "certain"
@@ -246,6 +263,16 @@ def assess(inp: AuthInput, rules: dict[str, Any] | None = None) -> AuthAssessmen
                 )
             )
 
+    # Unusable photos with nothing read on them: say which ones and why (to ask for new ones).
+    referenced = {f.photo for f in inp.findings}
+    for photo, reason in sorted(unusable.items()):
+        if photo not in referenced:
+            ev.append(
+                Evidence(
+                    "?", f"{_where(photo)}{reason or 'non leggibile'}, dettagli non verificabili", 0.0, photo
+                )
+            )
+
     # ---- coverage of the key photos ---------------------------------------------------------
     key = r["key_photos"]
     missing = [k for k in key if k not in verified_kinds]
@@ -256,7 +283,21 @@ def assess(inp: AuthInput, rules: dict[str, Any] | None = None) -> AuthAssessmen
     )
     strong_negative = any(e.direction == "-" and e.weight <= math.log(0.5) for e in ev)
 
-    if p < 0.5 and strong_negative:
+    # A flaw seen on a key detail (label, code, logo...) is direct evidence: certain -> at risk;
+    # probable -> at risk unless the rest of the evidence is clearly favourable.
+    key_concerns = [
+        f
+        for f in inp.findings
+        if f.verdict == "concern"
+        and f.kind in key
+        and f.photo not in unusable
+        and f.certainty != "unverifiable"
+    ]
+    if (
+        (p < 0.5 and strong_negative)
+        or any(f.certainty == "certain" for f in key_concerns)
+        or (key_concerns and p < 0.7)
+    ):
         verdict = "counterfeit_risk"
     elif (
         not inp.photos_analyzed
@@ -264,7 +305,12 @@ def assess(inp: AuthInput, rules: dict[str, Any] | None = None) -> AuthAssessmen
         or (usable == set() and inp.quality)
     ):
         verdict = "not_verifiable"
-    elif p >= 0.85 and negatives == 0:
+    elif (
+        p >= 0.85
+        and negatives == 0
+        and len(certain_kinds & set(key)) >= min(int(r.get("min_certain_key_photos", 2)), len(key))
+    ):
+        # Only details read clearly on the key photos count as proof: a good fake "looks" right.
         verdict = "probably_authentic"
     else:
         verdict = "uncertain"
@@ -352,7 +398,11 @@ def photo_evidence(vision: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "findings": findings,
         "quality": quality,
-        "stock_or_catalog_photos": int(prov.get("stock_or_catalog", 0) or 0),
+        "stock_or_catalog_photos": max(
+            int(prov.get("stock_or_catalog", 0) or 0), len(prov.get("catalog_photos") or [])
+        ),
+        "reused_photos": [int(i) for i in prov.get("reused_photos") or []],
+        "catalog_photos": [int(i) for i in prov.get("catalog_photos") or []],
         "screenshots": int(prov.get("screenshots", 0) or 0),
         "foreign_watermarks": int(prov.get("foreign_watermarks", 0) or 0),
         "edited_or_generated": int(prov.get("edited_or_generated", 0) or 0),

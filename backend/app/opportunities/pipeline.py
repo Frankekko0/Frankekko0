@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ from app.db.models import (
 )
 from app.domain.enums import AcquisitionMode, CaptureLevel, ListingStatus
 from app.ingestion.catalog import Catalog, load_catalog
+from app.ingestion.normalizer import title_tokens
 from app.opportunities.engine import (
     SAME_ITEM_ANOMALY,
     AnalysisResult,
@@ -104,6 +106,15 @@ class AnalysisOutcome:
     previous_price: Decimal | None
     result: AnalysisResult
     listing: Listing | None = None
+
+
+_SIZE_TOKEN = re.compile(r"^(?:x{0,4}[sl]|xx+|[2-5]\d)$")
+NEW_CONDITIONS = ("new_with_tags", "new_without_tags")
+
+
+def item_key(title: str) -> str:
+    """The title without size words: the same item listed in several sizes shares it."""
+    return " ".join(sorted({t for t in title_tokens(title) if not _SIZE_TOKEN.match(t)}))
 
 
 def profile_from_row(row: Any, catalog: Catalog) -> ItemProfile:
@@ -318,7 +329,13 @@ class AnalysisPipeline:
             return {}
         rows = (
             await self.session.execute(
-                select(Listing.seller_id, Listing.title_fingerprint, Listing.brand_id).where(
+                select(
+                    Listing.seller_id,
+                    Listing.title,
+                    Listing.brand_id,
+                    Listing.size_normalized,
+                    Listing.condition,
+                ).where(
                     Listing.seller_id.in_(set(seller_ids)),
                     Listing.status == ListingStatus.ACTIVE,
                     Listing.first_seen_at >= now - timedelta(days=30),
@@ -331,10 +348,18 @@ class AnalysisPipeline:
         out: dict[uuid.UUID, tuple[str, ...]] = {}
         for seller_id, items in by_seller.items():
             anomalies: list[str] = []
-            fps: dict[str | None, int] = {}
+            same: dict[str, list[Any]] = {}
             for r in items:
-                fps[r.title_fingerprint] = fps.get(r.title_fingerprint, 0) + 1
-            if any(n >= 3 for fp, n in fps.items() if fp):
+                same.setdefault(item_key(r.title), []).append(r)
+            if any(
+                len(group) >= 3
+                or (
+                    len({g.size_normalized for g in group if g.size_normalized}) >= 2
+                    and all(g.condition in NEW_CONDITIONS for g in group)
+                )
+                for key, group in same.items()
+                if key
+            ):
                 anomalies.append(SAME_ITEM_ANOMALY)
             risky = sum(
                 1

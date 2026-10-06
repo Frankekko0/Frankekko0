@@ -42,7 +42,7 @@ from app.scoring.signals import Signal, SignalInput, build_signals, description_
 PRICING_COMPARABLES = 60
 # On-sale listings kept next to enough sold ones: reference only (see ``estimate_market_value``).
 REFERENCE_ASKS = 20
-SAME_ITEM_ANOMALY = "Molti annunci identici dello stesso venditore"
+SAME_ITEM_ANOMALY = "Lo stesso articolo in più copie o in più taglie dallo stesso venditore"
 # Below this many direct comparables the estimate is labelled "indicative".
 LIMITED_BELOW = 8
 

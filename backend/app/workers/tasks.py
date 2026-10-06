@@ -264,12 +264,8 @@ async def analyze_batch(
                 r = outcome.result
                 has_remote_photos = any(i.url.startswith("https://") for i in listing.images)
                 vision_done = bool((listing.identification or {}).get("vision"))
-                if (
-                    r.flip.score >= VISION_MIN_FLIP
-                    and has_remote_photos
-                    and not vision_done
-                    and not after_vision
-                ):
+                worth_checking = r.flip.score >= VISION_MIN_FLIP or (r.risk_adjusted_profit or 0) > 0
+                if worth_checking and has_remote_photos and not vision_done and not after_vision:
                     follow_ups.append(("vision_task", str(listing.id)))
                 if settings.ai_api_key and r.flip.score >= settings.ai_auto_analyze_min_flip_score:
                     follow_ups.append(("ai_analyze_task", str(outcome.opportunity_id)))

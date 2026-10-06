@@ -13,12 +13,14 @@ from sqlalchemy.orm import selectinload
 from app.ai.claude_analyst import ClaudeDealAnalyst
 from app.ai.deal_analyst import DealAnalysis, DealContext, RuleBasedDealAnalyst, ScenarioSummary
 from app.ai.llm import get_llm
+from app.authenticity.assess import brand_rules
 from app.core.logging import get_logger
 from app.db.models import Listing, Opportunity
 from app.identification.engine import ListingText
 from app.ingestion.catalog import load_catalog
 from app.ingestion.service import get_engine
 from app.vision.analyzer import get_image_analyzer
+from app.vision.provenance import photo_provenance
 
 log = get_logger(__name__)
 
@@ -99,15 +101,29 @@ async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
     llm = get_llm()
     analyzer = get_image_analyzer(llm)
     catalog = await load_catalog(db)
+    images = sorted(listing.images, key=lambda i: i.position)
+    brand_slug = catalog.brand_slug(listing.brand_id)
     vision = await analyzer.analyze(
-        [i.url for i in listing.images],
-        [i.phash for i in listing.images],
+        [i.url for i in images],
+        [i.phash for i in images],
         {
             "title": listing.title,
             "brand": listing.brand_raw,
             "category_slugs": sorted(catalog.categories_by_slug),
+            "brand_rules": brand_rules(brand_slug) if brand_slug else None,
         },
     )
+    # Keep each photo's hash (later listings are compared with it) and look for the same photos
+    # in other sellers' listings.
+    for img, h in zip(images, vision.photo_hashes, strict=False):
+        if h and img.phash != h:
+            img.phash = h
+    prov = await photo_provenance(
+        db, listing.id, listing.seller_id, listing.duplicate_of_id or listing.id, vision.photo_hashes
+    )
+    vision.provenance.reused_photos = prov.reused_photos
+    vision.provenance.catalog_photos = prov.catalog_photos
+    vision.provenance.stock_or_catalog = max(vision.provenance.stock_or_catalog, len(prov.catalog_photos))
     ident_before = dict(listing.identification or {})
     engine = get_engine(catalog.taxonomy)
     result = engine.identify(
@@ -126,7 +142,7 @@ async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
     )
     new_ident = result.as_dict()
     new_ident["vision"] = vision.model_dump(mode="json")
-    if ident_before.get("photos_reused_by_other_seller"):
+    if ident_before.get("photos_reused_by_other_seller") or prov.reused_photos:
         new_ident["photos_reused_by_other_seller"] = True
     listing.identification = new_ident
     listing.identification_confidence = result.confidence
@@ -136,6 +152,12 @@ async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
         listing.model_name = result.model.value[:120]
     if result.category.value and listing.category_id is None:
         listing.category_id = catalog.category_id(result.category.value)
-    changed = vision.analyzer != "heuristic" or ident_before.get("confidence") != result.confidence
+    old_vision = ident_before.get("vision") or {}
+    changed = (
+        vision.analyzer != "heuristic"
+        or ident_before.get("confidence") != result.confidence
+        or old_vision.get("photo_checks") != new_ident["vision"].get("photo_checks")
+        or old_vision.get("provenance") != new_ident["vision"].get("provenance")
+    )
     log.info("vision.analyzed", listing_id=str(listing.id), analyzer=vision.analyzer, changed=changed)
     return changed
