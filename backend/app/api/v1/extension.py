@@ -17,6 +17,7 @@ from sqlalchemy import func, select, update
 
 from app.acquisition.evaluations import quick_evaluations
 from app.acquisition.identity import listing_identity
+from app.acquisition.market_cache import build_market_cache
 from app.acquisition.service import import_links
 from app.acquisition.vinted_parser import config_json, load_config
 from app.api.deps import DB, CaptureEconomics, CaptureUser, CurrentUser
@@ -30,6 +31,7 @@ from app.core.rate_limit import RateLimit
 from app.core.security import hash_api_key, new_api_key
 from app.db.models import ApiKey, Listing, Opportunity, SystemState
 from app.domain.enums import OPEN_STATUSES, AcquisitionMode, CaptureLevel, StatusEvidence
+from app.ingestion.catalog import load_catalog
 from app.media.archive import schedule_archive
 from app.schemas.extension import (
     ApiKeyCreated,
@@ -122,6 +124,18 @@ async def ping(user: CaptureUser) -> dict[str, Any]:
             else None,
         },
     }
+
+
+@router.get("/extension/market-cache", response_model=dict[str, Any])
+async def market_cache(
+    user: CaptureUser, econ: CaptureEconomics, db: DB, response: Response
+) -> dict[str, Any]:
+    """Market summary for the instant verdict on search pages (scored in the extension)."""
+    response.headers["Cache-Control"] = "private, max-age=600"
+    catalog = await load_catalog(db)
+    return await cache.get_or_set(
+        NS_FEED, ("market-cache", str(user.id)), 900, lambda: build_market_cache(db, catalog, econ)
+    )
 
 
 @router.get("/extension/parser-config", response_model=dict[str, Any])

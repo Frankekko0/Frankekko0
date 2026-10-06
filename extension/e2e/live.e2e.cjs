@@ -119,7 +119,10 @@ const SVG = (n) => `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="
   assert.ok(offline.pending > 0, "captures wait in the queue while FlipFinder is unreachable");
   const cookieless = await page.evaluate(() => document.cookie);
   await sw.evaluate(async ({ app }) => chrome.storage.sync.set({ options: { appUrl: app } }), { app: APP });
-  await page.waitForFunction(() => [...document.querySelectorAll("ff-badge")].filter((b) => !b.shadowRoot.querySelector(".dot")).length >= 8, null, { timeout: 30000 });
+  // Badges show the instant verdict at once (estimate, or "dati insuff." without the market
+  // summary): wait for the sync itself, then for the full analysis on the badges.
+  for (let i = 0; i < 60 && (await sw.evaluate(async () => (await chrome.storage.session.get("sync")).sync.state)) !== "ok"; i += 1) await page.waitForTimeout(500);
+  await page.waitForFunction(() => [...document.querySelectorAll("ff-badge")].filter((b) => /\d+ ·/.test(b.shadowRoot.querySelector(".b").textContent)).length >= 8, null, { timeout: 30000 });
   const synced = await sw.evaluate(async () => (await chrome.storage.session.get("sync")).sync);
   log("after fixing the address:", synced.state, "pending", synced.pending);
   assert.equal(synced.state, "ok");
@@ -160,7 +163,7 @@ const SVG = (n) => `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="
   await deepBadge.locator(".b").click();
   await deepBadge.locator('button[data-act="deep"]').click();
   await page.waitForTimeout(6000);
-  const deepEval = await sw.evaluate(async (vid) => ((await chrome.storage.session.get("evals")).evals || {})[vid], deepVid);
+  const deepEval = await sw.evaluate(async (vid) => ((await chrome.storage.local.get("evalCache")).evalCache || {})[vid] || (self.evalMem || {})[vid], deepVid);
   log("deep read requests:", JSON.stringify(reads), "→ depth:", deepEval && deepEval.analysis_depth);
   assert.equal(reads.length, 1, "exactly one page read, on command");
   assert.equal(deepEval.analysis_depth, "full");

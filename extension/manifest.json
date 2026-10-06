@@ -64,9 +64,10 @@
         "src/parser-config.js",
         "src/parse.js",
         "src/core.js",
+        "src/quick.js",
         "src/content.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     }
   ],
   "options_ui": {

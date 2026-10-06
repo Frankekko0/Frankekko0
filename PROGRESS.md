@@ -29,13 +29,22 @@ Aggiornato a ogni passo: **fatto**, **in corso**, **ipotesi**.
   - Venditore: stesso articolo nuovo in più taglie (o 3+ copie) = segnale debole, mai decisivo da solo.
   - Set di prova etichettato (`tests/fixtures/authenticity/labeled_cases.json`, 16 autentici + 16 falsi, 3 "difficili"; `python -m app.tools.auth_eval`): falsi negativi 0/16, falsi positivi 0/16, falsi segnalati "a rischio" 15/16; l'unico mancato (falso perfetto senza difetti visibili) resta "incerto", mai "autentico".
 
+- **Obiettivo 3 – estensione veloce** (verificato: `extension/e2e/speed.e2e.cjs` in Chromium con l'estensione vera su pagina da 96 articoli e 1 MB; 28 test JS; e2e completo ancora verde).
+  - Primo tempo, verdetto rapido: il server prepara un riepilogo di mercato (`/extension/market-cache`, 12 KB: prezzi dei venduti per brand×categoria, quota venduta in 30 gg, tempi, i tuoi costi, regole antifalso), il service worker lo scarica ogni 3 h e lo salva; la pagina lo legge dallo storage mentre si carica e valuta tutte le schede in locale (`src/quick.js`, stesse formule del server, verificate con valori del calcolatore Python). La migliore (profitto corretto per il rischio più alto e positivo) è evidenziata con bordo verde e un riquadro "Migliore della pagina" con profitto atteso e motivo; clic = scorre alla scheda.
+  - Secondo tempo, in background: tutte le schede vanno al server a blocchi (analisi completa con i tuoi costi), che sostituisce le stime; foto in background per le opportunità.
+  - Cache per ID: valutazioni del server conservate 12 h (anche dopo riavvio del browser), in memoria nel service worker; sessioni del pannello in memoria con salvataggio differito (prima ogni scheda riscriveva tutto e la pagina aspettava).
+  - Misure: migliore evidenziata 17–53 ms dopo che il browser ha letto la pagina (78–93 ms con CPU 4× più lenta, 24–26 ms con FlipFinder spento); lavoro dell'estensione con badge a blocchi senza bloccare; nessun task lungo durante lo scorrimento. Dalla navigazione 0,56–1,4 s su questa macchina: è il caricamento della pagina stessa (server e browser sulla stessa CPU).
+  - Offline: nessun blocco, verdetto dal riepilogo salvato; la coda si svuota quando FlipFinder torna raggiungibile. Selettori sempre nel modulo aggiornabile (`vinted_parser.json` → `parser-config.js`, aggiornato dal server).
+
 ## In corso
-- Obiettivo 3: estensione veloce.
+- Obiettivo 4: via i demo, produzione.
 
 ## Ipotesi
 - Le misure di errore sono sul mercato simulato (nel DB c'è 1 sola vendita reale): sulle tue vendite reali la calibrazione si attiva da sola dopo 30 vendite osservate; le tue rivendite pesano 5 volte.
 - Il set di prova autenticità è fatto di scenari (esiti dell'analisi foto + prezzo + venditore), non di foto reali: misura le regole di decisione; la qualità della lettura delle foto dipende dal modello AI configurato.
 - Soglie foto: nitidezza 0,30 tarata su immagini sintetiche (nitide ≥ 0,35, sfocate ≤ 0,28); hash ≤ 4 bit = stessa foto.
+- Velocità su Vinted reale non misurabile da qui (nessun accesso): la pagina di prova riproduce struttura e peso di una ricerca da 96 articoli; il tempo dell'estensione dopo la lettura della pagina non dipende da Vinted.
+- Verdetto rapido: categoria riconosciuta dal titolo con le parole chiave della tassonomia; se la categoria non ha abbastanza vendite si usa il brand intero (confidenza ridotta); senza dati "dati insuff.".
 - Tempo di risposta del venditore: Vinted non lo mostra nella pagina articolo, quindi è "non disponibile" (non stimato).
 - Prezzo di listino e periodo di uscita: nessuna fonte pubblica affidabile; mostrato solo il prezzo originale dichiarato dal venditore nel testo.
 - La pagina "salvata" del test è costruita sulla struttura nota di Vinted (non ho una tua pagina reale): se ne salvi una (Ctrl+S) in `backend/tests/fixtures/vinted/real/`, va aggiunta ai test.

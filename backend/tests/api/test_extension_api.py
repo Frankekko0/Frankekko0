@@ -173,3 +173,24 @@ async def test_slow_refresh_queue_and_results(auth_client: httpx.AsyncClient, ma
     detail = (await auth_client.get(f"{API}/items/9302")).json()
     assert detail["tracking"]["check_failures"] == 1
     assert detail["attempts"][0]["outcome"] == "blocked"
+
+
+async def test_market_summary_for_the_instant_verdict(auth_client: httpx.AsyncClient, make_listing) -> None:
+    await seed_deal(make_listing)  # a market of sold and on-sale Ralph Lauren polos
+    headers = await _paired(auth_client)
+    m = (await auth_client.get(f"{API}/extension/market-cache", headers=headers)).json()
+    assert m["version"] and m["costs"]["shipping_in"] > 0
+    median, p10, p90, n_sold, p_sale, days = m["segments"]["ralph-lauren|polo-shirts"]
+    assert days is None or days > 0
+    assert n_sold >= m["min_sold"] and p10 <= median <= p90
+    assert p_sale is None or 0 < p_sale < 1
+    assert all(seg[3] >= m["min_sold"] for seg in m["segments"].values())  # thin segments left out
+    brands = {b[0]: b for b in m["brands"]}
+    assert "ralph lauren" in brands["ralph-lauren"][2]
+    assert any(c[0] == "polo-shirts" for c in m["categories"])
+    # Costs are the user's own: changing them changes the summary.
+    prefs = (await auth_client.get(f"{API}/settings/preferences")).json()
+    prefs["cost_profile"]["shipping_in"] = 7.5
+    assert (await auth_client.put(f"{API}/settings/preferences", json=prefs)).status_code == 200
+    again = (await auth_client.get(f"{API}/extension/market-cache", headers=headers)).json()
+    assert again["costs"]["shipping_in"] == 7.5 and again["version"] != m["version"]

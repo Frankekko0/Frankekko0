@@ -11,10 +11,11 @@
  *  - Per-tab browsing sessions feed the live panel.
  */
 "use strict";
-importScripts("parser-config.js", "parse.js", "core.js");
+importScripts("parser-config.js", "parse.js", "core.js", "quick.js");
 
 const P = globalThis.FlipFinderParse;
 const K = globalThis.FlipFinderCore;
+const Q = globalThis.FlipFinderQuick;
 const VERSION = chrome.runtime.getManifest().version;
 const local = chrome.storage.local;
 const sessionStore = chrome.storage.session;
@@ -139,11 +140,32 @@ async function api(path, { method = "GET", body, appUrl, key } = {}) {
 }
 
 // ------------------------------------------------------------------ evaluations cache
+// Server evaluations by Vinted ID, kept across browser restarts (12 h) so a page opened again
+// shows them at once. Mirrored in memory: reading 3000 entries from storage on every page
+// would cost more than the whole instant verdict.
 const EVAL_CACHE_MAX = 3000;
+const EVAL_TTL_MS = 12 * 3600 * 1000;
+let evalMem = null;
+
+async function evalStore() {
+  if (!evalMem) {
+    const { evalCache = {} } = await local.get("evalCache");
+    evalMem = evalCache;
+  }
+  return evalMem;
+}
+
+const persistEvals = (() => {
+  let t = 0;
+  return () => {
+    clearTimeout(t);
+    t = setTimeout(() => local.set({ evalCache: evalMem }).catch(() => {}), 1500);
+  };
+})();
 
 async function cacheEvaluations(evals) {
   if (!evals.length) return;
-  const { evals: cache = {} } = await sessionStore.get("evals");
+  const cache = await evalStore();
   const now = Date.now();
   for (const ev of evals) cache[ev.vinted_id] = { ...ev, cachedAt: now };
   const ids = Object.keys(cache);
@@ -151,12 +173,32 @@ async function cacheEvaluations(evals) {
     ids.sort((a, b) => cache[a].cachedAt - cache[b].cachedAt);
     for (const id of ids.slice(0, ids.length - EVAL_CACHE_MAX)) delete cache[id];
   }
-  await sessionStore.set({ evals: cache });
+  persistEvals();
 }
 
 async function cachedEvaluations(vids) {
-  const { evals: cache = {} } = await sessionStore.get("evals");
-  return vids.map((v) => cache[v]).filter(Boolean);
+  const cache = await evalStore();
+  const fresh = Date.now() - EVAL_TTL_MS;
+  return vids.map((v) => cache[v]).filter((e) => e && e.cachedAt >= fresh);
+}
+
+// ------------------------------------------------------------------ market summary (instant verdict)
+// Downloaded here, read and used by the pages themselves (stored in chrome.storage.local).
+let marketVersion = null;
+
+async function updateMarketCache() {
+  if (!(await getKey())) return;
+  try {
+    const raw = await api("/extension/market-cache");
+    if (!Q.compileMarket(raw)) return; // refuse a summary that cannot be used
+    if (!marketVersion) marketVersion = ((await local.get("marketCache")).marketCache || {}).version || null;
+    if (marketVersion !== raw.version) {
+      marketVersion = raw.version;
+      await local.set({ marketCache: raw });
+    }
+  } catch (err) {
+    await logError("mercato", `Riepilogo di mercato non aggiornato: ${err.message}`);
+  }
 }
 
 // ------------------------------------------------------------------ browsing sessions (live panel)
@@ -176,17 +218,33 @@ function emptySession(key, pageType) {
   return { key, pageType, startedAt: Date.now(), locked: false, seen: 0, saved: 0, bestMargin: null, alerted: [], deepAsked: [], evals: {} };
 }
 
+// Kept in memory and saved shortly after each change: rewriting every session (up to 1500
+// evaluations per tab) on each card or page view kept the service worker busy while a page
+// waited for its instant verdict.
+let sessionsMem = null;
+
 async function loadSessions() {
-  const { sessions = {} } = await sessionStore.get("sessions");
-  return sessions;
+  if (!sessionsMem) {
+    const { sessions = {} } = await sessionStore.get("sessions");
+    sessionsMem = sessions;
+  }
+  return sessionsMem;
 }
+
+const persistSessions = (() => {
+  let t = 0;
+  return () => {
+    clearTimeout(t);
+    t = setTimeout(() => sessionStore.set({ sessions: sessionsMem }).catch(() => {}), 1000);
+  };
+})();
 
 async function withSession(tabId, fn) {
   return exclusive(async () => {
     const sessions = await loadSessions();
     const s = sessions[tabId];
     const out = await fn(s, sessions);
-    await sessionStore.set({ sessions });
+    persistSessions();
     return out;
   });
 }
@@ -584,16 +642,18 @@ const HANDLERS = {
   async "ff:hello"(msg, sender) {
     const tabId = sender.tab && sender.tab.id;
     if (typeof tabId === "number") {
-      await exclusive(async () => {
+      // Bookkeeping for the live panel, without making the page wait for it.
+      exclusive(async () => {
         const tabs = await registeredTabs();
         tabs[tabId] = { pageType: msg.pageType, url: String(msg.url || "").slice(0, 300), at: Date.now() };
         await sessionStore.set({ tabs });
-      });
-      await touchSession(tabId, msg.url, msg.pageType, 0);
-      sendToPanel({ type: "ff:tab-update", tabId });
+      })
+        .then(() => touchSession(tabId, msg.url, msg.pageType, 0))
+        .then(() => sendToPanel({ type: "ff:tab-update", tabId }))
+        .catch(() => {});
     }
-    const { parserConfig } = await local.get("parserConfig");
-    return { options: await getOptions(), paired: Boolean(await getKey()), parserConfig: parserConfig || null, tabId };
+    const [{ parserConfig }, options, key] = await Promise.all([local.get("parserConfig"), getOptions(), getKey()]);
+    return { options, paired: Boolean(key), parserConfig: parserConfig || null, tabId };
   },
 
   async "ff:cards"(msg, sender) {
@@ -694,9 +754,10 @@ const HANDLERS = {
       const res = await api("/extension/ping", { appUrl, key });
       const { options } = await chrome.storage.sync.get("options");
       await chrome.storage.sync.set({ options: { ...(options || {}), appUrl } });
-      await local.set({ apiKey: key, account: res.account || null });
+      await local.set({ apiKey: key, account: res.account || null, paired: true });
       await setSync({ state: "ok", message: "" });
       updateParserConfig();
+      updateMarketCache();
       scheduleFlush(0);
       return { ok: true, account: res.account, parserVersion: res.parser_version };
     } catch (err) {
@@ -705,7 +766,10 @@ const HANDLERS = {
   },
 
   async "ff:unpair"() {
-    await local.remove(["apiKey", "account"]);
+    // The market summary and evaluations belong to that account (its costs): dropped too.
+    await local.remove(["apiKey", "account", "paired", "marketCache", "evalCache"]);
+    marketVersion = null;
+    evalMem = null;
     await setSync({ state: "unpaired" });
     return { ok: true };
   },
@@ -776,21 +840,31 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   else if (alarm.name === "ff-deep") deepPump().catch((e) => logError("deep", e.message));
   else if (alarm.name === "ff-refresh") pollRefreshQueue();
   else if (alarm.name === "ff-config") updateParserConfig();
+  else if (alarm.name === "ff-market") updateMarketCache();
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "sync" && changes.options) scheduleFlush(0);
+  if (area === "local" && changes.apiKey) {
+    // Pages only see whether the extension is paired, never the key.
+    local.set({ paired: Boolean(changes.apiKey.newValue) });
+    if (changes.apiKey.newValue) updateMarketCache();
+  }
 });
 
 async function startup() {
   chrome.alarms.create("ff-config", { periodInMinutes: 360, delayInMinutes: 1 });
+  chrome.alarms.create("ff-market", { periodInMinutes: 180, delayInMinutes: 180 });
   chrome.alarms.create("ff-refresh", { periodInMinutes: 10, delayInMinutes: 2 });
   if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
   const key = await getKey();
+  // Pages read this flag (never the key) to know whether to score their cards.
+  if (Boolean(key) !== Boolean((await local.get("paired")).paired)) await local.set({ paired: Boolean(key) });
   const q = await loadQueue();
   paintBadge(key ? { ...(await getSync()), pending: K.queueSize(q) } : { state: "unpaired" });
   if (key) {
     updateParserConfig();
+    updateMarketCache();
     scheduleFlush(500);
     scheduleDeep(2000);
   }

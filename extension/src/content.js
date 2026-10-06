@@ -16,12 +16,16 @@
 
   const P = globalThis.FlipFinderParse;
   const K = globalThis.FlipFinderCore;
+  const Q = globalThis.FlipFinderQuick;
+  let market = null; // compiled market summary (downloaded by the service worker)
   let C = P.compileConfig(globalThis.FF_PARSER_CONFIG);
   let opts = K.normalizeOptions({});
   let paired = false;
 
   const text = (el) => (el ? (el.textContent || "").replace(/\s+/g, " ").trim() : "");
   const send = (msg) => chrome.runtime.sendMessage(msg).catch(() => null);
+  // Timing marks (visible in DevTools > Performance): where the instant verdict spends its time.
+  const mark = (name) => performance.mark(`ff:${name}`);
   const idle = (fn) => (window.requestIdleCallback ? requestIdleCallback(fn, { timeout: 800 }) : setTimeout(fn, 50));
 
   function debounce(fn, ms) {
@@ -43,7 +47,9 @@
   // ------------------------------------------------------------------ state
   let pageType = P.pageType(location.pathname, C);
   let lastHref = location.href;
-  const evals = new Map(); // vid -> evaluation
+  const evals = new Map(); // vid -> evaluation from FlipFinder (full analysis, your costs)
+  const quick = new Map(); // vid -> instant verdict from the service worker (local estimate or cached evaluation)
+  const verdict = (vid) => evals.get(vid) || quick.get(vid);
   const cards = new Map(); // vid -> { root, captured, badge }
   const registered = new WeakSet();
   const pendingCards = new Map(); // vid -> payload (to send)
@@ -215,9 +221,13 @@
     }
     if (!opts.captureCards) return;
     pendingCards.set(vid, payload);
-    drawBadge(vid, null);
+    if (!verdict(vid)) drawBadge(vid, null);
+    card.quicked = false; // read late (lazy content): instant verdict now
+    quickSoon();
     flushCards();
   }
+
+  const quickSoon = debounce(() => quickPass(), 80);
 
   const flushCards = debounce(() => {
     if (!pendingCards.size) return;
@@ -225,7 +235,176 @@
     for (const [vid] of batch) pendingCards.delete(vid);
     send({ type: "ff:cards", pageType: pageType === "item" ? "other" : pageType, pageUrl: location.href, cards: batch.map(([vid, payload]) => ({ vid, payload })) });
     if (pendingCards.size) flushCards();
-  }, 700);
+  }, 300);
+
+  // ------------------------------------------------------------------ instant verdict
+  // Every card of the page is read at once (the page you opened, nothing else) and scored by the
+  // service worker from the downloaded market summary, so the best opportunity is highlighted
+  // right away; the full analysis from FlipFinder then replaces each estimate.
+  function quickCard(vid, card) {
+    const link = card.root.matches(C.selectors.item_link) ? card.root : card.root.querySelector(C.selectors.item_link);
+    if (!link) return null;
+    const parsed = P.parseCatalogCard(collectCard(card.root, link), location.href, C);
+    return parsed && parsed.title && parsed.title.length >= 3 && parsed.price ? parsed : null;
+  }
+
+  function quickPass() {
+    if (!paired || !opts.enabled) return;
+    mark("parse-start");
+    const batch = [];
+    const titles = new Map();
+    for (const [vid, card] of cards) {
+      if (card.quicked || !card.root.isConnected) continue;
+      card.quicked = true;
+      const parsed = quickCard(vid, card);
+      if (!parsed) continue; // read again when it scrolls into view (lazy content)
+      titles.set(vid, parsed.title);
+      batch.push({
+        vinted_id: vid,
+        title: parsed.title,
+        brand: parsed.brand,
+        price: parsed.price,
+        condition: parsed.condition,
+        buyer_protection_fee: parsed.buyer_protection_fee,
+        status: parsed.status,
+      });
+      // Second step, in the background: the whole card goes to FlipFinder for the full analysis.
+      const payload = opts.captureCards ? P.capturePayload(parsed, C) : null;
+      if (payload) {
+        pendingCards.set(vid, payload);
+        card.captured = true;
+        io.unobserve(card.root);
+      }
+    }
+    if (!batch.length) return;
+    mark("parse-end");
+    flushCards();
+    // Scored right here from the stored market summary (~0.1 ms a card): no wait on the service
+    // worker, which may be busy receiving full analyses. Server evaluations replace these.
+    for (const c of batch) {
+      const v = Q.quickEstimate(c, market);
+      v.title = titles.get(c.vinted_id);
+      quick.set(c.vinted_id, v);
+    }
+    // The best one first, the other badges in small slices: no long task while the page loads.
+    updateBest();
+    mark("best");
+    const todo = batch.map((c) => c.vinted_id).filter((vid) => !evals.has(vid) && vid !== bestBox.vid);
+    const slice = () => {
+      for (const vid of todo.splice(0, 24)) if (!evals.has(vid)) drawBadge(vid, quick.get(vid));
+      if (todo.length) requestAnimationFrame(slice);
+      else {
+        mark("badges");
+        if (!document.documentElement.hasAttribute("data-ff-quick-ms")) document.documentElement.setAttribute("data-ff-quick-ms", String(Math.round(performance.now())));
+      }
+    };
+    slice();
+  }
+
+  /** A newer market summary: re-score the cards that have no full analysis yet. */
+  function rescore() {
+    for (const [vid, v] of quick) {
+      if (v.source !== "local") continue;
+      const card = cards.get(vid);
+      if (!card || !card.root.isConnected) continue;
+      const parsed = quickCard(vid, card);
+      if (!parsed) continue;
+      const nv = Q.quickEstimate({ ...parsed, vinted_id: vid }, market);
+      nv.title = parsed.title;
+      quick.set(vid, nv);
+      if (!evals.has(vid)) drawBadge(vid, nv);
+    }
+    updateBest();
+  }
+
+  const bestBox = { host: null, vid: null };
+
+  /** Highest positive risk-adjusted profit among the cards on sale on this page. */
+  function updateBest() {
+    if (pageType === "item" || !opts.badges) return;
+    let top = null;
+    let topVal = 0;
+    for (const [vid, card] of cards) {
+      if (!card.root.isConnected) continue;
+      const v = verdict(vid);
+      const value = v && !v.insufficient && v.status === "active" ? v.risk_adjusted_profit : null;
+      if (value !== null && value !== undefined && value > topVal) {
+        top = vid;
+        topVal = value;
+      }
+    }
+    if (top === bestBox.vid && bestBox.host) return renderBest(top);
+    const prev = bestBox.vid && cards.get(bestBox.vid);
+    if (prev && prev.pageBest) {
+      prev.pageBest = false;
+      if (!prev.best) prev.root.style.outline = "";
+    }
+    bestBox.vid = top;
+    if (!top) return renderBest(null);
+    const card = cards.get(top);
+    if (!evals.has(top)) drawBadge(top, verdict(top));
+    card.pageBest = true;
+    card.root.style.outline = "3px solid #16a34a";
+    card.root.style.outlineOffset = "2px";
+    renderBest(top);
+    if (!document.documentElement.hasAttribute("data-ff-best-ms")) document.documentElement.setAttribute("data-ff-best-ms", String(Math.round(performance.now())));
+  }
+  const bestSoon = debounce(updateBest, 120);
+
+  const BEST_CSS = `
+    :host { all: initial; position: fixed; top: 76px; right: 16px; z-index: 2147483000; }
+    .box { all: unset; box-sizing: border-box; display: block; width: 300px; max-width: calc(100vw - 32px); padding: 10px 12px; border-radius: 14px; cursor: pointer;
+      background: #0f3d22; color: #f2fbf5; box-shadow: 0 10px 30px -8px rgba(0,0,0,.5); font: 400 12px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .box:focus-visible { outline: 2px solid #4b8fea; outline-offset: 2px; }
+    .k { font-weight: 600; letter-spacing: .02em; color: #86efac; }
+    .v { font: 700 18px/1.2 ui-sans-serif, system-ui, sans-serif; font-variant-numeric: tabular-nums; margin: 2px 0; }
+    .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+    .r { color: #c6e9d2; margin-top: 2px; }
+    .x { all: unset; position: absolute; top: 6px; right: 8px; cursor: pointer; padding: 2px 6px; border-radius: 6px; color: #c6e9d2; }
+    .x:hover, .x:focus-visible { background: rgba(255,255,255,.12); }
+    @media (prefers-reduced-motion: no-preference) { .box { animation: in 180ms cubic-bezier(.23,1,.32,1); } }
+    @keyframes in { from { opacity: 0; transform: translateY(-4px); } }`;
+
+  function renderBest(vid) {
+    const v = vid && verdict(vid);
+    if (!v) {
+      if (bestBox.host) bestBox.host.hidden = true;
+      return;
+    }
+    if (!bestBox.host) {
+      const host = document.createElement("div");
+      host.id = "flipfinder-best";
+      const shadow = host.attachShadow({ mode: "open" });
+      shadow.innerHTML = `<style>${BEST_CSS}</style><div class="box" role="button" tabindex="0" aria-live="polite"><div class="k"></div><div class="v"></div><div class="t"></div><div class="r"></div></div><button class="x" type="button" aria-label="Chiudi">×</button>`;
+      const go = () => {
+        const card = cards.get(bestBox.vid);
+        if (card && card.root.isConnected) card.root.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
+      };
+      shadow.querySelector(".box").addEventListener("click", go);
+      shadow.querySelector(".box").addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), go()));
+      shadow.querySelector(".x").addEventListener("click", (e) => {
+        e.stopPropagation();
+        host.remove();
+        bestBox.host = null;
+        bestBox.closed = true;
+      });
+      bestBox.host = host;
+    }
+    if (bestBox.closed) return;
+    if (!bestBox.host.isConnected) document.documentElement.appendChild(bestBox.host);
+    bestBox.host.hidden = false;
+    const sh = bestBox.host.shadowRoot;
+    sh.querySelector(".k").textContent = v.source === "local" ? "★ Migliore della pagina · stima rapida" : "★ Migliore della pagina";
+    sh.querySelector(".v").textContent = `${K.eur(v.risk_adjusted_profit, true)} profitto atteso`;
+    const card = cards.get(vid);
+    sh.querySelector(".t").textContent = v.title || (card && quickTitle(card)) || "";
+    sh.querySelector(".r").textContent = v.reason || "";
+  }
+
+  function quickTitle(card) {
+    const link = card.root.matches(C.selectors.item_link) ? card.root : card.root.querySelector(C.selectors.item_link);
+    return link ? (link.getAttribute("title") || "").split(",")[0] : "";
+  }
 
   function register(link) {
     const vid = linkId(link);
@@ -238,13 +417,14 @@
     if (prev && prev.root.isConnected && prev.root !== root) return; // promoted + organic: first one wins
     root.setAttribute("data-ff-vid", vid);
     cards.set(vid, { root, captured: false, badge: null });
-    if (evals.has(vid)) drawBadge(vid, evals.get(vid));
+    if (evals.has(vid)) drawBadge(vid, verdict(vid));
     io.observe(root);
   }
 
   const addedRoots = new Set();
   function scanAdded() {
     if (!paired || !opts.enabled) return addedRoots.clear();
+    mark("scan-start");
     const roots = addedRoots.size ? [...addedRoots] : [document.body];
     addedRoots.clear();
     const known = [];
@@ -253,6 +433,7 @@
       if (r.matches && r.matches(C.selectors.item_link)) register(r);
       r.querySelectorAll?.(C.selectors.item_link).forEach(register);
     }
+    quickPass();
     for (const [vid, card] of cards) if (!card.badge && card.root.isConnected) known.push(vid);
     if (known.length && paired) {
       send({ type: "ff:get-evals", vids: known.slice(0, 300) }).then((r) => {
@@ -296,11 +477,34 @@
     .menu button[disabled] { opacity: .5; cursor: default; }
     @media (prefers-reduced-motion: reduce) { .b { transition: none; } .dot { animation: none; } }`;
 
+  let sharedSheet;
+  function badgeSheet() {
+    if (sharedSheet === undefined) {
+      try {
+        sharedSheet = new CSSStyleSheet();
+        sharedSheet.replaceSync(BADGE_CSS);
+      } catch {
+        sharedSheet = null;
+      }
+    }
+    return sharedSheet;
+  }
+
   const EYE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 
   function badgeLabel(ev) {
     if (!ev) return { cls: "muted", html: '<span class="dot"></span>', aria: "FlipFinder: analisi in corso" };
     if (ev.unreadable) return { cls: "muted", html: "n/d", aria: "FlipFinder: scheda non leggibile" };
+    if (ev.source === "local") {
+      if (ev.status && ev.status !== "active") return { cls: "muted", html: { sold: "venduto", reserved: "riservato" }[ev.status] || ev.status, aria: "FlipFinder: non in vendita" };
+      if (ev.insufficient) return { cls: "muted", html: "dati insuff.", aria: `FlipFinder: dati insufficienti (${ev.insufficient})` };
+      const v = ev.risk_adjusted_profit ?? ev.net_margin;
+      return {
+        cls: v > 0 && ev.net_margin >= opts.minMargin ? "good" : v < 0 ? "bad" : "",
+        html: `≈ ${K.eur(v, true)}`,
+        aria: `FlipFinder, stima rapida: profitto atteso ${K.eur(v, true)}, margine ${K.eur(ev.net_margin, true)}`,
+      };
+    }
     const eye = ev.tracked ? EYE : "";
     if (ev.status && ev.status !== "active") {
       const label = { sold: "venduto", reserved: "riservato", removed: "rimosso" }[ev.status] || ev.status;
@@ -310,12 +514,13 @@
       return { cls: "muted", html: `${eye}dati insuff.`, aria: "FlipFinder: dati insufficienti per una stima" };
     }
     const margin = ev.net_margin;
+    const expected = ev.risk_adjusted_profit ?? margin;
     const good = ev.flip_score >= opts.minScore && (margin ?? -Infinity) >= opts.minMargin;
     const cls = good ? "good" : margin !== null && margin < 0 ? "bad" : "";
     return {
       cls,
-      html: `${eye}${ev.flip_score} · ${K.eur(margin, true)}`,
-      aria: `FlipFinder: score ${ev.flip_score}, margine netto ${K.eur(margin, true)}`,
+      html: `${eye}${ev.flip_score} · ${K.eur(expected, true)}`,
+      aria: `FlipFinder: score ${ev.flip_score}, profitto atteso ${K.eur(expected, true)}, margine netto ${K.eur(margin, true)}`,
     };
   }
 
@@ -325,7 +530,10 @@
     if (!card.badge) {
       const host = document.createElement("ff-badge");
       const shadow = host.attachShadow({ mode: "open" });
-      shadow.innerHTML = `<style>${BADGE_CSS}</style><button class="b" type="button" aria-haspopup="true" aria-expanded="false"></button><div class="menu" role="menu" hidden></div>`;
+      // One stylesheet shared by every badge: ~100 badges appear at once on a search page.
+      const css = badgeSheet();
+      if (css) shadow.adoptedStyleSheets = [css];
+      shadow.innerHTML = `${css ? "" : `<style>${BADGE_CSS}</style>`}<button class="b" type="button" aria-haspopup="true" aria-expanded="false"></button><div class="menu" role="menu" hidden></div>`;
       const stop = (e) => {
         e.stopPropagation();
         e.preventDefault();
@@ -356,13 +564,15 @@
   }
 
   function renderMenu(vid, menu) {
-    const ev = evals.get(vid);
+    const ev = verdict(vid);
     const ds = deepState.get(vid);
-    const rows = ev && ev.flip_score !== null && ev.flip_score !== undefined
-      ? `<dl><dt>Costo totale</dt><dd>${K.eur(ev.total_cost)}</dd><dt>Rivendita</dt><dd>${K.eur(ev.resale_expected)}</dd><dt>Margine netto</dt><dd>${K.eur(ev.net_margin, true)}</dd><dt>Confidenza</dt><dd>${ev.confidence ?? "—"}/100</dd></dl>`
+    const scoredEv = ev && !ev.insufficient && ((ev.source === "local" && ev.net_margin !== undefined) || (ev.flip_score !== null && ev.flip_score !== undefined));
+    const p = (v) => (v === null || v === undefined ? "—" : `${Math.round(v * 100)}%`);
+    const rows = scoredEv
+      ? `<dl><dt>Costo totale</dt><dd>${K.eur(ev.total_cost)}</dd><dt>Rivendita</dt><dd>${K.eur(ev.resale_expected)}</dd><dt>Margine netto</dt><dd>${K.eur(ev.net_margin, true)}</dd><dt>Vendita in 30 gg</dt><dd>${p(ev.sale_probability)}</dd><dt>Autentico</dt><dd>${p(ev.authenticity_probability)}</dd><dt>Profitto atteso</dt><dd>${K.eur(ev.risk_adjusted_profit, true)}</dd><dt>Confidenza</dt><dd>${ev.confidence ?? "—"}/100</dd></dl>`
       : "";
-    const reason = ev ? ev.reason || "" : "Analisi in corso…";
-    const depth = ev && ev.analysis_depth === "full" ? "Analizzato a fondo" : ev ? "Visto in scorrimento (dati della scheda)" : "";
+    const reason = ev ? ev.reason || ev.insufficient || "" : "Analisi in corso…";
+    const depth = ev && ev.source === "local" ? "Stima rapida dal riepilogo di mercato: analisi completa in arrivo" : ev && ev.analysis_depth === "full" ? "Analizzato a fondo" : ev ? "Visto in scorrimento (dati della scheda)" : "";
     menu.innerHTML = `${rows}<p></p><p class="depth"></p>
       <button type="button" role="menuitem" data-act="track">${ev && ev.tracked ? "Smetti di tracciare" : "Traccia"}</button>
       <button type="button" role="menuitem" data-act="deep" ${ds === "reading" ? "disabled" : ""}>${ds === "reading" ? "Lettura in corso…" : ds === "paused" ? "Letture in pausa (riprova più tardi)" : "Analisi approfondita"}</button>
@@ -422,19 +632,20 @@
       const r = await send({ type: "ff:deep", vid, url: itemUrl(vid) });
       if (r && r.error) note(vid, r.error);
       else deepState.set(vid, r && r.pacing && r.pacing.pausedUntil > Date.now() ? "paused" : "reading");
-      drawBadge(vid, evals.get(vid));
+      drawBadge(vid, verdict(vid));
     }
   }
 
   function note(vid, message) {
     deepState.set(vid, message);
-    drawBadge(vid, evals.get(vid));
+    drawBadge(vid, verdict(vid));
   }
 
   function onEval(ev) {
     if (!ev || !ev.vinted_id) return;
     evals.set(ev.vinted_id, ev);
     drawBadge(ev.vinted_id, ev);
+    bestSoon();
     if (pageType === "item" && ev.vinted_id === P.itemId(location.href, C)) itemBox.render();
   }
 
@@ -643,6 +854,10 @@
       itemBox.unmount();
     }
     addedRoots.clear();
+    bestBox.closed = false;
+    bestBox.vid = null;
+    updateBest();
+    if (pageType === "item" && bestBox.host) bestBox.host.hidden = true;
     scanSoon();
   }
 
@@ -661,12 +876,12 @@
           const card = cards.get(vid);
           if (!card) continue;
           card.hot = true;
-          drawBadge(vid, evals.get(vid));
+          drawBadge(vid, verdict(vid));
         }
         return false;
       case "ff:deep-status":
         deepState.set(msg.vid, msg.state === "reading" || msg.state === "paused" ? msg.state : msg.message || msg.state);
-        drawBadge(msg.vid, evals.get(msg.vid));
+        drawBadge(msg.vid, verdict(msg.vid));
         return false;
       case "ff:read-page":
         readPage(msg.url, msg.vid).then(sendResponse);
@@ -755,11 +970,15 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "sync" && changes.options) {
       opts = K.normalizeOptions(changes.options.newValue);
-      for (const [vid] of cards) drawBadge(vid, evals.get(vid));
+      for (const [vid] of cards) drawBadge(vid, verdict(vid));
     }
     if (area === "local" && changes.parserConfig) useConfig(changes.parserConfig.newValue);
-    if (area === "local" && changes.apiKey) {
-      paired = Boolean(changes.apiKey.newValue);
+    if (area === "local" && changes.marketCache) {
+      market = changes.marketCache.newValue ? Q.compileMarket(changes.marketCache.newValue) : null;
+      rescore();
+    }
+    if (area === "local" && changes.paired) {
+      paired = Boolean(changes.paired.newValue);
       if (pageType === "item") {
         itemBox.render();
         if (paired) itemCapture.start();
@@ -768,15 +987,29 @@
     }
   });
 
+  const domReady = () =>
+    document.readyState === "loading" ? new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true })) : Promise.resolve();
+
   async function start() {
-    const hello = await send({ type: "ff:hello", pageType, url: location.href });
-    if (hello) {
-      opts = K.normalizeOptions(hello.options);
-      paired = Boolean(hello.paired);
-      useConfig(hello.parserConfig);
-      pageType = P.pageType(location.pathname, C);
-    }
+    mark("start");
+    // Straight from storage (not through the service worker): options, pairing flag (never the
+    // key), parser configuration and market summary.
+    const [store, synced] = await Promise.all([
+      chrome.storage.local.get(["paired", "parserConfig", "marketCache"]).catch(() => ({})),
+      chrome.storage.sync.get("options").catch(() => ({})),
+    ]);
+    mark("hello");
+    opts = K.normalizeOptions(synced.options);
+    paired = Boolean(store.paired);
+    useConfig(store.parserConfig);
+    market = store.marketCache ? Q.compileMarket(store.marketCache) : null;
+    pageType = P.pageType(location.pathname, C);
+    send({ type: "ff:hello", pageType, url: location.href }); // live panel bookkeeping
     if (!opts.enabled) return;
+    // Injected at the start of the navigation: settings are read while the page loads, the
+    // cards are scored as soon as the document is parsed.
+    await domReady();
+    mark("dom");
     mo.observe(document.body, { childList: true, subtree: true });
     if (pageType === "item") {
       itemBox.render();
