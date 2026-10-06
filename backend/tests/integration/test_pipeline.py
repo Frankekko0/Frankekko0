@@ -8,8 +8,9 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from app.alerts.service import evaluate_alerts
+from app.alerts.service import evaluate_alerts, message_for_alert
 from app.analytics.market_stats import recompute_market_statistics
+from app.core.config import get_settings
 from app.core.security import hash_password
 from app.db.models import (
     Alert,
@@ -225,6 +226,11 @@ async def test_market_statistics_and_alerts(session, make_listing) -> None:
     assert "watchlist_match" in types
     assert "new_opportunity" in types or "ultra_deal" in types
     assert pending == []  # only in-app channel enabled
+    # Notification links open the deal's page in the web app (also from a phone).
+    alert = (await session.execute(select(Alert).where(Alert.user_id == user.id).limit(1))).scalar_one()
+    settings = get_settings().model_copy(update={"public_app_url": "http://192.168.1.23:3000/"})
+    message = await message_for_alert(session, alert, settings)
+    assert message.app_url == f"http://192.168.1.23:3000/deals/{alert.opportunity_id}"
     # Re-evaluating the same analysis never duplicates alerts.
     await evaluate_alerts(session, outcome, listing, await load_catalog(session), now=NOW)
     await session.commit()

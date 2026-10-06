@@ -26,7 +26,7 @@ e prezzo d'offerta suggerito, più un'analisi AI con verdetto BUY / CONSIDER / S
 
 ## Indice
 
-1. [Avvio rapido (Docker)](#avvio-rapido-docker)
+1. [Avvio rapido (Docker)](#avvio-rapido-docker) · [dal telefono](#dal-telefono)
 2. [Architettura](#architettura)
 3. [Requisiti](#requisiti)
 4. [Installazione locale (senza Docker)](#installazione-locale-senza-docker)
@@ -60,7 +60,8 @@ Cosa succede al primo avvio:
 2. `backend` applica le migrazioni Alembic, esegue il seed idempotente (catalogo brand/categorie,
    epoca del marketplace simulato, utente demo con 4 watchlist) e serve l'API;
 3. `worker` esegue la prima scansione: importa lo storico simulato (~10.800 annunci, 60 giorni;
-   circa 1–2 minuti), calcola le statistiche di mercato e accoda le analisi (~30 annunci/s);
+   circa 30 secondi), calcola le statistiche di mercato e accoda le analisi (fino a ~490
+   annunci/s su 4 core: tutto analizzato in meno di un minuto);
 4. `frontend` (Next.js) serve l'app e fa da proxy verso l'API su `/api/*`.
 
 La dashboard si popola mentre le analisi procedono; da lì in poi il marketplace simulato pubblica
@@ -81,6 +82,35 @@ docker compose logs -f worker                     # avanzamento scanner e analis
 docker compose exec backend flipfinder migrate    # migrazioni + seed manuali
 docker compose down -v                            # stop + cancella i dati (ricomincia da zero)
 ```
+
+### Dal telefono
+
+FlipFinder gira sul computer; il telefono lo apre nel browser, come un sito.
+
+1. Sul computer avvia lo stack (`docker compose up`) e controlla che **http://localhost:3000**
+   funzioni.
+2. Trova l'indirizzo del computer nella rete di casa: su Windows `ipconfig` → *Indirizzo IPv4*;
+   su macOS `ipconfig getifaddr en0`; su Linux `hostname -I`. Esempio: `192.168.1.23`.
+3. Con il telefono **sulla stessa rete Wi-Fi**, apri `http://192.168.1.23:3000` (proprio `http`,
+   con `:3000`) e accedi.
+4. Per averla come un'app: Chrome su Android → menu ⋮ → *Aggiungi a schermata Home*; Safari su
+   iPhone → *Condividi* → *Aggiungi alla schermata Home*.
+5. Facoltativo: in `.env` imposta `PUBLIC_APP_URL=http://192.168.1.23:3000` e riavvia
+   (`docker compose up -d`): i link nelle notifiche (Telegram, email…) si apriranno sul telefono.
+
+Se il telefono non la raggiunge: su Windows consenti Docker nel firewall per le reti *private* (e
+imposta la rete Wi-Fi come *privata*); le reti Wi-Fi "ospiti" spesso isolano i dispositivi.
+
+**Fuori casa** usa una VPN privata come [Tailscale](https://tailscale.com) (gratuita per uso
+personale): installala su computer e telefono con lo stesso account e apri
+`http://<nome-del-computer>:3000`. Non aprire la porta 3000 sul router: questa configurazione è
+pensata per la rete locale (account demo, password di sviluppo); per esporla su Internet segui
+[Produzione](#produzione).
+
+L'estensione per Vinted funziona solo sui browser desktop (Chrome, Edge, Brave): i browser del
+telefono non supportano le estensioni. Dal telefono puoi consultare deal, alert e watchlist e
+analizzare un annuncio da **Analyze a listing**: nell'app Vinted *Condividi* → *Copia link*, poi
+incolla link, titolo e prezzo.
 
 ---
 

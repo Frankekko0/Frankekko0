@@ -287,7 +287,7 @@ async def message_for_alert(session: AsyncSession, alert: Alert, settings: Setti
             )
         ).scalar_one_or_none()
     app_url = (
-        f"{settings.public_app_url.rstrip('/')}/opportunities/{alert.opportunity_id}"
+        f"{settings.public_app_url.rstrip('/')}/deals/{alert.opportunity_id}"
         if alert.opportunity_id
         else settings.public_app_url
     )
