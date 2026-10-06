@@ -2,7 +2,7 @@
 // running FlipFinder (APP_URL). Test-only manifest change: host permission for
 // localhost (the permission prompt of the options page can't be clicked in headless mode).
 //   APP_URL=http://localhost:3000 CHROME_PATH=/path/to/chrome node extension/e2e/live.e2e.cjs [screenshot dir]
-// Needs a running FlipFinder with the demo account (SEED_DEMO_USER=true) and Playwright
+// Needs a running FlipFinder that accepts sign-ups (ALLOW_REGISTRATION=true) and Playwright
 // (PLAYWRIGHT_MODULE points to it when it is not installed next to this file).
 const { chromium, request } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
 const assert = require("assert/strict");
@@ -69,9 +69,11 @@ const SVG = (n) => `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="
   manifest.host_permissions = [`${APP}/*`];
   fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(manifest));
 
-  // A pairing key from FlipFinder (demo account), as Settings → Browser extension would create.
+  // A pairing key from FlipFinder (a fresh test account), as Settings → Browser extension would create.
   const api = await request.newContext({ baseURL: APP });
-  const session = await (await api.post("/api/v1/auth/demo")).json();
+  const reg = await api.post("/api/v1/auth/register", { data: { email: `e2e-${Date.now()}@example.com`, password: "E2e-test-pass-2026!" } });
+  if (!reg.ok()) throw new Error("register: " + (await reg.text()));
+  const session = await reg.json();
   const created = await api.post("/api/v1/extension/keys", { data: { name: "e2e" }, headers: { "X-CSRF-Token": session.csrf_token } });
   const { key, id: keyId } = await created.json();
   if (!key) throw new Error("no key: " + (await created.text()));

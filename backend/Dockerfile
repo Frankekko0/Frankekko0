@@ -23,8 +23,8 @@ COPY app ./app
 COPY docker/entrypoint.sh /usr/local/bin/flipfinder
 RUN chmod 0755 /usr/local/bin/flipfinder \
     && useradd --uid 10001 --no-create-home --home-dir /app --shell /usr/sbin/nologin flipfinder \
-    && mkdir -p /data/media \
-    && chown -R flipfinder /app /data/media
+    && mkdir -p /data/media /data/logs \
+    && chown -R flipfinder /app /data/media /data/logs
 
 USER flipfinder
 EXPOSE 8000

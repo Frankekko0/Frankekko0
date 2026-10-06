@@ -19,8 +19,6 @@ export interface User {
 
 export interface AuthConfig {
   registration_enabled: boolean;
-  demo_login_enabled: boolean;
-  demo_user_email: string | null;
 }
 
 export interface Session {
@@ -677,7 +675,7 @@ export interface SearchResponse {
 }
 
 export interface SystemStatus {
-  provider: { name: string; capabilities: Record<string, boolean>; demo_mode: boolean };
+  provider: { name: string | null; configured: boolean; capabilities: Record<string, boolean> };
   scanner: { interval_seconds: number; last_run: Record<string, unknown> | null };
   queues: { high?: number; default?: number };
   listings_tracked: number;
@@ -875,7 +873,7 @@ export interface AcquisitionFailure {
 }
 
 export interface AcquisitionStatus {
-  provider: { name: string; listings: number };
+  provider: { name: string | null; listings: number };
   extension: { listings: number; last_sync: string | null };
   public_fetch: {
     enabled: boolean;

@@ -24,7 +24,9 @@ async def _listing(session, lid):
 async def _set_hashes(session, lid, hashes):
     for pos, h in enumerate(hashes):
         await session.execute(
-            update(ListingImage).where(ListingImage.listing_id == lid, ListingImage.position == pos).values(phash=h)
+            update(ListingImage)
+            .where(ListingImage.listing_id == lid, ListingImage.position == pos)
+            .values(phash=h)
         )
     await session.commit()
 
@@ -32,7 +34,12 @@ async def _set_hashes(session, lid, hashes):
 async def test_recycled_and_catalogue_photos_are_found_across_sellers(session, make_listing) -> None:
     ids = await _ingest(
         session,
-        [make_listing(seller_id=f"seller{i}", photos=2, title=f"Felpa Stone Island {i}", brand="Stone Island") for i in range(6)],
+        [
+            make_listing(
+                seller_id=f"seller{i}", photos=2, title=f"Felpa Stone Island {i}", brand="Stone Island"
+            )
+            for i in range(6)
+        ],
     )
     subject, other, *rest = ids
     photo_a, photo_b = "f0f0f0f0f0f0f0f0", "123456789abcdef0"
@@ -58,7 +65,10 @@ async def test_recycled_and_catalogue_photos_are_found_across_sellers(session, m
 async def test_the_same_seller_reposting_is_not_recycling(session, make_listing) -> None:
     a, b = await _ingest(
         session,
-        [make_listing(seller_id="same", photos=1, title="Giacca A"), make_listing(seller_id="same", photos=1, title="Giacca B")],
+        [
+            make_listing(seller_id="same", photos=1, title="Giacca A"),
+            make_listing(seller_id="same", photos=1, title="Giacca B"),
+        ],
     )
     await _set_hashes(session, a, ["f0f0f0f0f0f0f0f0"])
     await _set_hashes(session, b, ["f0f0f0f0f0f0f0f0"])
@@ -69,10 +79,23 @@ async def test_the_same_seller_reposting_is_not_recycling(session, make_listing)
 
 async def test_same_new_item_in_several_sizes_is_a_seller_signal(session, make_listing) -> None:
     items = [
-        make_listing(f"Felpa Supreme box logo nuova tg {size}", seller_id="shop", condition="Nuovo con cartellino", size=size, brand="Supreme")
+        make_listing(
+            f"Felpa Supreme box logo nuova tg {size}",
+            seller_id="shop",
+            condition="Nuovo con cartellino",
+            size=size,
+            brand="Supreme",
+        )
         for size in ("S", "M", "XL")
     ]
-    items.append(make_listing("Felpa Supreme box logo usata tg M", seller_id="honest", condition="Buone condizioni", brand="Supreme"))
+    items.append(
+        make_listing(
+            "Felpa Supreme box logo usata tg M",
+            seller_id="honest",
+            condition="Buone condizioni",
+            brand="Supreme",
+        )
+    )
     ids = await _ingest(session, items)
     pipeline = AnalysisPipeline(session)
     shop = (await _listing(session, ids[0])).seller_id

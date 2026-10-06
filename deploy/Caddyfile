@@ -1,0 +1,10 @@
+# HTTPS for FlipFinder. The certificate for {$DOMAIN} is obtained and renewed automatically
+# (Let's Encrypt; for "localhost" a local certificate).
+{$DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+	reverse_proxy frontend:3000
+}

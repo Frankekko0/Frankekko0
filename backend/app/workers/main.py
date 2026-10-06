@@ -58,13 +58,6 @@ def _scan_seconds(interval: int) -> set[int]:
 def _cron_jobs() -> list[Any]:
     settings = get_settings()
     jobs = [
-        cron(
-            tasks.scan_new_listings,
-            second=_scan_seconds(settings.scan_interval_seconds),
-            run_at_startup=True,
-            timeout=600,
-            unique=True,
-        ),
         cron(tasks.recompute_market_statistics_task, minute={0, 15, 30, 45}, second=5, timeout=600),
         cron(tasks.refresh_listings, minute={2, 12, 22, 32, 42, 52}, second=10, timeout=600),
         cron(tasks.recompute_learning, minute={7, 37}, second=20, timeout=300),
@@ -72,6 +65,16 @@ def _cron_jobs() -> list[Any]:
         cron(tasks.clean_foreign_data_task, hour=4, minute=41, second=0, run_at_startup=True, timeout=600),
         cron(tasks.fit_price_calibration_task, hour=5, minute=23, second=0, run_at_startup=True, timeout=900),
     ]
+    if settings.marketplace_provider == "feed":  # no source configured: nothing to scan
+        jobs.append(
+            cron(
+                tasks.scan_new_listings,
+                second=_scan_seconds(settings.scan_interval_seconds),
+                run_at_startup=True,
+                timeout=600,
+                unique=True,
+            )
+        )
     if settings.vinted_public_fetch_enabled:
         jobs.append(cron(tasks.refresh_tracked_public, second=40, timeout=90, unique=True))
     if settings.email_import_enabled:
@@ -118,7 +121,7 @@ def process_count() -> int:
 async def run(with_cron: bool = True, index: int = 0) -> None:
     """One worker process: both queues; only the first process also runs the scheduler."""
     settings = get_settings()
-    configure_logging(settings.log_level, settings.log_json)
+    configure_logging(settings.log_level, settings.log_json, settings.error_log_dir, "worker")
     settings.validate_for_production()
     set_pool_limits(settings.worker_db_pool_size, settings.worker_db_max_overflow)
     await _wait_for_catalog()

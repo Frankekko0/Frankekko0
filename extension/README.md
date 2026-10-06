@@ -88,8 +88,18 @@ node --test extension/tests/*.test.mjs        # parser (con le stesse fixture de
 node extension/tools/sync-parser-config.mjs   # dopo aver cambiato backend/app/acquisition/vinted_parser.json
 ```
 
-Test end-to-end con l'estensione vera in Chromium, su pagine Vinted finte (nessuna richiesta reale a Vinted). Serve FlipFinder in esecuzione con l'account demo:
+Test end-to-end con l'estensione vera in Chromium, su pagine Vinted finte (nessuna richiesta reale a Vinted). Serve un FlipFinder di prova in esecuzione che accetti nuove registrazioni (ogni test crea un proprio account):
 
 ```bash
 APP_URL=http://localhost:3000 CHROME_PATH=/percorso/chrome node extension/e2e/live.e2e.cjs /tmp/screenshots
+# velocità del verdetto rapido su una ricerca da 96 articoli (tempo dalla lettura della pagina, CPU 4x, offline, scorrimento)
+APP_URL=http://localhost:3000 CHROME_PATH=/percorso/chrome node extension/e2e/speed.e2e.cjs
 ```
+
+### Verdetto rapido
+
+All'apertura di una ricerca l'estensione valuta subito tutte le schede in locale dal riepilogo di mercato scaricato da FlipFinder (prezzi dei venduti per brand e categoria, quota venduta in 30 giorni, i tuoi costi, regole antifalso; aggiornato ogni 3 ore, usato anche offline) e evidenzia la migliore: profitto corretto per il rischio = margine × probabilità di vendita × probabilità di autenticità. L'analisi completa del server arriva subito dopo e sostituisce le stime (badge "≈" = stima rapida).
+
+### In produzione
+
+Nelle opzioni imposta l'indirizzo HTTPS della tua installazione (es. `https://flip.tuodominio.it`) e incolla la chiave creata in FlipFinder → Impostazioni → Browser extension: il browser chiede il permesso per quell'indirizzo una sola volta.

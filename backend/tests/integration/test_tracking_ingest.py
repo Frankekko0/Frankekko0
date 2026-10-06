@@ -176,7 +176,7 @@ async def test_unreachable_check_backs_off_without_touching_status(session, make
 
 
 async def test_provider_scan_listings_are_scheduled_and_untracked(session, make_listing) -> None:
-    res = await IngestionService(session, "mock").ingest([make_listing()], now=NOW)
+    res = await IngestionService(session, "feed").ingest([make_listing()], now=NOW)
     listing = await session.get(Listing, res.new_ids[0])
     assert listing.acquisition_mode == "provider_scan"
     assert listing.tracked_at is None and listing.next_check_at is not None

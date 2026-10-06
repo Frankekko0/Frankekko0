@@ -3,7 +3,8 @@
 #   cp .env.example .env      # optional: secrets, AI key, notification channels
 #   docker compose up --build
 #
-# Web app: http://localhost:3000 (sign in with "Try the demo")
+# Web app: http://localhost:3000 (create your account on first visit)
+# Production (HTTPS, only you, automatic backups): docker-compose.prod.yml, see deploy/README.md
 # API docs: http://localhost:3000/docs (also http://127.0.0.1:8000/docs)
 #
 # The defaults below are for local use only. In production set ENVIRONMENT=production plus a

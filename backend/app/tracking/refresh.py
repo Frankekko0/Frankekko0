@@ -5,7 +5,6 @@ from __future__ import annotations
 from app.core.config import get_settings
 from app.db.models import Listing
 from app.domain.enums import CLOSED_STATUSES, AcquisitionMode, ListingStatus
-from app.tracking.policy import SYNTHETIC_PROVIDERS
 
 
 def refresh_modes(listing: Listing) -> list[str]:
@@ -13,9 +12,7 @@ def refresh_modes(listing: Listing) -> list[str]:
     if ListingStatus(listing.status) in CLOSED_STATUSES:
         return []
     settings = get_settings()
-    if listing.provider in SYNTHETIC_PROVIDERS or (
-        listing.provider != "vinted" and settings.marketplace_provider == "feed"
-    ):
+    if listing.provider != "vinted" and settings.marketplace_provider == "feed":
         return [AcquisitionMode.PROVIDER_SCAN.value]
     modes: list[str] = []
     if listing.provider == "vinted":

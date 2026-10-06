@@ -32,10 +32,8 @@ from app.db.models import (
     AcquisitionAttempt,
     AnalysisJob,
     Listing,
-    ListingSnapshot,
     MarketStatistic,
     Opportunity,
-    OpportunityScore,
     SystemState,
 )
 from app.db.session import session_scope
@@ -46,7 +44,6 @@ from app.marketplace.base import SearchQuery
 from app.marketplace.registry import get_provider
 from app.media.cleanup import clean_foreign_data
 from app.opportunities.pipeline import AnalysisPipeline
-from app.tracking.policy import SYNTHETIC_PROVIDERS
 from app.tracking.service import Attempt, TrackingService, record_attempts
 from app.tracking.status import Observation
 from app.workers.queue import backoff_seconds, enqueue
@@ -168,6 +165,8 @@ async def _scan_new_listings(ctx: dict[str, Any]) -> dict[str, Any]:
     started = time.perf_counter()
     async with session_scope() as s:
         provider = await get_provider(s)
+    if provider is None:
+        return {"skipped": "no_source_configured"}  # only your own captures: nothing to scan
     state = await _get_state(f"scanner_cursor:{provider.name}") or {}
     since = datetime.fromisoformat(state["since"]) if state.get("since") else None
     cursor: str | None = None
@@ -370,6 +369,8 @@ async def refresh_listings(ctx: dict[str, Any]) -> dict[str, int]:
     now = datetime.now(UTC)
     async with session_scope() as s:
         provider = await get_provider(s)
+        if provider is None:
+            return {"checked": 0}
         rows = (
             await s.execute(
                 select(Listing.id, Listing.external_id)
@@ -512,27 +513,11 @@ async def recompute_learning(ctx: dict[str, Any]) -> int:
 
 
 async def prune(ctx: dict[str, Any]) -> None:
-    """Retention. Real listings keep their whole history (snapshots, every analysis): only the
-    generated demo market is trimmed (score history after 30 days, snapshots after 60), plus
-    technical job logs after 7 days and acquisition logs after 180."""
+    """Retention. Listings keep their whole history (snapshots, every analysis); technical job
+    logs are kept 7 days and acquisition logs 180."""
     now = datetime.now(UTC)
-    synthetic = select(Listing.id).where(Listing.provider.in_(SYNTHETIC_PROVIDERS))
     async with session_scope() as s:
         await s.execute(delete(AnalysisJob).where(AnalysisJob.queued_at < now - timedelta(days=7)))
-        await s.execute(
-            delete(OpportunityScore).where(
-                OpportunityScore.computed_at < now - timedelta(days=30),
-                OpportunityScore.opportunity_id.in_(
-                    select(Opportunity.id).where(Opportunity.listing_id.in_(synthetic))
-                ),
-            )
-        )
-        await s.execute(
-            delete(ListingSnapshot).where(
-                ListingSnapshot.observed_at < now - timedelta(days=60),
-                ListingSnapshot.listing_id.in_(synthetic),
-            )
-        )
         await s.execute(
             delete(AcquisitionAttempt).where(AcquisitionAttempt.started_at < now - timedelta(days=180))
         )

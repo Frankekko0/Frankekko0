@@ -1,6 +1,6 @@
 #!/bin/sh
 # Container entrypoint. Roles:
-#   api      apply migrations + idempotent seed (catalog, demo epoch/user), then serve the API
+#   api      apply migrations + idempotent seed (brand and category catalog), then serve the API
 #   worker   scanner, analysis queues, alerts and scheduled jobs (waits for the seed)
 #   migrate  only apply migrations + seed
 # Any other command is executed as-is (e.g. `pytest`, `python -m app.seed`).

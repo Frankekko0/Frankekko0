@@ -1,0 +1,113 @@
+# Production overlay: HTTPS at a stable address, only you, automatic backups, error log.
+#
+#   cp .env.production.example .env.production      # fill DOMAIN, secrets, e-mail
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.production up -d --build
+#
+# Caddy obtains and renews the HTTPS certificate for DOMAIN by itself (the domain must point to
+# this machine, ports 80 and 443 open). The web app is reachable only through Caddy; the API
+# stays on the internal network. Before every start the database is backed up, then once a day
+# (BACKUP_KEEP_DAYS kept). See deploy/README.md.
+
+x-prod-env: &prod-env
+  ENVIRONMENT: production
+  # --env-file only fills ${...} here: the secrets must be handed to the containers explicitly.
+  JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env.production}
+  AI_API_KEY: ${AI_API_KEY:-}
+  COOKIE_SECURE: "true"
+  PUBLIC_APP_URL: https://${DOMAIN:?set DOMAIN in .env.production}
+  CORS_ORIGINS: https://${DOMAIN}
+  # Caddy + the Next.js proxy in front of the API.
+  TRUSTED_PROXY_HOPS: "2"
+  # Only the first account (yours) can be created.
+  ALLOW_REGISTRATION: "false"
+  LOG_JSON: "true"
+  ERROR_LOG_DIR: /data/logs
+
+services:
+  backup-before-start:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-flipfinder}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-flipfinder}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ./deploy/backup.sh:/backup.sh:ro
+      - ${BACKUP_DIR:-./backups}:/backups
+    command: ["sh", "/backup.sh", "once", "before-start"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-flipfinder}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-flipfinder}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      BACKUP_HOUR_UTC: ${BACKUP_HOUR_UTC:-2}
+    volumes:
+      - ./deploy/backup.sh:/backup.sh:ro
+      - ${BACKUP_DIR:-./backups}:/backups
+    command: ["sh", "/backup.sh", "daily"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.production
+        required: false
+    environment:
+      <<: *prod-env
+    ports: !reset []
+    volumes:
+      - media:/data/media
+      - logs:/data/logs
+    depends_on:
+      backup-before-start:
+        condition: service_completed_successfully
+
+  worker:
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.production
+        required: false
+    environment:
+      <<: *prod-env
+    volumes:
+      - media:/data/media
+      - logs:/data/logs
+
+  frontend:
+    ports: !reset []
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      frontend:
+        condition: service_started
+
+volumes:
+  logs:
+  caddy_data:
+  caddy_config:

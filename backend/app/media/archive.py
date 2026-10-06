@@ -58,7 +58,7 @@ def host_allowed(url: str, settings: Settings) -> bool:
 
 async def download(client: httpx.AsyncClient, url: str, settings: Settings) -> Download:
     if not url.startswith("https://"):
-        return Download(None, None, "skip:link non https o immagine generata (demo)")
+        return Download(None, None, "skip:link non https")
     if not host_allowed(url, settings):
         return Download(None, None, "skip:host non consentito per l'archivio")
     if not await asyncio.to_thread(is_public_https_url, url):

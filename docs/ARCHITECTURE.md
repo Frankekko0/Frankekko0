@@ -24,8 +24,9 @@ domanda, velocità di vendita e rischio.
 
 - **Nessuna elusione** di CAPTCHA, anti-bot, rate limit o autenticazione. Vinted non espone
   un'API pubblica di ricerca: la sorgente dati è quindi **astratta** (`MarketplaceProvider`) e
-  l'MVP funziona con un **Mock Marketplace Provider** realistico, con l'**import manuale** di
-  annunci e con un adapter **feed JSON autorizzato** (integrazioni/partner/esportazioni lecite).
+  i dati arrivano da ciò che l'utente cattura (estensione, link, email, **import manuale**) e,
+  se disponibile, da un adapter **feed JSON autorizzato** (integrazioni/partner/esportazioni
+  lecite). Nessun dato simulato (la Demo Mode delle prime versioni è stata rimossa, migrazione 0007).
 - **Nessuna azione automatica rischiosa**: niente acquisti, offerte o messaggi automatici.
   Il sistema suggerisce, l'utente decide.
 - **Niente black box**: ogni punteggio è scomposto in fattori leggibili.
@@ -106,7 +107,6 @@ flowchart LR
   end
 
   subgraph Providers[MarketplaceProvider adapters]
-    MOCK[Mock provider]
     FEED[Authorized JSON feed]
     MAN[Manual import]
   end
@@ -186,7 +186,7 @@ Tabelle principali (dettaglio colonne in `backend/app/db/models/`):
 | `user_affinities` | learning engine (per brand/categoria/taglia/fascia prezzo) | unique (`user_id`,`dimension`,`key`) |
 | `analysis_jobs` | tracciamento pipeline | indice (`status`,`queued_at`) |
 | `push_subscriptions` | Web Push | `endpoint` unique |
-| `system_state` | stato chiave/valore (cursor scanner, epoch mock) | PK `key` |
+| `system_state` | stato chiave/valore (cursor scanner, calibrazione stime) | PK `key` |
 
 ## 6. Struttura cartelle
 
@@ -202,7 +202,7 @@ Tabelle principali (dettaglio colonne in `backend/app/db/models/`):
 │   │   ├── core/                   # config, logging, security, errori, cache, rate limit, money
 │   │   ├── db/                     # engine/sessione, modelli ORM
 │   │   ├── domain/                 # enum e tipi di dominio condivisi
-│   │   ├── marketplace/            # MarketplaceProvider + mock / feed / manual
+│   │   ├── marketplace/            # MarketplaceProvider + feed autorizzato
 │   │   ├── ingestion/              # normalizzazione, dedup, upsert batch
 │   │   ├── identification/         # tassonomia, estrazione attributi, confidence
 │   │   ├── vision/                 # hash percettivo, analisi foto (heuristic / Claude)
@@ -364,7 +364,7 @@ mai stack trace o eccezioni grezze verso l'utente.
 
 | Fase | Contenuto | Stato |
 |---|---|---|
-| 1 — Core | auth, DB + migrazioni, provider abstraction + mock, ingestion, ricerca, dashboard base | ✅ |
+| 1 — Core | auth, DB + migrazioni, provider abstraction, ingestion, ricerca, dashboard base | ✅ |
 | 2 — Price intelligence | comparabili, FMV, scenari, profitto, ROI, max buy | ✅ |
 | 3 — Opportunity engine | Flip / Confidence / Risk, ranking, spiegazioni | ✅ |
 | 4 — Monitoring | watchlist, scanner, alert (in-app, push, email, Telegram, Discord), price drop | ✅ |

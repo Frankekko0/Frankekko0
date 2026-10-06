@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -70,9 +73,9 @@ async def status(user: CurrentUser, db: DB) -> dict[str, Any]:
     ).one()
     return {
         "provider": {
-            "name": provider.name,
-            "capabilities": provider.capabilities.model_dump(),
-            "demo_mode": provider.name == "mock",
+            "name": provider.name if provider else None,
+            "configured": provider is not None,
+            "capabilities": provider.capabilities.model_dump() if provider else {},
         },
         "scanner": {
             "interval_seconds": settings.scan_interval_seconds,
@@ -94,3 +97,40 @@ async def status(user: CurrentUser, db: DB) -> dict[str, Any]:
 async def trigger_scan(user: CurrentUser) -> Message:
     queued = await enqueue("scan_new_listings", high=True, job_id="scan:manual")
     return Message(message="Scansione avviata." if queued else "Una scansione è già in corso.")
+
+
+def _read_error_log(directory: str, limit: int) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for path in sorted(Path(directory).glob("errors-*.jsonl")):
+        process = path.stem.removeprefix("errors-")
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-500:]
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            items.append(
+                {
+                    "at": event.get("timestamp"),
+                    "level": event.get("level"),
+                    "process": process,
+                    "event": event.get("event"),
+                    "detail": {
+                        k: v for k, v in event.items() if k not in ("timestamp", "level", "event", "logger")
+                    },
+                }
+            )
+    items.sort(key=lambda e: e["at"] or "", reverse=True)
+    return items[: max(1, min(limit, 500))]
+
+
+@router.get("/system/errors", response_model=dict[str, Any])
+async def recent_errors(user: CurrentUser, limit: int = 100) -> dict[str, Any]:
+    """Latest warnings and errors of the API and the worker (newest first), already redacted."""
+    directory = get_settings().error_log_dir
+    if not directory:
+        return {"enabled": False, "items": []}
+    return {"enabled": True, "items": await asyncio.to_thread(_read_error_log, directory, limit)}

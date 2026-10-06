@@ -73,8 +73,12 @@ export function DataSourcesCard() {
               />
               <Row
                 on={s.provider.listings > 0}
-                title={s.provider.name === "mock" ? "Demo market" : "Authorized feed"}
-                detail={`${plural(s.provider.listings, "listing")} from the configured provider, re-checked on an adaptive schedule.`}
+                title="Authorized feed"
+                detail={
+                  s.provider.name
+                    ? `${plural(s.provider.listings, "listing")} from the configured feed, re-checked on an adaptive schedule.`
+                    : "Not configured: data come only from what you capture (MARKETPLACE_PROVIDER=feed with FEED_URL to add one)."
+                }
               />
               <Row
                 on={s.public_fetch.enabled ? (s.public_fetch.paused_for_seconds > 0 ? "warn" : true) : false}

@@ -25,7 +25,7 @@ Ogni annuncio visto finisce in un **archivio permanente**.
 | ![Dettaglio](docs/screenshots/deal-detail-dark.jpg) | ![Mercato](docs/screenshots/market-analysis-dark.jpg) | ![Mobile](docs/screenshots/mobile-deals.jpg) |
 
 > **Principi.**
-> - FlipFinder legge ciò che **tu** apri: estensione, link, email di notifica, import manuale, feed autorizzati, Demo Mode.
+> - FlipFinder legge ciò che **tu** apri: estensione, link, email di notifica, import manuale, feed autorizzati. Nessun dato simulato: senza dati sufficienti mostra "dati insufficienti".
 > - Le letture automatiche di pagine pubbliche sono facoltative, spente di default e lente; si fermano al primo rifiuto.
 > - Non aggira mai CAPTCHA, rate limit, anti-bot o autenticazioni.
 > - Non acquista, non invia offerte e non contatta venditori: la decisione finale resta sempre all'utente. Non
@@ -62,24 +62,25 @@ Ogni annuncio visto finisce in un **archivio permanente**.
 ## Avvio rapido (Docker)
 
 ```bash
-cp .env.example .env          # facoltativo per la demo: chiavi AI, canali di notifica, segreti
+cp .env.example .env          # facoltativo in locale: chiavi AI, canali di notifica, segreti
 docker compose up --build
 ```
 
-Poi apri **http://localhost:3000** e premi **Try the demo**.
+Poi apri **http://localhost:3000** e crea il tuo account. Per l'uso vero (HTTPS, solo tu, backup
+automatici) segui [Produzione](#produzione).
 
 Cosa succede al primo avvio:
 
 1. `postgres` e `redis` partono e diventano *healthy*;
-2. `backend` applica le migrazioni Alembic, esegue il seed idempotente (catalogo brand/categorie,
-   epoca del marketplace simulato, utente demo con 4 watchlist) e serve l'API;
-3. `worker` esegue la prima scansione: importa lo storico simulato (~10.800 annunci, 60 giorni;
-   circa 30 secondi), calcola le statistiche di mercato e accoda le analisi (fino a ~490
-   annunci/s su 4 core: tutto analizzato in meno di un minuto);
+2. `backend` applica le migrazioni Alembic, esegue il seed idempotente (catalogo brand/categorie)
+   e serve l'API;
+3. `worker` esegue i job periodici (analisi, statistiche di mercato, controlli di stato,
+   calibrazione delle stime sulle vendite osservate);
 4. `frontend` (Next.js) serve l'app e fa da proxy verso l'API su `/api/*`.
 
-La dashboard si popola mentre le analisi procedono; da lì in poi il marketplace simulato pubblica
-annunci nuovi in continuo e lo scanner li analizza ogni 30 secondi.
+All'inizio il database è vuoto: si riempie con ciò che catturi (estensione mentre navighi Vinted,
+link, email di notifica, import di una ricerca) o con un feed autorizzato se lo configuri. Le
+pagine mostrano stati vuoti espliciti finché non ci sono dati.
 
 | Servizio | Porta | Note |
 |---|---|---|
@@ -118,7 +119,7 @@ imposta la rete Wi-Fi come *privata*); le reti Wi-Fi "ospiti" spesso isolano i d
 **Fuori casa** usa una VPN privata come [Tailscale](https://tailscale.com) (gratuita per uso
 personale): installala su computer e telefono con lo stesso account e apri
 `http://<nome-del-computer>:3000`. Non aprire la porta 3000 sul router: questa configurazione è
-pensata per la rete locale (account demo, password di sviluppo); per esporla su Internet segui
+pensata per la rete locale (password di sviluppo); per esporla su Internet segui
 [Produzione](#produzione).
 
 L'estensione per Vinted funziona solo sui browser desktop (Chrome, Edge, Brave): i browser del
@@ -136,7 +137,7 @@ flowchart LR
   LNK[Link incollati · import manuale · bookmarklet] --> ACQ
   EML[Email di notifica Vinted] --> ACQ
   PUB[Lettura pubblica lenta, facoltativa] --> ACQ
-  FEED[Feed autorizzato / Demo Mode] --> ACQ
+  FEED[Feed autorizzato] --> ACQ
   ACQ[Acquisizione: dedupe per ID Vinted] --> DB[(Archivio: annuncio + snapshot + tentativi)]
   DB --> AN[Analisi: comparabili, velocità, costi, rischi, score]
   AN --> DB
@@ -185,7 +186,7 @@ Il confronto completo (affidabilità, copertura, costi, rischio di blocco, confo
 | **Import manuale** (modulo) e **pagina di ricerca** | attiva | *Analyze a listing*, `/import` |
 | **Email di notifica Vinted** ("preferito venduto", "prezzo ridotto") | attiva su richiesta | upload `.eml` in *Settings → Data sources*; lettura automatica con `IMAP_HOST`/`IMAP_USER`/`IMAP_PASSWORD` (sola lettura) |
 | **Lettura pubblica lenta delle pagine degli articoli tracciati** | **spenta di default** | `VINTED_PUBLIC_FETCH_ENABLED=true`. Rispetta robots.txt, non usa cookie, fa al massimo una lettura ogni 30 s e 300 al giorno, usa una cache e si ferma 6 ore al primo rifiuto. I termini di Vinted vietano la raccolta automatica: la scelta è tua. |
-| **Feed autorizzato** / Demo Mode | `MARKETPLACE_PROVIDER=feed` / `mock` | vedi [Fonti dati](#fonti-dati-e-adapter) |
+| **Feed autorizzato** | `MARKETPLACE_PROVIDER=feed` | vedi [Fonti dati](#fonti-dati-e-adapter) |
 | Vinted Pro Integrations, provider terzi | non implementati | API riservata ai venditori Pro e senza catalogo; i provider terzi fanno scraping senza licenza (vedi `docs/ACQUISITION.md`) |
 
 **Ordine di fallback** per aggiornare un articolo:
@@ -204,7 +205,7 @@ I controlli girano nel **worker**, che va avviato insieme all'API.
 
 | Job | Quando | Cosa controlla | Si attiva con |
 |---|---|---|---|
-| `refresh_listings` | ogni 10 minuti | annunci del provider (Demo Mode / feed) arrivati al loro prossimo controllo | sempre |
+| `refresh_listings` | ogni 10 minuti | annunci del feed autorizzato arrivati al loro prossimo controllo | `MARKETPLACE_PROVIDER=feed` |
 | `refresh_tracked_public` | ogni minuto (una lettura al massimo ogni 30 s) | articoli Vinted **tracciati** arrivati al prossimo controllo | `VINTED_PUBLIC_FETCH_ENABLED=true` |
 | `poll_email` | ogni `IMAP_POLL_MINUTES` (15) | nuove email di Vinted: vendite, ribassi, articoli nuovi | `IMAP_HOST`, `IMAP_USER`, `IMAP_PASSWORD` |
 | `archive_images` | dopo ogni acquisizione | copia locale delle foto (solo domini immagini di Vinted, 3 tentativi) | `IMAGE_ARCHIVE_ENABLED=true` (default) |
@@ -255,7 +256,7 @@ flowchart LR
   API --> RD[(Redis)]
   W[Worker arq] --> PG
   W --> RD
-  W -- "MarketplaceProvider" --> SRC[[Mock / feed autorizzato / import manuale]]
+  W -- "MarketplaceProvider" --> SRC[[feed autorizzato / import manuale]]
   W -- alert --> CH[[In-app · Web Push · Email · Telegram · Discord]]
   W -. opzionale .-> AI[[Claude API]]
 ```
@@ -305,7 +306,7 @@ cd backend
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 alembic upgrade head                      # schema
-python -m app.seed                        # catalogo, Demo Mode, utente demo
+python -m app.seed                        # catalogo brand e categorie
 uvicorn app.main:app --reload --port 8000 # API su http://localhost:8000 (docs su /docs)
 ```
 
@@ -335,7 +336,7 @@ repository). Un valore vuoto equivale a "non impostato". Le principali:
 
 | Variabile | Default | Descrizione |
 |---|---|---|
-| `ENVIRONMENT` | `development` | `production` attiva i controlli di avvio (segreti, cookie, demo) |
+| `ENVIRONMENT` | `development` | `production` attiva i controlli di avvio (segreti, cookie) |
 | `DATABASE_URL` | `postgresql+asyncpg://…@localhost:5432/flipfinder` | connessione PostgreSQL (asyncpg) |
 | `REDIS_URL` | `redis://localhost:6379/0` | code, cache, rate limit, lock |
 | `POSTGRES_USER/PASSWORD/DB` | `flipfinder` | usati da Docker Compose per creare il DB e comporre `DATABASE_URL` |
@@ -343,9 +344,9 @@ repository). Un valore vuoto equivale a "non impostato". Le principali:
 | `COOKIE_SECURE` | `false` | `true` dietro HTTPS (obbligatorio in produzione) |
 | `TRUST_PROXY_HEADERS` / `TRUSTED_PROXY_HOPS` | `true` / `1` | IP client da `X-Forwarded-For` contando solo i proxy fidati |
 | `RATE_LIMIT_PER_MINUTE` / `AUTH_RATE_LIMIT_PER_MINUTE` | `240` / `10` | limiti per utente/IP |
-| `ALLOW_REGISTRATION` | `true` | registrazione pubblica |
-| `SEED_DEMO_USER` | `true` | account demo + pulsante *Try the demo* (vietato in produzione) |
-| `MARKETPLACE_PROVIDER` | `mock` | `mock` (Demo Mode) o `feed` (feed autorizzato) |
+| `ALLOW_REGISTRATION` | `true` | `false` = si può creare solo il primo account (il tuo) |
+| `ERROR_LOG_DIR` | — | cartella del registro errori (avvisi ed errori, a rotazione, dati sensibili oscurati) |
+| `MARKETPLACE_PROVIDER` | `none` | `none` (solo le tue catture) o `feed` (feed autorizzato) |
 | `FEED_URL` / `FEED_API_KEY` / `FEED_REQUESTS_PER_MINUTE` | — / — / `30` | configurazione del feed |
 | `SCAN_INTERVAL_SECONDS` / `SCAN_BATCH_SIZE` | `30` / `500` | cadenza e dimensione delle scansioni |
 | `ALERT_MAX_LISTING_AGE_HOURS` | `72` | alert opportunità/watchlist solo per annunci recenti |
@@ -427,7 +428,7 @@ Job schedulati (UTC):
 | `refresh_tracked_public` | ogni minuto, se `VINTED_PUBLIC_FETCH_ENABLED` | stato degli articoli Vinted tracciati, una lettura lenta alla volta |
 | `poll_email` | ogni `IMAP_POLL_MINUTES`, se IMAP è configurato | email di notifica di Vinted (vendite, ribassi) |
 | `recompute_learning` | :07 e :37 | Personal Flip Score dalle performance reali dei flip |
-| `prune` | 03:17 | pulizia: solo dati della Demo Mode e tentativi di acquisizione oltre 180 giorni (lo storico degli annunci reali resta) |
+| `prune` | 03:17 | pulizia: log tecnici oltre 7 giorni e tentativi di acquisizione oltre 180 (lo storico degli annunci resta) |
 
 Ogni job ha timeout, numero massimo di tentativi e **backoff esponenziale** (2 s, 4 s, 8 s… max
 5 min); i job sono idempotenti (job id deterministici, upsert). Ogni analisi è tracciata in
@@ -437,8 +438,8 @@ Ogni job ha timeout, numero massimo di tentativi e **backoff esponenziale** (2 s
 
 ## Fonti dati e adapter
 
-Ordine di priorità: API/feed ufficiali o autorizzati → integrazioni autorizzate → import manuale
-→ Demo Mode. Ogni sorgente implementa l'interfaccia `MarketplaceProvider`
+Ordine di priorità: API/feed ufficiali o autorizzati → integrazioni autorizzate → catture tue
+(estensione, link, email) e import manuale. Nessun dato viene mai generato. Ogni sorgente implementa l'interfaccia `MarketplaceProvider`
 (`backend/app/marketplace/base.py`):
 
 ```python
@@ -452,9 +453,8 @@ class MarketplaceProvider(ABC):
 
 Adapter inclusi:
 
-- **`mock`** — *Demo Mode*: marketplace simulato deterministico (`MOCK_SEED`) con ~30 brand,
-  storico di 60 giorni, vendite, ribassi, repost, foto riutilizzate, annunci sospetti e outlier.
-  È l'unico punto del progetto con dati statici.
+- **nessuno** (`MARKETPLACE_PROVIDER=none`, predefinito) — niente scanner: i dati arrivano solo da
+  ciò che catturi.
 - **`feed`** — client per un endpoint JSON che si ha il diritto di usare (feed partner/affiliato,
   integrazione ufficiale, export proprio). Rispetta `FEED_REQUESTS_PER_MINUTE` e `Retry-After`,
   si identifica con il proprio User-Agent e non tenta mai di aggirare controlli d'accesso.
@@ -655,7 +655,7 @@ End-to-end con l'estensione vera in Chromium su pagine Vinted finte (nessuna ric
 - classifica e scorrimento alla scheda;
 - cattura completa dell'annuncio.
 
-Serve FlipFinder in esecuzione con l'account demo e Playwright:
+Serve un FlipFinder di prova in esecuzione che accetti registrazioni (ogni test crea il suo account) e Playwright:
 
 ```bash
 APP_URL=http://localhost:3000 CHROME_PATH=/percorso/chrome node extension/e2e/live.e2e.cjs /tmp/shots
@@ -676,7 +676,7 @@ APP_URL=http://localhost:3000 CHROME_PATH=/percorso/chrome node extension/e2e/li
 - Nessun segreto nel codice: tutto da variabili d'ambiente; i log JSON redigono password, token,
   chiavi e URL di webhook; all'utente arrivano solo messaggi comprensibili, mai stack trace.
 - In produzione il backend **si rifiuta di partire** con segreti di sviluppo, cookie non sicuri,
-  password del database di default o account demo attivo.
+  password del database di default.
 
 ---
 
@@ -688,7 +688,7 @@ backend/
     api/            router FastAPI (v1) e dipendenze (auth, CSRF, economia utente)
     core/           config, sicurezza, errori, log, cache, rate limit, Redis
     db/             modelli SQLAlchemy e sessioni
-    marketplace/    MarketplaceProvider, mock (Demo Mode), feed autorizzato
+    marketplace/    MarketplaceProvider, feed autorizzato
     acquisition/    identità Vinted, parser condiviso (vinted_parser.json), link, email,
                     lettura pubblica facoltativa, valutazioni per l'estensione
     tracking/       stati (venduto/rimosso), cadenza adattiva, snapshot, archivio, export CSV
@@ -723,12 +723,17 @@ docker-compose.yml  stack completo
 
 ## Produzione
 
-Checklist minima:
+Installazione per l'uso vero, descritta passo per passo in [deploy/README.md](deploy/README.md):
 
-- `ENVIRONMENT=production`, `JWT_SECRET` casuale (≥ 32 caratteri), `COOKIE_SECURE=true`,
-  `POSTGRES_PASSWORD` robusta, `SEED_DEMO_USER=false`;
-- servire tutto dietro HTTPS (reverse proxy davanti al frontend) e impostare
-  `TRUSTED_PROXY_HOPS=2` se il proxy aggiunge `X-Forwarded-For`; non esporre il backend
-  direttamente;
-- una sorgente dati autorizzata (`MARKETPLACE_PROVIDER=feed`) oppure solo import manuale;
-- backup del volume PostgreSQL; `LOG_JSON=true` verso il proprio sistema di log.
+- **indirizzo stabile e HTTPS**: `docker-compose.prod.yml` aggiunge Caddy, che ottiene e rinnova
+  da solo il certificato per il tuo dominio (oppure Tailscale, senza dominio né porte aperte);
+- **accesso solo per te**: `ALLOW_REGISTRATION=false`, si può creare solo il primo account;
+  API non esposta, sessioni con cookie sicuri;
+- **backup automatici**: copia del database prima di ogni avvio di una nuova versione e ogni
+  giorno, con rotazione (`deploy/backup.sh`, ripristino con `deploy/restore.sh`);
+- **registro errori**: avvisi ed errori di API e worker in `/data/logs`, visibili in
+  Impostazioni → *Error log*, senza dati sensibili;
+- **estensione collegata alla produzione**: nelle opzioni l'indirizzo HTTPS e la chiave creata in
+  Impostazioni → *Browser extension*;
+- **dati demo**: la migrazione `0007` elimina il vecchio mercato simulato e l'account demo
+  (fai prima il backup).

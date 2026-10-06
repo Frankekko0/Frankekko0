@@ -28,8 +28,19 @@ export function ScanStatus({ compact = false }: { compact?: boolean }) {
   const now = useNow();
   const last = (data?.scanner.last_run?.at as string | undefined) ?? null;
   const stale = last ? now - new Date(last).getTime() > 5 * 60_000 : true;
+  if (data && !data.provider.configured) {
+    // No automatic source: nothing scans, everything comes from what you capture.
+    return (
+      <Tip content={`Source: your captures (extension, links, email) · ${data.listings_tracked.toLocaleString()} listings tracked`}>
+        <span className="inline-flex items-center gap-2 rounded-full border border-line bg-surface px-2.5 py-1 text-xs whitespace-nowrap text-fg-2">
+          <span className="relative size-2 rounded-full bg-accent" aria-hidden />
+          {compact ? "Captures" : `Your captures · ${data.listings_tracked.toLocaleString()}`}
+        </span>
+      </Tip>
+    );
+  }
   return (
-    <Tip content={data ? `${data.provider.demo_mode ? "Demo market data" : `Source: ${data.provider.name}`} · ${data.listings_tracked.toLocaleString()} listings tracked` : "Connecting…"}>
+    <Tip content={data ? `Source: ${data.provider.name} + your captures · ${data.listings_tracked.toLocaleString()} listings tracked` : "Connecting…"}>
       <span className="inline-flex items-center gap-2 rounded-full border border-line bg-surface px-2.5 py-1 text-xs whitespace-nowrap text-fg-2">
         <span className="relative flex size-2" aria-hidden>
           {!stale && <span className="absolute inset-0 rounded-full bg-success opacity-60 [animation:ping_1.8s_var(--ease-out)_infinite]" />}

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState, type ReactNode, type CSSProperties } from "react";
 import { toast } from "sonner";
 import { DataSourcesCard } from "@/components/settings/data-sources";
+import { ErrorLogCard } from "@/components/settings/error-log";
 import { ExtensionKeysCard } from "@/components/settings/extension-keys";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -448,6 +449,7 @@ export default function SettingsPage() {
       {notif.data ? <NotificationsForm initial={notif.data} /> : <Skeleton className="h-96 rounded-2xl" />}
       <ExtensionKeysCard />
       <DataSourcesCard />
+      <ErrorLogCard />
       <Block icon={<LogOut />} title="Account">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-[13px] text-fg-2">Sign out from all devices (invalidates every session).</p>

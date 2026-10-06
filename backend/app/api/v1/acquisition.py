@@ -118,7 +118,10 @@ async def acquisition_status(user: CurrentUser, db: DB) -> dict[str, Any]:
         )
     ).scalar_one()
     return {
-        "provider": {"name": s.marketplace_provider, "listings": by_mode.get("provider_scan", 0)},
+        "provider": {
+            "name": s.marketplace_provider if s.marketplace_provider != "none" else None,
+            "listings": by_mode.get("provider_scan", 0),
+        },
         "extension": {
             "listings": sum(
                 by_mode.get(k, 0)

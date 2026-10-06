@@ -4,7 +4,6 @@ from app.api.v1 import (
     acquisition,
     analytics,
     auth,
-    demo,
     extension,
     items,
     listings,
@@ -19,7 +18,6 @@ from app.core.rate_limit import RateLimit
 
 api_router = APIRouter()
 api_router.include_router(system.router)
-api_router.include_router(demo.router)
 api_router.include_router(auth.router)
 _limited = [Depends(RateLimit("api"))]
 for module in (

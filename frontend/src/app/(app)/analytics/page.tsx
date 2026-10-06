@@ -13,7 +13,7 @@ import type { ErrorStats, SegmentStats } from "@/lib/types";
 
 function SegmentTable({ rows, loading, kind }: { rows?: SegmentStats[]; loading: boolean; kind: "brand" | "category" }) {
   if (loading) return <Skeleton className="h-80 rounded-xl" />;
-  if (!rows?.length) return <EmptyState icon={<Layers />} title="Not enough data yet" description="Analytics fill up as the scanner analyses more listings." />;
+  if (!rows?.length) return <EmptyState icon={<Layers />} title="Not enough data yet" description="Analytics fill up as more listings are captured and analysed (extension, imports, email)." />;
   const max = Math.max(...rows.map((r) => r.flip_index), 1);
   return (
     <div className="-mx-5 overflow-x-auto">

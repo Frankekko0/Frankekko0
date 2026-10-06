@@ -158,7 +158,7 @@ function Summary({ d }: { d: OpportunityDetail }) {
 
       <Button asChild variant={c.is_ultra_deal ? "ultra" : "primary"} size="lg" className="mt-5 w-full">
         <a href={c.url} target="_blank" rel="noopener noreferrer">
-          {c.is_ultra_deal ? <Flame /> : <ExternalLink />} VIEW DEAL on {d.listing.provider === "mock" ? "Vinted (demo)" : "the marketplace"}
+          {c.is_ultra_deal ? <Flame /> : <ExternalLink />} VIEW DEAL on {d.listing.provider === "vinted" ? "Vinted" : "the marketplace"}
         </a>
       </Button>
       <div className="mt-2 grid grid-cols-2 gap-2">

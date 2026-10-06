@@ -2,7 +2,7 @@
 
 Refresh fallback (best first), as listed by :func:`app.tracking.refresh.refresh_modes`:
 
-1. the configured provider (demo market or an authorized feed) re-reads the listing;
+1. the configured provider (an authorized feed) re-reads the listing;
 2. the server reads the public page (opt-in, polite, stops at the first block);
 3. otherwise the listing stays due and the browser extension refreshes it when the user browses
    Vinted (passively when the page is opened, or slowly in the background if enabled);
@@ -148,8 +148,8 @@ async def refresh_listing(
             status=listing.status,
         )
 
-    if AcquisitionMode.PROVIDER_SCAN in modes:
-        provider = await get_provider(session)
+    provider = await get_provider(session) if AcquisitionMode.PROVIDER_SCAN in modes else None
+    if provider is not None:
         attempt = Attempt(
             AcquisitionMode.PROVIDER_SCAN, "refresh", listing_id=listing.id, vinted_id=listing.external_id
         )

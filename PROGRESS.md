@@ -36,8 +36,19 @@ Aggiornato a ogni passo: **fatto**, **in corso**, **ipotesi**.
   - Misure: migliore evidenziata 17–53 ms dopo che il browser ha letto la pagina (78–93 ms con CPU 4× più lenta, 24–26 ms con FlipFinder spento); lavoro dell'estensione con badge a blocchi senza bloccare; nessun task lungo durante lo scorrimento. Dalla navigazione 0,56–1,4 s su questa macchina: è il caricamento della pagina stessa (server e browser sulla stessa CPU).
   - Offline: nessun blocco, verdetto dal riepilogo salvato; la coda si svuota quando FlipFinder torna raggiungibile. Selettori sempre nel modulo aggiornabile (`vinted_parser.json` → `parser-config.js`, aggiornato dal server).
 
+- **Obiettivo 4 – via i demo, produzione** (verificato: 266 test backend, migrazione 0007 su DB usa-e-getta, stack di produzione avviato davvero con Docker).
+  - Backup del DB di sviluppo prima di tutto: `pg_dump` (28 MB) nella cartella di lavoro della sessione.
+  - Eliminati: provider simulato (`app/marketplace/mock`), immagini demo (`/api/v1/demo`), account e accesso demo, impostazioni `SEED_DEMO_USER`/`MOCK_*`, eccezioni per i dati simulati. Senza fonte configurata (`MARKETPLACE_PROVIDER=none`, predefinito) non c'è scanner: nessun ripiego su dati finti.
+  - Migrazione `0007`: cancella annunci/venditori simulati (con foto, storico, analisi, avvisi, log), account demo, prodotti orfani, statistiche/calibrazione/apprendimento ricavati dal mercato simulato; i tuoi acquisti/vendite/catture restano.
+  - Interfaccia: niente "Try the demo" né etichette demo; stati vuoti con indicazione concreta (estensione, import); indicatore "Your captures" e "Scan now" solo se esiste un feed.
+  - Produzione (`docker-compose.prod.yml`, `deploy/`): Caddy con HTTPS automatico (o Tailscale), API e web app non esposte, registrazione chiusa dopo il primo account, cookie Secure, backup prima di ogni avvio e ogni giorno con rotazione + ripristino, registro errori su volume visibile in Impostazioni → Error log.
+  - Verifiche sullo stack reale: HTTP→HTTPS 308, HSTS/CSP, owner 201 e secondo account 400, cookie Secure+HttpOnly, backup scritti, 16 pagine/schede senza tracce demo né errori, estensione collegata via HTTPS (sync ok, 24 annunci salvati). Trovati e corretti 3 difetti reali: segreto JWT non passato ai container, Caddy bloccato da e-mail vuota, cartella log non scrivibile.
+
+## Da fare da te
+- Eliminare i dati demo dal DB di sviluppo di questa sessione: la cancellazione è stata bloccata dal controllo di sicurezza (backup già fatto). Sul tuo server la migrazione 0007 lo fa da sola all'avvio, dopo il backup automatico.
+
 ## In corso
-- Obiettivo 4: via i demo, produzione.
+- Obiettivi 5-6: tasti Preferiti e Acquista.
 
 ## Ipotesi
 - Le misure di errore sono sul mercato simulato (nel DB c'è 1 sola vendita reale): sulle tue vendite reali la calibrazione si attiva da sola dopo 30 vendite osservate; le tue rivendite pesano 5 volte.
@@ -45,6 +56,7 @@ Aggiornato a ogni passo: **fatto**, **in corso**, **ipotesi**.
 - Soglie foto: nitidezza 0,30 tarata su immagini sintetiche (nitide ≥ 0,35, sfocate ≤ 0,28); hash ≤ 4 bit = stessa foto.
 - Velocità su Vinted reale non misurabile da qui (nessun accesso): la pagina di prova riproduce struttura e peso di una ricerca da 96 articoli; il tempo dell'estensione dopo la lettura della pagina non dipende da Vinted.
 - Verdetto rapido: categoria riconosciuta dal titolo con le parole chiave della tassonomia; se la categoria non ha abbastanza vendite si usa il brand intero (confidenza ridotta); senza dati "dati insuff.".
+- Produzione verificata con dominio `localhost` (certificato locale di Caddy): con un dominio vero Caddy usa Let's Encrypt, non verificabile da qui.
 - Tempo di risposta del venditore: Vinted non lo mostra nella pagina articolo, quindi è "non disponibile" (non stimato).
 - Prezzo di listino e periodo di uscita: nessuna fonte pubblica affidabile; mostrato solo il prezzo originale dichiarato dal venditore nel testo.
 - La pagina "salvata" del test è costruita sulla struttura nota di Vinted (non ho una tua pagina reale): se ne salvi una (Ctrl+S) in `backend/tests/fixtures/vinted/real/`, va aggiunta ai test.

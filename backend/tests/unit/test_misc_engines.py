@@ -1,7 +1,6 @@
-"""NL search, alert rules, learning engine, mock provider, logging redaction, deal analyst."""
+"""NL search, alert rules, learning engine, logging redaction, deal analyst."""
 
 import uuid
-from datetime import UTC, datetime, timedelta
 from decimal import Decimal as D
 
 import pytest
@@ -12,8 +11,6 @@ from app.alerts.rules import AlertCandidate, Thresholds, WatchlistRule, decide_a
 from app.analytics.learning import FlipRecord, compute_adjustments
 from app.core.logging import REDACTED, redact
 from app.domain.enums import AlertType, Verdict
-from app.marketplace.base import SearchQuery
-from app.marketplace.mock.provider import MockMarketplaceProvider
 from app.vision.phash import dhash, hamming
 
 parser = NaturalLanguageParser()
@@ -149,32 +146,6 @@ def test_learning_needs_enough_flips_and_is_bounded() -> None:
 def test_ignored_segments_get_mild_penalty_only() -> None:
     adj = compute_adjustments([], {("category", "jeans"): (30, 0)})
     assert -8 <= adj[("category", "jeans")]["adjustment"] < 0
-
-
-def test_mock_provider_is_deterministic_and_paginates() -> None:
-    import asyncio
-
-    epoch = datetime(2026, 9, 1, tzinfo=UTC)
-    now = epoch + timedelta(hours=2)
-    p1 = MockMarketplaceProvider(seed=7, epoch=epoch, history_days=2, now_fn=lambda: now)
-    p2 = MockMarketplaceProvider(seed=7, epoch=epoch, history_days=2, now_fn=lambda: now)
-
-    async def collect(p: MockMarketplaceProvider) -> list[str]:
-        out, cursor = [], None
-        while True:
-            page = await p.search_listings(SearchQuery(cursor=cursor, page_size=100))
-            out += [f"{x.external_id}:{x.price}:{x.status}" for x in page.listings]
-            if not page.has_more:
-                return out
-            cursor = page.next_cursor
-
-    a, b = asyncio.run(collect(p1)), asyncio.run(collect(p2))
-    assert a == b and len(a) > 300
-    assert len(set(a)) == len(a)
-    ext = a[0].split(":")[0]
-    listing = asyncio.run(p1.get_listing(ext))
-    assert listing is not None and listing.external_id == ext
-    assert asyncio.run(p1.get_listing("not-a-number")) is None
 
 
 def test_log_redaction() -> None:

@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, Response
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.api.deps import DB, CurrentUser
 from app.core.config import get_settings
@@ -18,8 +18,6 @@ from app.core.errors import (
     AppError,
     AuthenticationError,
     ConflictError,
-    PermissionDeniedError,
-    ProviderUnavailableError,
 )
 from app.core.logging import get_logger
 from app.core.rate_limit import RateLimit
@@ -67,8 +65,9 @@ def _set_session(response: Response, user: User) -> SessionOut:
 async def register(
     body: RegisterRequest, response: Response, db: DB, include_token: bool = Query(False)
 ) -> SessionOut:
-    settings = get_settings()
-    if not settings.allow_registration:
+    # With registrations closed (production), only the owner's first account can be created.
+    await db.execute(text("SELECT pg_advisory_xact_lock(724001)"))  # one registration at a time
+    if not await registration_open(db):
         raise AppError("Le registrazioni sono disabilitate.", code="registration_disabled")
     email = body.email.lower()
     exists = (
@@ -111,37 +110,16 @@ async def login(
     return session
 
 
+async def registration_open(db: DB) -> bool:
+    if get_settings().allow_registration:
+        return True
+    return (await db.execute(select(func.count()).select_from(User))).scalar_one() == 0
+
+
 @router.get("/config", response_model=AuthConfigOut)
-async def auth_config() -> AuthConfigOut:
-    """Public: which sign-in options the login page should offer."""
-    settings = get_settings()
-    return AuthConfigOut(
-        registration_enabled=settings.allow_registration,
-        demo_login_enabled=settings.seed_demo_user,
-        demo_user_email=settings.demo_user_email if settings.seed_demo_user else None,
-    )
-
-
-@router.post("/demo", response_model=SessionOut, dependencies=[Depends(auth_limit)])
-async def demo_login(response: Response, db: DB) -> SessionOut:
-    """One-click sign-in to the seeded demo account (Demo Mode only, never in production)."""
-    settings = get_settings()
-    if not settings.seed_demo_user:
-        raise PermissionDeniedError("La modalità demo non è attiva.", code="demo_disabled")
-    user = (
-        await db.execute(select(User).where(User.email == settings.demo_user_email.lower()))
-    ).scalar_one_or_none()
-    if user is None or not user.is_active:
-        raise ProviderUnavailableError(
-            "L'account demo non è ancora pronto: riprova tra qualche secondo.", code="demo_not_ready"
-        )
-    user.last_login_at = datetime.now(UTC)
-    await db.commit()
-    await db.refresh(user)
-    log.info("auth.demo_login", user_id=str(user.id))
-    session = _set_session(response, user)
-    session.access_token = None
-    return session
+async def auth_config(db: DB) -> AuthConfigOut:
+    """Public: whether the sign-up page is available."""
+    return AuthConfigOut(registration_enabled=await registration_open(db))
 
 
 @router.post("/logout", response_model=Message)

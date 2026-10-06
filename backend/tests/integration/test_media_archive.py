@@ -45,7 +45,7 @@ async def test_archive_keeps_copies_and_explains_failures(
         f"{CDN}/d/huge.jpeg",
         f"{CDN}/e/page.jpeg",
         "https://evil.example.com/x.jpeg",
-        "/api/v1/demo/images/polo.svg",
+        "/img/polo.svg",
     ]
     pl = make_listing(external_id="31337").model_copy(update={"images": [ProviderImage(url=u) for u in urls]})
     res = await IngestionService(session, "vinted", AcquisitionMode.EXTENSION_ITEM).ingest([pl], now=NOW)

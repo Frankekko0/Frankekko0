@@ -34,7 +34,9 @@ async def test_paste_links_creates_tracked_records(auth_client: httpx.AsyncClien
     assert none["found"] == 0
 
 
-async def test_update_now_uses_the_best_mode(auth_client: httpx.AsyncClient, make_listing) -> None:
+async def test_update_now_uses_the_best_mode(
+    auth_client: httpx.AsyncClient, make_listing, monkeypatch
+) -> None:
     # Vinted listing, no server mode enabled: queued for the extension.
     await auth_client.post(
         f"{API}/listings/import/links", json={"text": "https://www.vinted.it/items/4242-x"}
@@ -42,9 +44,13 @@ async def test_update_now_uses_the_best_mode(auth_client: httpx.AsyncClient, mak
     q = (await auth_client.post(f"{API}/items/4242/refresh")).json()
     assert q["outcome"] == "queued" and q["needs_extension"] and q["mode"] == "extension_refresh"
 
-    # Listing from the configured provider (demo market): read again from the provider.
+    # Listing from the configured source (an authorized feed): read again from it.
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "marketplace_provider", "feed")
+
     class OneListing:
-        name = "mock"
+        name = "feed"
 
         def __init__(self, pl):
             self.pl = pl
@@ -54,15 +60,15 @@ async def test_update_now_uses_the_best_mode(auth_client: httpx.AsyncClient, mak
 
     pl = make_listing(price=20, external_id="9001")
     async with session_scope() as s:
-        res = await IngestionService(s, "mock").ingest([pl], now=NOW)
+        res = await IngestionService(s, "feed").ingest([pl], now=NOW)
     set_provider(OneListing(pl.model_copy(update={"price": pl.price - 2})))
     try:
         r = (await auth_client.post(f"{API}/items/{res.new_ids[0]}/refresh")).json()
+        assert r["outcome"] == "updated" and r["mode"] == "provider_scan"
+        closed = await auth_client.post(f"{API}/items/{res.new_ids[0]}/refresh")
+        assert closed.status_code == 200
     finally:
         set_provider(None)
-    assert r["outcome"] == "updated" and r["mode"] == "provider_scan"
-    closed = await auth_client.post(f"{API}/items/{res.new_ids[0]}/refresh")
-    assert closed.status_code == 200
 
 
 async def test_email_upload_and_status_page(auth_client: httpx.AsyncClient, make_listing) -> None:

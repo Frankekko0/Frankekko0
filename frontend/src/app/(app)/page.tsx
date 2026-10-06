@@ -10,7 +10,7 @@ import { EmptyState, SectionHeader } from "@/components/ui/feedback";
 import { AnimatedNumber } from "@/components/ui/motion";
 import { StatTile } from "@/components/ui/stat";
 import { compactNum, eur, pct, plural, timeAgo } from "@/lib/format";
-import { useAlerts, useInsights, useMe, useOpportunities, useQuickStats, useTriggerScan } from "@/lib/queries";
+import { useAlerts, useInsights, useMe, useOpportunities, useQuickStats, useSystemStatus, useTriggerScan } from "@/lib/queries";
 import type { OpportunityCard } from "@/lib/types";
 
 const EXAMPLES = [
@@ -20,7 +20,7 @@ const EXAMPLES = [
   "piumini basso rischio",
 ];
 
-function DealGrid({ items, loading, count = 8 }: { items?: OpportunityCard[]; loading: boolean; count?: number }) {
+function DealGrid({ items, loading, count = 8, sourceConfigured }: { items?: OpportunityCard[]; loading: boolean; count?: number; sourceConfigured?: boolean }) {
   if (loading && !items) {
     return (
       <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -35,7 +35,18 @@ function DealGrid({ items, loading, count = 8 }: { items?: OpportunityCard[]; lo
       <EmptyState
         icon={<Radar />}
         title="No opportunities yet"
-        description="The scanner is analysing the market. New deals appear here automatically as soon as they are found."
+        description={
+          sourceConfigured
+            ? "The scanner is analysing the feed. New deals appear here automatically as soon as they are found."
+            : "Open a Vinted search with the FlipFinder extension, import a search or analyse a link: every listing you capture is analysed and the best ones appear here."
+        }
+        action={
+          sourceConfigured ? undefined : (
+            <Button asChild size="sm" variant="outline">
+              <Link href="/import">Import a Vinted search</Link>
+            </Button>
+          )
+        }
       />
     );
   }
@@ -92,6 +103,8 @@ export default function DashboardPage() {
   const alerts = useAlerts({ page: 1 });
   const insights = useInsights();
   const scan = useTriggerScan();
+  const status = useSystemStatus();
+  const sourceConfigured = Boolean(status.data?.provider.configured);
   const s = stats.data;
   const ultraIds = new Set((ultra.data?.items ?? []).map((d) => d.id));
   const topItems = top.data?.items.filter((d) => !ultraIds.has(d.id)).slice(0, 8);
@@ -121,9 +134,11 @@ export default function DashboardPage() {
             <div className="2xl:hidden">
               <ScanStatus />
             </div>
-            <Button variant="outline" size="sm" onClick={() => scan.mutate()} loading={scan.isPending}>
-              <RefreshCw /> Scan now
-            </Button>
+            {sourceConfigured && (
+              <Button variant="outline" size="sm" onClick={() => scan.mutate()} loading={scan.isPending}>
+                <RefreshCw /> Scan now
+              </Button>
+            )}
             <Button asChild size="sm">
               <Link href="/analyze">
                 <ScanSearch /> Analyze a listing
@@ -228,7 +243,7 @@ export default function DashboardPage() {
             </Link>
           }
         />
-        <DealGrid items={topItems} loading={top.isLoading} />
+        <DealGrid items={topItems} loading={top.isLoading} sourceConfigured={sourceConfigured} />
       </section>
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">

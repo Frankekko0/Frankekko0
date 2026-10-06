@@ -1,6 +1,5 @@
 "use client";
 
-import { Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
@@ -17,7 +16,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState<"form" | "demo" | null>(null);
+  const [loading, setLoading] = useState<"form" | null>(null);
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const next = params.get("next");
   const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
@@ -32,18 +31,14 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, []);
 
-  async function signIn(kind: "form" | "demo") {
+  async function signIn() {
     setError(null);
-    setLoading(kind);
+    setLoading("form");
     try {
-      if (kind === "demo") {
-        await api<Session>("/auth/demo", { method: "POST" });
-      } else {
-        await api<Session>(`/auth/${mode}`, {
-          method: "POST",
-          body: mode === "login" ? { email, password } : { email, password, display_name: name || undefined },
-        });
-      }
+      await api<Session>(`/auth/${mode}`, {
+        method: "POST",
+        body: mode === "login" ? { email, password } : { email, password, display_name: name || undefined },
+      });
       router.replace(target());
       router.refresh();
     } catch (err) {
@@ -54,10 +49,8 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    void signIn("form");
+    void signIn();
   }
-
-  const showDemo = mode === "login" && config?.demo_login_enabled;
 
   return (
     <Card className="enter highlight p-6 shadow-pop" style={{ "--i": 1 } as CSSProperties}>
@@ -94,24 +87,6 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
           {mode === "login" ? "Sign in" : "Create account"}
         </Button>
       </form>
-      {showDemo && (
-        <div className="mt-4">
-          <div className="flex items-center gap-3 text-xs text-fg-3">
-            <span className="h-px flex-1 bg-line" /> or <span className="h-px flex-1 bg-line" />
-          </div>
-          <Button
-            variant="outline"
-            size="lg"
-            className="mt-4 w-full"
-            onClick={() => void signIn("demo")}
-            loading={loading === "demo"}
-            disabled={loading !== null}
-          >
-            <Sparkles /> Try the demo
-          </Button>
-          <p className="mt-2 text-center text-xs text-fg-3">Simulated marketplace data · no account needed</p>
-        </div>
-      )}
       <p className="mt-5 text-center text-[13px] text-fg-3">
         {mode === "register" ? (
           <>

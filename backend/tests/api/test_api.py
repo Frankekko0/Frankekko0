@@ -61,30 +61,23 @@ async def test_register_login_me_logout(client: httpx.AsyncClient) -> None:
     assert bearer.status_code == 200
 
 
-async def test_demo_login_is_server_side_and_optional(
+async def test_closed_registration_lets_only_the_owner_sign_up(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from app.core.config import get_settings
-    from app.db.session import session_scope
-    from app.seed import seed_demo_user
 
-    cfg = (await client.get(f"{API}/auth/config")).json()
-    assert cfg == {"registration_enabled": True, "demo_login_enabled": False, "demo_user_email": None}
-    off = await client.post(f"{API}/auth/demo")
-    assert off.status_code == 403 and off.json()["error"]["code"] == "demo_disabled"
-
-    monkeypatch.setattr(get_settings(), "seed_demo_user", True)
-    assert (await client.post(f"{API}/auth/demo")).status_code == 503  # not seeded yet
-    async with session_scope() as s:
-        await seed_demo_user(s)
-    r = await client.post(f"{API}/auth/demo")
-    assert r.status_code == 200 and r.json()["access_token"] is None
-    me = await client.get(f"{API}/auth/me")
-    assert me.json()["email"] == get_settings().demo_user_email
-    assert (await client.get(f"{API}/auth/config")).json()["demo_login_enabled"] is True
+    monkeypatch.setattr(get_settings(), "allow_registration", False)
+    assert (await client.get(f"{API}/auth/config")).json() == {"registration_enabled": True}  # no account yet
+    await register(client, "owner@example.com")
+    assert (await client.get(f"{API}/auth/config")).json() == {"registration_enabled": False}
+    r = await client.post(
+        f"{API}/auth/register", json={"email": "other@example.com", "password": "Another-pass-2026!"}
+    )
+    assert r.status_code == 400 and r.json()["error"]["code"] == "registration_disabled"
+    assert (await client.post(f"{API}/auth/demo")).status_code == 404  # no demo sign-in at all
 
 
-def test_production_refuses_demo_account_and_dev_secrets() -> None:
+def test_production_refuses_dev_secrets() -> None:
     from app.core.config import Settings
 
     base = {
@@ -93,16 +86,13 @@ def test_production_refuses_demo_account_and_dev_secrets() -> None:
         "jwt_secret": "x" * 40,
         "database_url": "postgresql+asyncpg://flipfinder:s3cret-from-env@db:5432/flipfinder",
     }
-    with pytest.raises(RuntimeError, match="SEED_DEMO_USER"):
-        Settings(**base, seed_demo_user=True).validate_for_production()
     with pytest.raises(RuntimeError, match="JWT_SECRET"):
         Settings(**{**base, "jwt_secret": "dev-only-change-me-dev-only-change-me"}).validate_for_production()
     with pytest.raises(RuntimeError, match="DATABASE_URL"):
         Settings(
-            **{**base, "database_url": "postgresql+asyncpg://flipfinder:flipfinder@db/flipfinder"},
-            seed_demo_user=False,
+            **{**base, "database_url": "postgresql+asyncpg://flipfinder:flipfinder@db/flipfinder"}
         ).validate_for_production()
-    Settings(**base, seed_demo_user=False).validate_for_production()
+    Settings(**base).validate_for_production()
 
 
 async def test_weak_password_is_rejected_with_readable_error(client: httpx.AsyncClient) -> None:
@@ -387,10 +377,40 @@ async def test_feed_ranks_by_risk_adjusted_profit_and_detail_explains_it(
     assert card["risk_adjusted_profit"] == pytest.approx(expected, abs=0.02)
 
     d = (await auth_client.get(f"{API}/opportunities/{opp_id}")).json()["insights"]
-    assert len(d["reason"]) == 3 and {p["key"] for p in d["pillars"]} == {"margin", "demand", "risk", "seller"}
+    assert len(d["reason"]) == 3 and {p["key"] for p in d["pillars"]} == {
+        "margin",
+        "demand",
+        "risk",
+        "seller",
+    }
     assert d["net_margin"] == pytest.approx(card["expected_profit"])
     assert d["resale"]["low"] <= d["resale"]["probable"] <= d["resale"]["high"]
     assert d["authenticity"]["verdict"] == "not_verifiable"  # photos not analysed: never "authentic"
 
     acc = (await auth_client.get(f"{API}/analytics/accuracy")).json()
     assert acc["active"] is False and acc["metrics"] is None  # nothing measured yet: no numbers shown
+
+
+async def test_error_log_keeps_redacted_warnings(
+    auth_client: httpx.AsyncClient, tmp_path, monkeypatch
+) -> None:
+    import logging
+
+    from app.core.config import get_settings
+    from app.core.logging import configure_logging, get_logger
+
+    assert (await auth_client.get(f"{API}/system/errors")).json() == {"enabled": False, "items": []}
+    monkeypatch.setattr(get_settings(), "error_log_dir", str(tmp_path))
+    configure_logging("INFO", True, str(tmp_path), "api")
+    try:
+        log = get_logger("test")
+        log.info("all.good")
+        log.error("feed.failed", api_key="sk-secret-value", status=502)
+        for h in logging.getLogger().handlers:
+            h.flush()
+        items = (await auth_client.get(f"{API}/system/errors")).json()["items"]
+    finally:
+        configure_logging("INFO", True)
+    assert [i["event"] for i in items] == ["feed.failed"]  # info is not an error
+    assert items[0]["process"] == "api" and items[0]["detail"]["status"] == 502
+    assert "sk-secret-value" not in str(items)

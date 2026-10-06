@@ -75,10 +75,21 @@ def test_photos_worse_than_declared_lower_the_condition() -> None:
         "defects": [{"kind": "stain", "severity": "moderate", "certainty": "certain"}],
     }
     assert ins.effective_condition("new_without_tags", vision) == "good"
-    assert ins.effective_condition("very_good", {"defects": [{"severity": "severe", "certainty": "probable"}]}) == "satisfactory"
+    assert (
+        ins.effective_condition("very_good", {"defects": [{"severity": "severe", "certainty": "probable"}]})
+        == "satisfactory"
+    )
     # Unverifiable defects and better-looking photos never change the declared condition.
-    assert ins.effective_condition("good", {"defects": [{"severity": "severe", "certainty": "unverifiable"}]}) == "good"
-    assert ins.effective_condition("good", {"condition_estimate": {"value": "new_with_tags", "certainty": "certain"}}) == "good"
+    assert (
+        ins.effective_condition("good", {"defects": [{"severity": "severe", "certainty": "unverifiable"}]})
+        == "good"
+    )
+    assert (
+        ins.effective_condition(
+            "good", {"condition_estimate": {"value": "new_with_tags", "certainty": "certain"}}
+        )
+        == "good"
+    )
 
 
 # ---------------------------------------------------------------- demand detail
@@ -94,7 +105,11 @@ def test_demand_detail_uses_size_color_and_tracked_sales() -> None:
         color="navy",
         condition_declared="very_good",
         condition_effective="very_good",
-        price_history=[(NOW - timedelta(days=5), D("30")), (NOW - timedelta(days=2), D("25")), (NOW, D("20"))],
+        price_history=[
+            (NOW - timedelta(days=5), D("30")),
+            (NOW - timedelta(days=2), D("25")),
+            (NOW, D("20")),
+        ],
     )
     d = ins.demand_detail(inp, similar, {None})
     assert d["favourites_per_day"] == 3.0
@@ -114,7 +129,9 @@ def test_with_enough_sales_asking_prices_do_not_set_the_price() -> None:
     assert est.n_active == 0 and est.n_sold == 6
     assert D("26") <= est.expected_sale_price <= D("31")
     assert all(c.exclusion_reason == "asking_price" for c in comps if not c.is_sold)
-    old = estimate_market_value(select_comparables(subject, [*sold, *asks], NOW), "very_good", NOW, sold_only_min=None)
+    old = estimate_market_value(
+        select_comparables(subject, [*sold, *asks], NOW), "very_good", NOW, sold_only_min=None
+    )
     assert old.expected_sale_price > est.expected_sale_price  # asks pulled the old estimate up
 
 
@@ -123,7 +140,20 @@ def _cases(n: int, start: datetime, ratio: float) -> list[Case]:
     out = []
     for i in range(n):
         realized = 30.0 * (ratio + 0.4 * ((i * 7919) % 100 / 100 - 0.5))
-        out.append(Case(None, ("ralph-lauren", "polo-shirts"), "very_good", start + timedelta(hours=i), realized, 30.0, 28.0, 32.0, 20, 80))  # type: ignore[arg-type]
+        out.append(
+            Case(
+                None,
+                ("ralph-lauren", "polo-shirts"),
+                "very_good",
+                start + timedelta(hours=i),
+                realized,
+                30.0,
+                28.0,
+                32.0,
+                20,
+                80,
+            )
+        )  # type: ignore[arg-type]
     return out
 
 
@@ -181,7 +211,11 @@ def test_strong_red_flags_give_counterfeit_risk() -> None:
             suspicious_terms=["replica"],
             photos_reused_by_other_seller=True,
             photos_analyzed=True,
-            findings=[PhotoFinding(2, "label", "concern", "certain", "Font dell'etichetta diverso", [0.1, 0.2, 0.3, 0.2])],
+            findings=[
+                PhotoFinding(
+                    2, "label", "concern", "certain", "Font dell'etichetta diverso", [0.1, 0.2, 0.3, 0.2]
+                )
+            ],
         )
     )
     assert a.verdict == "counterfeit_risk"
@@ -192,7 +226,9 @@ def test_strong_red_flags_give_counterfeit_risk() -> None:
 def test_consistent_key_photos_are_probably_authentic_but_never_certain() -> None:
     findings = [
         PhotoFinding(i, kind, "consistent", "certain", f"{kind} coerente")
-        for i, kind in enumerate(["label", "care_tag", "logo", "code", "stitching", "button", "zip", "material"])
+        for i, kind in enumerate(
+            ["label", "care_tag", "logo", "code", "stitching", "button", "zip", "material"]
+        )
     ]
     a = assess(base_input(photos_analyzed=True, findings=findings, seller_reviews=80, seller_rating=4.9))
     assert a.verdict == "probably_authentic"
@@ -200,7 +236,10 @@ def test_consistent_key_photos_are_probably_authentic_but_never_certain() -> Non
 
 
 def test_blurry_key_photos_are_not_verifiable() -> None:
-    findings = [PhotoFinding(0, "label", "consistent", "certain"), PhotoFinding(1, "care_tag", "consistent", "certain")]
+    findings = [
+        PhotoFinding(0, "label", "consistent", "certain"),
+        PhotoFinding(1, "care_tag", "consistent", "certain"),
+    ]
     quality = [PhotoQuality(0, False, "sfocata"), PhotoQuality(1, False, "troppo lontana")]
     a = assess(base_input(photos_analyzed=True, findings=findings, quality=quality))
     assert a.verdict == "not_verifiable"

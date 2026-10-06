@@ -12,6 +12,8 @@ import logging
 import re
 import sys
 from collections.abc import Mapping
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -55,7 +57,9 @@ def _redaction_processor(_: Any, __: str, event_dict: dict[str, Any]) -> dict[st
     return redact(event_dict)  # type: ignore[no-any-return]
 
 
-def configure_logging(level: str = "INFO", json_output: bool = True) -> None:
+def configure_logging(
+    level: str = "INFO", json_output: bool = True, error_log: str | None = None, process: str = "app"
+) -> None:
     timestamper = structlog.processors.TimeStamper(fmt="iso", utc=True)
     shared: list[Any] = [
         structlog.contextvars.merge_contextvars,
@@ -83,6 +87,23 @@ def configure_logging(level: str = "INFO", json_output: bool = True) -> None:
     handler.setFormatter(formatter)
     root = logging.getLogger()
     root.handlers = [handler]
+    if error_log:
+        # Warnings and errors (already redacted) kept on disk for the error log page. A log
+        # directory that cannot be written never stops the application.
+        path = Path(error_log) / f"errors-{process}.jsonl"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = RotatingFileHandler(path, maxBytes=5_000_000, backupCount=3, encoding="utf-8")
+        except OSError as exc:
+            logging.getLogger(__name__).warning("error log not writable: %s (%s)", path, type(exc).__name__)
+        else:
+            file_handler.setLevel(logging.WARNING)
+            file_handler.setFormatter(
+                structlog.stdlib.ProcessorFormatter(
+                    foreign_pre_chain=shared, processor=structlog.processors.JSONRenderer()
+                )
+            )
+            root.addHandler(file_handler)
     root.setLevel(level.upper())
     # Keep noisy libraries quiet; uvicorn access logs are replaced by our request middleware.
     for noisy in ("uvicorn.access", "httpx", "httpcore", "asyncio"):

@@ -33,8 +33,6 @@ class LoginRequest(Schema):
 
 class AuthConfigOut(Schema):
     registration_enabled: bool
-    demo_login_enabled: bool
-    demo_user_email: str | None
 
 
 class UserOut(Schema):

@@ -56,7 +56,9 @@ class FakeLLM:
         self.data = data
         self.content: list[dict[str, Any]] = []
 
-    async def structured(self, *, system: str, content: list[dict[str, Any]], schema: dict[str, Any], purpose: str) -> dict[str, Any]:
+    async def structured(
+        self, *, system: str, content: list[dict[str, Any]], schema: dict[str, Any], purpose: str
+    ) -> dict[str, Any]:
         self.content = content
         return self.data
 
@@ -66,7 +68,11 @@ def test_ai_findings_keep_photo_number_and_highlighted_detail(monkeypatch) -> No
     pattern().save(jpeg, "JPEG")
     blurry = io.BytesIO()
     pattern(blur=3).save(blurry, "JPEG")
-    blobs = {"https://img/0.jpg": jpeg.getvalue(), "https://img/1.jpg": blurry.getvalue(), "https://img/2.jpg": jpeg.getvalue()}
+    blobs = {
+        "https://img/0.jpg": jpeg.getvalue(),
+        "https://img/1.jpg": blurry.getvalue(),
+        "https://img/2.jpg": jpeg.getvalue(),
+    }
 
     async def fake_fetch(client: Any, url: str) -> bytes | None:
         return blobs.get(url)
@@ -75,24 +81,59 @@ def test_ai_findings_keep_photo_number_and_highlighted_detail(monkeypatch) -> No
     monkeypatch.setattr(va, "is_public_https_url", lambda url: True)
     llm = FakeLLM(
         {
-            "brand": None, "logo": None, "model": None, "size_label": None, "composition": None, "product_code": None,
-            "category": None, "color": None, "condition_estimate": None, "defects": [],
-            "authenticity_concerns": [], "authenticity_positive_signals": [], "has_label_photo": True,
+            "brand": None,
+            "logo": None,
+            "model": None,
+            "size_label": None,
+            "composition": None,
+            "product_code": None,
+            "category": None,
+            "color": None,
+            "condition_estimate": None,
+            "defects": [],
+            "authenticity_concerns": [],
+            "authenticity_positive_signals": [],
+            "has_label_photo": True,
             "photo_findings": [
-                {"photo": 3, "kind": "label", "verdict": "concern", "certainty": "certain", "detail": "Font diverso", "box": [0.8, 0.1, 0.5, 0.2]},
-                {"photo": 9, "kind": "logo", "verdict": "consistent", "certainty": "certain", "detail": "foto inesistente", "box": None},
+                {
+                    "photo": 3,
+                    "kind": "label",
+                    "verdict": "concern",
+                    "certainty": "certain",
+                    "detail": "Font diverso",
+                    "box": [0.8, 0.1, 0.5, 0.2],
+                },
+                {
+                    "photo": 9,
+                    "kind": "logo",
+                    "verdict": "consistent",
+                    "certainty": "certain",
+                    "detail": "foto inesistente",
+                    "box": None,
+                },
             ],
             "photo_checks": [{"photo": 3, "usable": False, "reason": "tagliata"}],
-            "provenance": {"stock_or_catalog": 0, "screenshots": 0, "foreign_watermarks": 1, "edited_or_generated": 0, "notes": []},
+            "provenance": {
+                "stock_or_catalog": 0,
+                "screenshots": 0,
+                "foreign_watermarks": 1,
+                "edited_or_generated": 0,
+                "notes": [],
+            },
         }
     )
     result = asyncio.run(
         va.ClaudeVisionAnalyzer(llm).analyze(  # type: ignore[arg-type]
-            list(blobs), [None, None, None], {"title": "Felpa", "brand_rules": {"key_photos": ["label", "code"], "checks": ["Codice"]}}
+            list(blobs),
+            [None, None, None],
+            {"title": "Felpa", "brand_rules": {"key_photos": ["label", "code"], "checks": ["Codice"]}},
         )
     )
     texts = [c["text"] for c in llm.content if c["type"] == "text"]
-    assert texts[:3] == ["Foto 1", "Foto 2", "Foto 3"] and "Foto chiave per questo brand: label, code" in texts[-1]
+    assert (
+        texts[:3] == ["Foto 1", "Foto 2", "Foto 3"]
+        and "Foto chiave per questo brand: label, code" in texts[-1]
+    )
     assert len(result.photo_findings) == 1  # the finding on a photo that does not exist is dropped
     f = result.photo_findings[0]
     assert f.photo == 2 and f.box == [0.8, 0.1, 0.2, 0.2]  # 0-based, clamped inside the photo

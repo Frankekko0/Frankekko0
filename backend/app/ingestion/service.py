@@ -39,7 +39,7 @@ from app.ingestion.normalizer import (
 )
 from app.marketplace.base import ProviderListing, ProviderSeller
 from app.scoring.seller import SellerProfile, seller_reliability
-from app.tracking.policy import SYNTHETIC_PROVIDERS, TRACKING_MODES, evidence_for, schedule
+from app.tracking.policy import TRACKING_MODES, evidence_for, schedule
 from app.tracking.status import Observation, StatusState, StatusUpdate, apply_observation
 
 log = get_logger(__name__)
@@ -513,13 +513,7 @@ class IngestionService:
         unique = {s.external_id: s for s in sorted(sellers, key=lambda s: s.external_id)}
         rows = []
         for s in unique.values():
-            synthetic = self.provider in SYNTHETIC_PROVIDERS
-            score = seller_reliability(
-                SellerProfile(s.rating, s.review_count, s.account_created_at, s.item_count, s.sold_count)
-                if synthetic
-                else SellerProfile(s.rating, s.review_count),
-                now,
-            )
+            score = seller_reliability(SellerProfile(s.rating, s.review_count), now)
             rows.append(
                 {
                     "id": uuid.uuid4(),
@@ -527,18 +521,8 @@ class IngestionService:
                     "external_id": s.external_id,
                     "rating": s.rating,
                     "review_count": s.review_count,
-                    **(
-                        {
-                            "account_created_at": s.account_created_at,
-                            "item_count": s.item_count,
-                            "sold_count": s.sold_count,
-                            "country": normalize_country(s.country),
-                            "last_active_at": s.last_active_at,
-                        }
-                        if self.provider in SYNTHETIC_PROVIDERS
-                        else dict.fromkeys(
-                            ("account_created_at", "item_count", "sold_count", "country", "last_active_at")
-                        )
+                    **dict.fromkeys(
+                        ("account_created_at", "item_count", "sold_count", "country", "last_active_at")
                     ),
                     "reliability_score": score.score,
                     "reliability_details": score.as_dict(),

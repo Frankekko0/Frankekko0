@@ -33,7 +33,7 @@ class AnalysisJob(Base):
 
 
 class SystemState(Base):
-    """Small key/value store for operational state (scanner cursor, mock market epoch...)."""
+    """Small key/value store for operational state (scanner cursor, calibration...)."""
 
     __tablename__ = "system_state"
 

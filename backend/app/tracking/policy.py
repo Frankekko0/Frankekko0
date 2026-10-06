@@ -7,9 +7,6 @@ from datetime import datetime
 from app.domain.enums import OPEN_STATUSES, AcquisitionMode, ListingStatus, StatusEvidence
 from app.tracking.schedule import ScheduleInput, next_check_at
 
-# Demo data: generated listings and sellers (not personal data of anyone).
-SYNTHETIC_PROVIDERS = frozenset({"mock"})
-
 # Captures that express an explicit intent on one listing: the listing becomes tracked (periodic
 # status checks). Cards seen while scrolling and whole search pages are market data: they are
 # updated whenever they are seen again, and tracked only when the user asks.

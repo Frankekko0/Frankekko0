@@ -34,7 +34,7 @@ can log in with `?include_token=true` and send `Authorization: Bearer <token>`.
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-    configure_logging(settings.log_level, settings.log_json)
+    configure_logging(settings.log_level, settings.log_json, settings.error_log_dir, "api")
     settings.validate_for_production()
     get_logger(__name__).info(
         "api.started", environment=settings.environment, provider=settings.marketplace_provider

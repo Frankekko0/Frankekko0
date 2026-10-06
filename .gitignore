@@ -29,3 +29,6 @@ next-env.d.ts
 # Local services
 dump.rdb
 *.rdb
+dump.rdb
+.env.production
+backups/

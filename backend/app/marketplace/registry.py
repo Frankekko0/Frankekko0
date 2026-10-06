@@ -1,4 +1,7 @@
-"""Builds the configured marketplace provider."""
+"""Builds the configured marketplace provider (an authorized feed), or none.
+
+Without a configured source there is no scanner: the data come only from what you capture
+(browser extension, links, email). Nothing is ever generated to fill the gap."""
 
 from __future__ import annotations
 
@@ -10,8 +13,8 @@ from app.marketplace.base import MarketplaceProvider
 _provider: MarketplaceProvider | None = None
 
 
-async def get_provider(session: AsyncSession, settings: Settings | None = None) -> MarketplaceProvider:
-    """Return the process-wide provider instance (created lazily)."""
+async def get_provider(session: AsyncSession, settings: Settings | None = None) -> MarketplaceProvider | None:
+    """Return the process-wide provider instance (created lazily), None when not configured."""
     global _provider
     if _provider is not None:
         return _provider
@@ -25,18 +28,6 @@ async def get_provider(session: AsyncSession, settings: Settings | None = None) 
             settings.feed_url,
             api_key=settings.feed_api_key.get_secret_value() if settings.feed_api_key else None,
             requests_per_minute=settings.feed_requests_per_minute,
-        )
-    else:
-        from app.marketplace.mock.provider import MockMarketplaceProvider
-        from app.seed import get_or_create_mock_epoch
-
-        epoch = await get_or_create_mock_epoch(session)
-        _provider = MockMarketplaceProvider(
-            seed=settings.mock_seed,
-            epoch=epoch,
-            history_days=settings.mock_history_days,
-            history_minutes_per_listing=settings.mock_history_minutes_per_listing,
-            live_seconds_per_listing=settings.mock_live_seconds_per_listing,
         )
     return _provider
 

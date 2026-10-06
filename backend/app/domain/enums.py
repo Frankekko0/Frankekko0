@@ -53,7 +53,7 @@ CLOSED_STATUSES = frozenset({ListingStatus.SOLD, ListingStatus.REMOVED})
 class AcquisitionMode(StrEnum):
     """How a piece of data reached FlipFinder (stored on listings, snapshots, analyses, attempts)."""
 
-    PROVIDER_SCAN = "provider_scan"  # configured provider (demo market or authorized feed)
+    PROVIDER_SCAN = "provider_scan"  # configured provider (authorized feed)
     EXTENSION_ITEM = "extension_item"  # browser extension, item page the user opened
     EXTENSION_CARD = "extension_card"  # browser extension, card seen while scrolling
     EXTENSION_DEEP = "extension_deep"  # browser extension, deep analysis on the user's command

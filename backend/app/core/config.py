@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     debug: bool = False
     log_level: str = "INFO"
     log_json: bool = True
+    # Directory for the error log (warnings and errors, rotated); empty = stdout only.
+    error_log_dir: str | None = None
     api_prefix: str = "/api/v1"
     public_app_url: str = "http://localhost:3000"
     # Comma-separated in the environment (NoDecode: parsed by the validator, not as JSON)
@@ -56,11 +58,8 @@ class Settings(BaseSettings):
     allow_registration: bool = True
 
     # --- Marketplace providers -----------------------------------------------------------
-    marketplace_provider: Literal["mock", "feed"] = "mock"
-    mock_seed: int = 1337
-    mock_history_days: int = 60
-    mock_history_minutes_per_listing: float = 8.0
-    mock_live_seconds_per_listing: float = 20.0
+    # "feed": an authorized listing feed (FEED_URL); "none": only your own captures.
+    marketplace_provider: Literal["none", "feed"] = "none"
     feed_url: str | None = None
     feed_api_key: SecretStr | None = None
     feed_requests_per_minute: int = 30
@@ -139,15 +138,6 @@ class Settings(BaseSettings):
     vapid_private_key: SecretStr | None = None
     vapid_subject: str = "mailto:admin@flipfinder.local"
 
-    # --- Demo ----------------------------------------------------------------------------
-    # Creates the demo account and enables one-click "Try the demo" sign-in (no password in
-    # the client). Must be disabled in production: the demo account is public by design.
-    seed_demo_user: bool = True
-    demo_user_email: str = "demo@flipfinder.app"
-    # Optional: also allow password login for the demo account. When unset a random,
-    # never-logged password is generated, so the account is reachable only via demo sign-in.
-    demo_user_password: SecretStr | None = None
-
     @field_validator("cors_origins", "image_archive_hosts", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
@@ -171,8 +161,6 @@ class Settings(BaseSettings):
             raise RuntimeError("JWT_SECRET must be set to a random value of at least 32 characters")
         if not self.cookie_secure:
             raise RuntimeError("COOKIE_SECURE must be true in production")
-        if self.seed_demo_user:
-            raise RuntimeError("SEED_DEMO_USER must be false in production (the demo account is public)")
         if ":flipfinder@" in self.database_url:
             raise RuntimeError("DATABASE_URL uses the development password; set POSTGRES_PASSWORD")
 

@@ -1,4 +1,5 @@
-"""Migration 0001 -> 0002 on a database with pre-existing data: nothing is lost."""
+"""Migrations on a database with pre-existing data: nothing real is lost (0001 -> 0006), and the
+generated demo market goes away (0007)."""
 
 import json
 import os
@@ -104,7 +105,7 @@ async def test_upgrade_keeps_every_listing_price_and_analysis(legacy_db) -> None
         ids["vinted"],
     )
 
-    alembic("upgrade", "head")
+    alembic("upgrade", "0006")
 
     assert await c.fetchval("SELECT count(*) FROM listings") == 4
     assert await c.fetchval("SELECT count(*) FROM opportunities") == 1
@@ -136,3 +137,21 @@ async def test_upgrade_keeps_every_listing_price_and_analysis(legacy_db) -> None
     assert float(s["rating"]) == 4.8 and s["review_count"] == 31 and s["country"] is None
     assert "username" not in dict(s)  # asyncpg Record: membership tests values, dict() tests keys
     assert await c.fetchval("SELECT acquisition_mode FROM opportunities") == "manual_form"
+
+    # 0007: the demo market and the demo account are purged, real listings and users stay.
+    await c.execute(
+        "INSERT INTO users (id, email, password_hash, is_active, created_at, updated_at)"
+        " VALUES ($1, 'demo@flipfinder.app', 'x', true, now(), now()),"
+        " ($2, 'me@example.com', 'x', true, now(), now())",
+        uuid.uuid4(),
+        uuid.uuid4(),
+    )
+    await c.execute(
+        "INSERT INTO system_state (key, value, updated_at) VALUES ('price_calibration', '{}', now())"
+    )
+    alembic("upgrade", "head")
+    left = {r["id"] for r in await c.fetch("SELECT id FROM listings")}
+    assert ids["mock"] not in left and {ids["vinted"], ids["gone"], ids["other"]} <= left
+    assert await c.fetchval("SELECT count(*) FROM opportunities") == 1
+    assert [r["email"] for r in await c.fetch("SELECT email FROM users")] == ["me@example.com"]
+    assert await c.fetchval("SELECT count(*) FROM system_state WHERE key = 'price_calibration'") == 0
