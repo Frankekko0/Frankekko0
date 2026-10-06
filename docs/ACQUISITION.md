@@ -52,8 +52,10 @@ ogni tentativo, riuscito o fallito):
 2. **Estensione, lettura passiva** (1): sempre attiva quando l'estensione è installata. Ogni
    annuncio o card che vedo diventa uno snapshot.
 3. **Estensione, aggiornamento lento** (2): opzionale, spento di default. Mentre una scheda di
-   Vinted è aperta, l'estensione ricontrolla pochi articoli tracciati alla volta (intervallo
-   minimo 30 s, massimo 40 all'ora); al primo 403/429/CAPTCHA si ferma per 6 ore.
+   Vinted è aperta, l'estensione ricontrolla pochi articoli tracciati alla volta, senza cookie
+   (almeno 60 s tra un controllo e l'altro, al massimo 20 letture automatiche all'ora in tutto);
+   al primo 403/429/CAPTCHA si ferma per 6 ore. Le analisi approfondite su comando seguono la
+   stessa coda (al massimo una ogni 4 s) e si fermano anch'esse dopo un rifiuto.
 4. **Lettura dal server** (6): opzionale, spenta di default (`VINTED_PUBLIC_FETCH_ENABLED`).
    Rispetta robots.txt, identità dichiarata, una richiesta ogni ≥ 30 s, tetto giornaliero, cache
    di 6 ore. Al primo blocco si ferma (circuit breaker) e non ritenta con trucchi.

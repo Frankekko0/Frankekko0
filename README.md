@@ -10,15 +10,25 @@ tre scenari di rivendita, profitto netto e ROI con i *tuoi* costi, domanda e tem
 Flip Score 0–100 spiegato voce per voce, Confidence e Risk separati, prezzo massimo d'acquisto
 e prezzo d'offerta suggerito, più un'analisi AI con verdetto BUY / CONSIDER / SKIP.
 
+Ogni annuncio visto finisce in un **archivio permanente**.
+
+- **Cosa registra:** per ogni annuncio, ID Vinted, modalità di acquisizione, data e versione dell'algoritmo, con una "fotografia" a ogni osservazione.
+- **Stato aggiornato nel tempo:** attivo, riservato, venduto o rimosso. "Venduto" viene segnato solo con una prova.
+- **Pagina di tracking:** galleria completa con copie locali delle foto, storico di prezzo e preferiti, analisi.
+- **Estensione per Vinted:** valuta le schede mentre scorri e mostra una **classifica live** nel pannello laterale del browser.
+- **Pochi comparabili:** FlipFinder lo dice ("dati insufficienti") invece di inventare una stima.
+
 ![Dashboard](docs/screenshots/dashboard.jpg)
 
 | Dettaglio opportunità (dark mode) | Analisi di mercato | Mobile |
 |---|---|---|
 | ![Dettaglio](docs/screenshots/deal-detail-dark.jpg) | ![Mercato](docs/screenshots/market-analysis-dark.jpg) | ![Mobile](docs/screenshots/mobile-deals.jpg) |
 
-> **Principi.** FlipFinder usa solo fonti dati lecite (API/feed autorizzati, import manuale,
-> Demo Mode) e non aggira CAPTCHA, rate limit, anti-bot o autenticazioni. Non acquista, non
-> invia offerte e non contatta venditori: la decisione finale resta sempre all'utente. Non
+> **Principi.**
+> - FlipFinder legge ciò che **tu** apri: estensione, link, email di notifica, import manuale, feed autorizzati, Demo Mode.
+> - Le letture automatiche di pagine pubbliche sono facoltative, spente di default e lente; si fermano al primo rifiuto.
+> - Non aggira mai CAPTCHA, rate limit, anti-bot o autenticazioni.
+> - Non acquista, non invia offerte e non contatta venditori: la decisione finale resta sempre all'utente. Non
 > dichiara mai autentico un prodotto senza prove (certo / probabile / non verificabile) e non
 > tratta un venditore nuovo come truffatore.
 
@@ -27,21 +37,25 @@ e prezzo d'offerta suggerito, più un'analisi AI con verdetto BUY / CONSIDER / S
 ## Indice
 
 1. [Avvio rapido (Docker)](#avvio-rapido-docker) · [dal telefono](#dal-telefono)
-2. [Architettura](#architettura)
-3. [Requisiti](#requisiti)
-4. [Installazione locale (senza Docker)](#installazione-locale-senza-docker)
-5. [Variabili d'ambiente](#variabili-dambiente)
-6. [Database](#database)
-7. [Worker e job in background](#worker-e-job-in-background)
-8. [Fonti dati e adapter](#fonti-dati-e-adapter)
-9. [Come funzionano i calcoli](#come-funzionano-i-calcoli)
-10. [Notifiche](#notifiche)
-11. [AI Deal Analyst](#ai-deal-analyst)
-12. [API](#api)
-13. [Test](#test)
-14. [Sicurezza](#sicurezza)
-15. [Struttura del repository](#struttura-del-repository)
-16. [Produzione](#produzione)
+2. [Come funziona il sistema](#come-funziona-il-sistema)
+3. [Modalità di acquisizione](#modalità-di-acquisizione)
+4. [Controlli periodici dello stato](#controlli-periodici-dello-stato)
+5. [Estensione browser e pannello live](#estensione-browser-e-pannello-live)
+6. [Architettura](#architettura)
+7. [Requisiti](#requisiti)
+8. [Installazione locale (senza Docker)](#installazione-locale-senza-docker)
+9. [Variabili d'ambiente](#variabili-dambiente)
+10. [Database](#database)
+11. [Worker e job in background](#worker-e-job-in-background)
+12. [Fonti dati e adapter](#fonti-dati-e-adapter)
+13. [Come funzionano i calcoli](#come-funzionano-i-calcoli)
+14. [Notifiche](#notifiche)
+15. [AI Deal Analyst](#ai-deal-analyst)
+16. [API](#api)
+17. [Test](#test)
+18. [Sicurezza](#sicurezza)
+19. [Struttura del repository](#struttura-del-repository)
+20. [Produzione](#produzione)
 
 ---
 
@@ -111,6 +125,120 @@ L'estensione per Vinted funziona solo sui browser desktop (Chrome, Edge, Brave):
 telefono non supportano le estensioni. Dal telefono puoi consultare deal, alert e watchlist e
 analizzare un annuncio da **Analyze a listing**: nell'app Vinted *Condividi* → *Copia link*, poi
 incolla link, titolo e prezzo.
+
+---
+
+## Come funziona il sistema
+
+```mermaid
+flowchart LR
+  EXT[Estensione: schede viste, annunci aperti, analisi su comando] --> ACQ
+  LNK[Link incollati · import manuale · bookmarklet] --> ACQ
+  EML[Email di notifica Vinted] --> ACQ
+  PUB[Lettura pubblica lenta, facoltativa] --> ACQ
+  FEED[Feed autorizzato / Demo Mode] --> ACQ
+  ACQ[Acquisizione: dedupe per ID Vinted] --> DB[(Archivio: annuncio + snapshot + tentativi)]
+  DB --> AN[Analisi: comparabili, velocità, costi, rischi, score]
+  AN --> DB
+  DB --> UI[Archivio, pagina di tracking, feed, alert, pannello live]
+  SCH[Controlli periodici adattivi] --> ACQ
+```
+
+1. **Acquisizione.**
+   - Ogni dato arriva da una [modalità di acquisizione](#modalità-di-acquisizione) e viene registrato con quella modalità.
+   - Gli annunci Vinted sono identificati dal loro **ID Vinted**: lo stesso articolo visto su `vinted.it` e `vinted.fr`, o reimportato, resta un solo record.
+   - I tentativi falliti finiscono nel registro delle acquisizioni con un messaggio leggibile, nei log (`acquisition.failed`) e in *Settings → Data sources*.
+2. **Archivio permanente.** Ogni osservazione aggiunge una **snapshot**: data, modalità, stato, prezzo, preferiti, visualizzazioni.
+   - Le snapshot non vengono mai sovrascritte.
+   - Il livello di dettaglio di un record (solo link → scheda → annuncio completo) può solo salire.
+   - Nessuna analisi è volatile: anche il *Quick check* salva l'annuncio e l'analisi, con la versione dell'algoritmo (`ALGORITHM_VERSION`).
+3. **Analisi.** Comprende:
+   - comparabili per brand, modello, taglia e condizioni, con min, P25, mediana, P75 e numero di comparabili;
+   - tempo medio online e quota di venduti;
+   - costo totale con protezione acquisti e spedizione, range di rivendita, margine netto e ROI;
+   - segnali di rischio: possibile falso, descrizione generica, foto dell'etichetta mancanti, venditore con poche recensioni, incoerenze tra titolo e foto;
+   - score con confidenza e spiegazione.
+
+   Con meno di 3 comparabili diretti l'analisi è "dati insufficienti": nessuna stima, nessuno score, nessun alert.
+4. **Stato nel tempo.** Gli articoli tracciati vengono ricontrollati con una cadenza adattiva ([sotto](#controlli-periodici-dello-stato)).
+   - Gli stati sono attivo, riservato, venduto, rimosso o sconosciuto.
+   - "Venduto" richiede una prova: pagina che lo dice, email "articolo venduto" o feed. Se l'annuncio sparisce senza prova è "rimosso" e la vendita non viene dedotta.
+   - Alla vendita si salvano la data stimata, l'ultimo prezzo visto e i giorni per vendere. Questi dati migliorano le stime successive: tempo online e quota di venduti dei comparabili.
+5. **Consultazione.**
+   - **Archive** (`/items`): ricerca e filtri per brand, stato, modalità, data e score, più export **CSV**.
+   - **Pagina di tracking** (`/items/{id}` o `/items/{ID Vinted}`):
+     - tutte le foto nell'ordine originale, con miniature, schermo intero, tastiera e swipe;
+     - copia locale delle foto fatta all'analisi, solo per uso interno e servita solo a chi ha fatto l'accesso;
+     - stato attuale e ultimo controllo, con il pulsante "Update now";
+     - grafici di prezzo e preferiti, analisi e link all'annuncio.
+
+I dati di una versione precedente vengono migrati senza perdite da `alembic upgrade head` (storico prezzi convertito in snapshot, venditori ridotti a valutazione e numero di recensioni). Per rianalizzare tutto con l'algoritmo attuale: `python -m app.tools.reanalyze --all`.
+
+## Modalità di acquisizione
+
+Il confronto completo (affidabilità, copertura, costi, rischio di blocco, conformità ai termini di Vinted, fonti) è in [`docs/ACQUISITION.md`](docs/ACQUISITION.md).
+
+| Modalità | Stato | Come si attiva |
+|---|---|---|
+| **Estensione browser** (schede viste, annunci aperti, analisi su comando) | attiva | carica `extension/` e associala con una chiave da *Settings → Browser extension* |
+| **Link** incollati (uno o tanti) e **bookmarklet** | attiva | *Analyze a listing* → *Paste links* / bookmarklet |
+| **Import manuale** (modulo) e **pagina di ricerca** | attiva | *Analyze a listing*, `/import` |
+| **Email di notifica Vinted** ("preferito venduto", "prezzo ridotto") | attiva su richiesta | upload `.eml` in *Settings → Data sources*; lettura automatica con `IMAP_HOST`/`IMAP_USER`/`IMAP_PASSWORD` (sola lettura) |
+| **Lettura pubblica lenta delle pagine degli articoli tracciati** | **spenta di default** | `VINTED_PUBLIC_FETCH_ENABLED=true`. Rispetta robots.txt, non usa cookie, fa al massimo una lettura ogni 30 s e 300 al giorno, usa una cache e si ferma 6 ore al primo rifiuto. I termini di Vinted vietano la raccolta automatica: la scelta è tua. |
+| **Feed autorizzato** / Demo Mode | `MARKETPLACE_PROVIDER=feed` / `mock` | vedi [Fonti dati](#fonti-dati-e-adapter) |
+| Vinted Pro Integrations, provider terzi | non implementati | API riservata ai venditori Pro e senza catalogo; i provider terzi fanno scraping senza licenza (vedi `docs/ACQUISITION.md`) |
+
+**Ordine di fallback** per aggiornare un articolo:
+1. feed o provider;
+2. lettura pubblica, se attiva;
+3. estensione: lettura lenta facoltativa, oppure quando riapri la pagina;
+4. email;
+5. altrimenti l'articolo resta in attesa, con il motivo visibile nella pagina di tracking.
+
+## Controlli periodici dello stato
+
+I controlli girano nel **worker**, che va avviato insieme all'API.
+- Con Docker parte da solo (servizio `worker`).
+- In locale: `cd backend && python -m app.workers.main`.
+- Il primo processo del worker esegue i job schedulati.
+
+| Job | Quando | Cosa controlla | Si attiva con |
+|---|---|---|---|
+| `refresh_listings` | ogni 10 minuti | annunci del provider (Demo Mode / feed) arrivati al loro prossimo controllo | sempre |
+| `refresh_tracked_public` | ogni minuto (una lettura al massimo ogni 30 s) | articoli Vinted **tracciati** arrivati al prossimo controllo | `VINTED_PUBLIC_FETCH_ENABLED=true` |
+| `poll_email` | ogni `IMAP_POLL_MINUTES` (15) | nuove email di Vinted: vendite, ribassi, articoli nuovi | `IMAP_HOST`, `IMAP_USER`, `IMAP_PASSWORD` |
+| `archive_images` | dopo ogni acquisizione | copia locale delle foto (solo domini immagini di Vinted, 3 tentativi) | `IMAGE_ARCHIVE_ENABLED=true` (default) |
+
+Sulla cadenza:
+- **Cadenza adattiva** (`backend/app/tracking/schedule.py`), che dipende dall'età dell'annuncio: 2 ore nel primo giorno, poi 6 ore, 1 giorno, 3 giorni, 7 giorni.
+- **Annunci più osservati:** più frequente se hanno molti preferiti, uno score alto o sono riservati.
+- **Annunci che non cambiano o non si leggono:** si diradano.
+- **Limiti e articoli chiusi:** l'intervallo resta tra 30 minuti e 14 giorni; venduti e rimossi non vengono più controllati.
+
+Senza lettura pubblica e senza email, gli articoli tracciati si aggiornano:
+- quando li riapri con l'estensione;
+- con l'opzione "Aggiorna lo stato degli articoli tracciati" dell'estensione (lenta, facoltativa);
+- con **"Update now"** nella pagina di tracking, che prova le modalità attive e dice quale ha usato o perché non è stato possibile.
+
+Ultimo e prossimo controllo sono sempre visibili nella pagina di tracking e nell'Archive.
+
+## Estensione browser e pannello live
+
+[`extension/`](extension/README.md) (Manifest V3, v1.0).
+- **Dove e cosa legge:** gira solo sui domini `www.vinted.*` e legge le pagine che **tu** apri e scorri.
+- **Ricerche, armadi e preferiti:** ogni scheda viene valutata quando entra a schermo; sulla scheda compare un **badge** con score, margine netto e "già tracciato".
+- **Annuncio aperto:** viene letto tutto e analizzato a fondo.
+- **Azioni rapide**, solo su tuo clic: *Traccia*, *Analisi approfondita* (una lettura di quella pagina, senza cookie) e *Apri nella pagina di tracking*.
+- **Invio dei dati:** una coda locale, con nuovi tentativi e deduplica per ID Vinted; un indicatore sull'icona mostra lo stato.
+- **Configurazione del parser:** è il file `vinted_parser.json`, condiviso con il server e scaricato da FlipFinder, quindi si aggiorna senza ripubblicare l'estensione.
+- **Pannello live** (pannello laterale del browser):
+  - classifica: il migliore più i quattro successivi, con foto, prezzo, costo totale, rivendita stimata, margine netto, score, confidenza e motivo;
+  - un clic porta alla scheda; il migliore è evidenziato nella pagina;
+  - filtri per budget, margine, brand, taglie e rischio contraffazione; avvisi visivi e sonori; contatori;
+  - vista dettaglio dell'annuncio;
+  - blocco, azzeramento a ogni nuova ricerca, export CSV.
+
+  Distingue "visto in scorrimento" da "analizzato a fondo". Nessuna azione sul tuo account Vinted; nessun cookie o token di Vinted viene letto o inviato.
 
 ---
 
@@ -226,6 +354,12 @@ repository). Un valore vuoto equivale a "non impostato". Le principali:
 | `SMTP_HOST/PORT/USERNAME/PASSWORD/FROM` | — | canale email |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | — | Web Push |
 | `BACKEND_URL` (frontend, build) | `http://localhost:8000` | destinazione del proxy `/api` (in Docker: `http://backend:8000`) |
+| `ALGORITHM_VERSION` | `2026.10-2` | versione registrata con ogni analisi |
+| `VINTED_PUBLIC_FETCH_ENABLED` | `false` | lettura pubblica lenta degli articoli tracciati (vedi [Modalità di acquisizione](#modalità-di-acquisizione)) |
+| `VINTED_PUBLIC_FETCH_MIN_INTERVAL_SECONDS` / `_DAILY_CAP` / `_CACHE_HOURS` / `_BLOCK_PAUSE_HOURS` / `_CONTACT` | `30` / `300` / `6` / `6` / — | ritmo, limite giornaliero, cache, pausa dopo un rifiuto, contatto nello User-Agent |
+| `IMAP_HOST` / `IMAP_PORT` / `IMAP_USER` / `IMAP_PASSWORD` / `IMAP_FOLDER` / `IMAP_POLL_MINUTES` | — / `993` / — / — / `INBOX` / `15` | lettura (sola lettura) delle email di notifica di Vinted |
+| `PARSER_CONFIG_PATH` | — | copia aggiornata di `vinted_parser.json` (selettori, etichette, pattern) senza ricostruire nulla |
+| `IMAGE_ARCHIVE_ENABLED` / `MEDIA_DIR` / `IMAGE_ARCHIVE_HOSTS` / `IMAGE_ARCHIVE_MAX_BYTES` | `true` / `var/media` / `vinted.net,vinted.com` / `10485760` | copia locale delle foto per la pagina di tracking (in Docker: volume `media`) |
 
 ---
 
@@ -241,7 +375,12 @@ repository). Un valore vuoto equivale a "non impostato". Le principali:
   `brands`, `categories`, `products`, `sellers`, `listings`, `listing_images`,
   `listing_price_history`, `market_comparables`, `market_statistics`, `opportunities`,
   `opportunity_scores`, `alerts`, `alert_deliveries`, `watchlists`, `favorites`, `purchases`,
-  `sales`, `inventory_items`, `user_affinities`, `analysis_jobs`, `system_state`.
+  `sales`, `inventory_items`, `user_affinities`, `analysis_jobs`, `system_state`,
+  `listing_snapshots` (una riga per osservazione, mai sovrascritta), `acquisition_attempts`
+  (registro delle acquisizioni, anche fallite), `api_keys` (chiavi dell'estensione, solo hash).
+- Ogni annuncio ha ID interno, ID Vinted (`external_id`, unico per provider), URL originale,
+  modalità di acquisizione, livello di dettaglio, stato e date di ciclo di vita (ultima volta
+  attivo, venduto stimato, rimosso), ultimo e prossimo controllo.
 
 ---
 
@@ -284,9 +423,11 @@ Job schedulati (UTC):
 |---|---|---|
 | `scan_new_listings` | ogni `SCAN_INTERVAL_SECONDS` (30 s) | legge gli annunci nuovi dal provider, normalizza, deduplica, accoda le analisi; un lock Redis impedisce scansioni sovrapposte |
 | `recompute_market_statistics` | :00, :15, :30, :45 | statistiche per brand/categoria/modello (database di mercato) |
-| `refresh_listings` | ogni 10 minuti | ciclo di vita annunci: attivo / rimosso / *possibly sold* / sconosciuto |
+| `refresh_listings` | ogni 10 minuti | ciclo di vita degli annunci del provider arrivati al prossimo controllo (cadenza adattiva) |
+| `refresh_tracked_public` | ogni minuto, se `VINTED_PUBLIC_FETCH_ENABLED` | stato degli articoli Vinted tracciati, una lettura lenta alla volta |
+| `poll_email` | ogni `IMAP_POLL_MINUTES`, se IMAP è configurato | email di notifica di Vinted (vendite, ribassi) |
 | `recompute_learning` | :07 e :37 | Personal Flip Score dalle performance reali dei flip |
-| `prune` | 03:17 | pulizia dati scaduti |
+| `prune` | 03:17 | pulizia: solo dati della Demo Mode e tentativi di acquisizione oltre 180 giorni (lo storico degli annunci reali resta) |
 
 Ogni job ha timeout, numero massimo di tentativi e **backoff esponenziale** (2 s, 4 s, 8 s… max
 5 min); i job sono idempotenti (job id deterministici, upsert). Ogni analisi è tracciata in
@@ -343,24 +484,13 @@ Integrations*) richiede un account Pro approvato e non include la ricerca nel ca
 Scansionare Vinted in automatico vorrebbe dire usare la sua API interna aggirando le protezioni
 anti-bot, cosa che FlipFinder per scelta non fa. Le strade legittime sono due:
 
-- **Estensione browser "FlipFinder for Vinted"** ([`extension/`](extension/README.md)):
-  - **su un annuncio**, *Analizza con FlipFinder* apre l'analisi completa di quell'annuncio
-    (`/analyze#import=…`): FlipFinder valida i dati, compila il modulo e avvia il *Quick check*;
-  - **su una ricerca o un catalogo**, *Analizza N articoli* porta in FlipFinder **tutti gli
-    annunci caricati nella pagina** (fino a 200), li analizza e li mostra in classifica
-    (`/import#batch=…`, JSON compresso: 48 annunci ≈ 2 KB). Vuoi più articoli? Scorri i risultati
-    o passa alla pagina successiva e premi di nuovo.
+- **Estensione browser "FlipFinder for Vinted"** ([`extension/`](extension/README.md), v1.0):
+  - valuta le schede mentre scorri ricerche, armadi e preferiti, e legge per intero l'annuncio che apri;
+  - fa una lettura in più solo per l'analisi approfondita che chiedi tu, oppure, se lo attivi, per pochi candidati alla volta e lentamente;
+  - mostra badge e azioni rapide sulle schede e la classifica live nel pannello laterale ([sopra](#estensione-browser-e-pannello-live)).
 
-  L'estensione legge solo la pagina che hai aperto: nessuna richiesta a Vinted, niente
-  navigazione o scorrimento automatico, nessun acquisto o messaggio. I dati viaggiano nel
-  frammento dell'URL, che il browser non invia a nessun server, e FlipFinder li ricontrolla come
-  input non fidato. Funziona anche se non hai ancora fatto l'accesso: dopo il login torni
-  direttamente all'analisi.
-
-  Perché non "tutta Vinted"? Non esiste un modo autorizzato per scaricarne l'intero catalogo:
-  servirebbe interrogare l'API interna aggirando le protezioni anti-bot. L'importazione per
-  pagina dà lo stesso risultato pratico (le migliori occasioni della ricerca che ti interessa)
-  restando dentro le regole.
+  Senza associazione resta il vecchio flusso: i dati della pagina viaggiano nel frammento dell'URL (`/analyze#import=…`, `/import#batch=…`), che il browser non invia a nessun server.
+- **Link, email e lettura pubblica facoltativa**: vedi [Modalità di acquisizione](#modalità-di-acquisizione).
 - **Feed autorizzato**: se ottieni un accesso ufficiale o un feed da un partner autorizzato,
   basta esporlo nel formato sopra e impostare `MARKETPLACE_PROVIDER=feed`.
 
@@ -477,7 +607,12 @@ Aree principali: `auth`, `opportunities` (feed con filtri e preset, dettaglio, s
 Save/Ignore/Watching/Purchased/Sold, analisi AI), `listings` (import, ri-analisi, quick check),
 `search` (ricerca in linguaggio naturale, es. *"felpe Ralph Lauren sotto 25 euro con almeno 50%
 ROI"*), `watchlists`, `alerts`, `notifications/push`, `flips`/`purchases`/`sales`/`inventory`,
-`analytics` (portfolio, brand, categorie, database di mercato), `settings`, `system`.
+`analytics` (portfolio, brand, categorie, database di mercato), `settings`, `system`,
+`items` (archivio con filtri, export CSV, pagina di tracking, "Update now", traccia/smetti),
+`acquisition` (link, email `.eml`, stato delle modalità), `media` (copie locali delle foto, solo
+utenti autenticati), `extension` / `capture` (chiavi dell'estensione e catture: schede, annunci,
+valutazioni rapide, coda dei controlli lenti; autenticazione con `Authorization: Bearer ff_ext_…`,
+valida solo per questi endpoint).
 
 ---
 
@@ -503,10 +638,27 @@ cd frontend
 npm run typecheck && npm run lint && npm test && npm run build
 ```
 
-Estensione browser (parsing di annunci e pagine di ricerca Vinted, nessuna dipendenza):
+Estensione browser. I test unitari, senza dipendenze, coprono:
+- il parser, con le **stesse fixture del parser del server**;
+- la coda di sincronizzazione, il ritmo delle letture, la classifica e l'export.
 
 ```bash
-node --test "extension/tests/*.test.mjs"
+node --test extension/tests/*.test.mjs
+node extension/tools/sync-parser-config.mjs --check   # la copia del parser è allineata al server
+```
+
+End-to-end con l'estensione vera in Chromium su pagine Vinted finte (nessuna richiesta reale a Vinted). Verifica:
+- coda offline e ripresa;
+- badge sulle schede caricate scorrendo;
+- "Traccia" senza navigazione;
+- analisi approfondita con una sola lettura senza cookie;
+- classifica e scorrimento alla scheda;
+- cattura completa dell'annuncio.
+
+Serve FlipFinder in esecuzione con l'account demo e Playwright:
+
+```bash
+APP_URL=http://localhost:3000 CHROME_PATH=/percorso/chrome node extension/e2e/live.e2e.cjs /tmp/shots
 ```
 
 ---
@@ -537,6 +689,10 @@ backend/
     core/           config, sicurezza, errori, log, cache, rate limit, Redis
     db/             modelli SQLAlchemy e sessioni
     marketplace/    MarketplaceProvider, mock (Demo Mode), feed autorizzato
+    acquisition/    identità Vinted, parser condiviso (vinted_parser.json), link, email,
+                    lettura pubblica facoltativa, valutazioni per l'estensione
+    tracking/       stati (venduto/rimosso), cadenza adattiva, snapshot, archivio, export CSV
+    media/          copia locale delle foto (download sicuro, servite solo agli utenti)
     ingestion/      normalizzazione, deduplica, upsert
     identification/ tassonomia e riconoscimento prodotto
     pricing/        comparabili, statistiche, fair market value
@@ -557,8 +713,8 @@ frontend/
   src/components/   UI (con primitive di animazione), card e sezioni dei deal, grafici, layout
   src/lib/          client API, hook dati, formattazione, filtri
   public/           manifest PWA, service worker, icone
-extension/          estensione browser "FlipFinder for Vinted" (Manifest V3)
-docs/               progetto tecnico e screenshot
+extension/          estensione browser "FlipFinder for Vinted" (Manifest V3): src/, tests/, e2e/, tools/
+docs/               progetto tecnico, modalità di acquisizione, analisi dell'estensione, screenshot
 docker-compose.yml  stack completo
 .env.example        modello di configurazione
 ```

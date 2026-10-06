@@ -1,5 +1,10 @@
 # Estensione "FlipFinder for Vinted": analisi della versione 0.2 e piano
 
+> **Stato:** il piano qui sotto è realizzato nella **v1.0**.
+> - Funzionamento, permessi e limiti: [`extension/README.md`](../extension/README.md).
+> - Test: `extension/tests/` (unitari) ed `extension/e2e/` (end-to-end).
+> - Questa pagina resta come analisi della v0.2 e motivazione delle scelte.
+
 ## Come è fatta oggi (v0.2.0)
 
 | Aspetto | Situazione |
