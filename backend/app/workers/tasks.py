@@ -43,6 +43,7 @@ from app.ingestion.catalog import load_catalog
 from app.ingestion.service import IngestionService, IngestResult
 from app.marketplace.base import SearchQuery
 from app.marketplace.registry import get_provider
+from app.media.cleanup import clean_foreign_data
 from app.opportunities.pipeline import AnalysisPipeline
 from app.tracking.policy import SYNTHETIC_PROVIDERS
 from app.tracking.service import Attempt, TrackingService, record_attempts
@@ -473,6 +474,20 @@ async def poll_email(ctx: dict[str, Any]) -> dict[str, int] | None:
     if summary and (summary.sold or summary.price_drops):
         await cache.bump(NS_FEED)
     return summary.as_dict() if summary else None
+
+
+async def clean_foreign_data_task(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Remove images and seller data that never belonged to a listing, then re-analyse it
+    (at startup and daily; idempotent)."""
+    async with session_scope() as s:
+        report = await clean_foreign_data(s)
+    ids = [str(i) for i in report.listing_ids]
+    for chunk in _chunks(ids, ANALYSIS_BATCH_DEFAULT):
+        await enqueue("analyze_batch", chunk, high=False, job_id=_batch_job_id(chunk))
+    if ids:
+        await _set_state("cleanup_foreign_data", {**report.as_dict(), "at": datetime.now(UTC).isoformat()})
+        await cache.bump(NS_FEED)
+    return report.as_dict()
 
 
 async def recompute_learning(ctx: dict[str, Any]) -> int:

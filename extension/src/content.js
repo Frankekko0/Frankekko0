@@ -100,9 +100,20 @@
       if (kids.length >= 2) c.pairs.push([text(kids[0]), text(kids[kids.length - 1])]);
       else if (row.getAttribute("itemprop")) c.pairs.push([row.getAttribute("itemprop"), text(row.querySelector('[itemprop="name"]') || row)]);
     });
-    main.querySelectorAll(S.gallery_images).forEach((img) => {
-      const src = img.currentSrc || img.getAttribute("src") || img.getAttribute("data-src") || "";
-      if (/^https:\/\//.test(src)) c.images.push(src);
+    // Photos only from the item's gallery container (never avatars, logos, banners or the
+    // thumbnails of suggested items elsewhere on the page).
+    const imgSrc = (img) => img.currentSrc || img.getAttribute("src") || img.getAttribute("data-src") || "";
+    const galleryBox = main.querySelector(S.gallery_container);
+    if (galleryBox) {
+      galleryBox.querySelectorAll(S.gallery_images || "img").forEach((img) => {
+        const src = imgSrc(img);
+        if (/^https:\/\//.test(src) && !img.closest(S.card_exclude)) c.images.push(src);
+      });
+    }
+    c.avatarUrls = [];
+    document.querySelectorAll(S.avatar_images).forEach((img) => {
+      const src = imgSrc(img);
+      if (src) c.avatarUrls.push(src);
     });
     const desc = main.querySelector(S.description);
     if (desc) c.description = desc.innerText || desc.textContent || "";
@@ -150,7 +161,8 @@
   }
 
   function collectCard(root, link) {
-    const img = root.querySelector(C.selectors.card_image || "img");
+    // The item's own photo: never the seller's avatar shown on the card.
+    const img = [...root.querySelectorAll(C.selectors.card_image || "img")].find((el) => !el.closest(C.selectors.card_exclude)) || null;
     const testids = {};
     const suffixRx = new RegExp(C.selectors.card_testid_suffix || "--([a-z-]+)$");
     root.querySelectorAll("[data-testid]").forEach((el) => {

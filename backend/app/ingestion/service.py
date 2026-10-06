@@ -362,7 +362,11 @@ class IngestionService:
                     cols = descriptive_columns(pl, ident, catalog)
                     if not pl.images:
                         cols.pop("photo_count")  # this capture has no photos: keep the stored ones
-                    elif len(pl.images) >= (ex.photo_count or 0) or incoming_rank > stored_rank:
+                    elif (
+                        pl.images_authoritative
+                        or len(pl.images) >= (ex.photo_count or 0)
+                        or incoming_rank > stored_rank
+                    ):
                         replace_images[ex.id] = [
                             {
                                 "listing_id": ex.id,

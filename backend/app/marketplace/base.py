@@ -73,6 +73,8 @@ class ProviderListing(BaseModel):
     view_count: int | None = Field(default=None, ge=0)
     # How much of the listing this capture contains (a search card vs the full item page).
     capture_level: CaptureLevel = CaptureLevel.FULL
+    # Photos read from the item's own gallery: they replace the stored ones, whatever their number.
+    images_authoritative: bool = False
     raw: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("currency")
@@ -152,6 +154,8 @@ class ManualListingInput(BaseModel):
     status: Literal["active", "reserved", "sold", "removed"] = "active"
     # Where the data comes from (recorded with the listing and every analysis).
     source: Literal["manual_form", "extension_item", "bookmarklet"] = "manual_form"
+    # Where the extension took the photos from; item_json / gallery_dom are the item's gallery.
+    images_source: Literal["item_json", "jsonld", "gallery_dom", "meta", "card"] | None = None
 
 
 MAX_BATCH_IMPORT = 200

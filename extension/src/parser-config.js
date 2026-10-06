@@ -1,7 +1,7 @@
 /* Generated from backend/app/acquisition/vinted_parser.json by tools/sync-parser-config.mjs.
  * Do not edit: change the JSON (the server and the extension share it) and run the tool. */
 globalThis.FF_PARSER_CONFIG = {
-  "version": "2026.10.6-1",
+  "version": "2026.10.7-1",
   "about": "Single source of Vinted selectors, labels and patterns, shared by the FlipFinder server (Python) and the browser extension (JavaScript). Regexes use only syntax common to both languages (numbered groups, no named groups). Edit here when Vinted changes its pages; the extension downloads it from the server.",
   "domains": [
     "vinted.it",
@@ -88,46 +88,6 @@ globalThis.FF_PARSER_CONFIG = {
       "source": "(\\d+)\\s*([a-zà-ÿ]+)",
       "flags": "i"
     },
-    "embedded_favourites": {
-      "source": "\\\\*\"favou?rite_count\\\\*\"\\s*:\\s*(\\d+)",
-      "flags": ""
-    },
-    "embedded_views": {
-      "source": "\\\\*\"view_count\\\\*\"\\s*:\\s*(\\d+)",
-      "flags": ""
-    },
-    "embedded_reserved": {
-      "source": "\\\\*\"is_reserved\\\\*\"\\s*:\\s*(true|false)",
-      "flags": ""
-    },
-    "embedded_closed": {
-      "source": "\\\\*\"is_closed\\\\*\"\\s*:\\s*(true|false)",
-      "flags": ""
-    },
-    "embedded_closing_action": {
-      "source": "\\\\*\"item_closing_action\\\\*\"\\s*:\\s*\\\\*\"(\\w+)\\\\*\"",
-      "flags": ""
-    },
-    "embedded_created": {
-      "source": "\\\\*\"created_at_ts\\\\*\"\\s*:\\s*\\\\*\"([0-9T:+\\-. Z]+)\\\\*\"",
-      "flags": ""
-    },
-    "embedded_feedback_reputation": {
-      "source": "\\\\*\"feedback_reputation\\\\*\"\\s*:\\s*([0-9.]+)",
-      "flags": ""
-    },
-    "embedded_feedback_count": {
-      "source": "\\\\*\"feedback_count\\\\*\"\\s*:\\s*(\\d+)",
-      "flags": ""
-    },
-    "embedded_service_fee": {
-      "source": "\\\\*\"service_fee\\\\*\"\\s*:\\s*\\{[^{}]*?\\\\*\"amount\\\\*\"\\s*:\\s*\\\\*\"?([0-9.]+)",
-      "flags": ""
-    },
-    "embedded_material": {
-      "source": "\\\\*\"material\\\\*\"\\s*:\\s*\\\\*\"([^\"\\\\]{2,60})\\\\*\"",
-      "flags": ""
-    },
     "email_sender": {
       "source": "vinted",
       "flags": "i"
@@ -143,14 +103,6 @@ globalThis.FF_PARSER_CONFIG = {
     "email_new_items": {
       "source": "(nuov[oi] articol|new items?|nouvel(le)?s? articles?|neue artikel|nuevos? artículos?|nieuwe artikel)",
       "flags": "i"
-    },
-    "embedded_photo": {
-      "source": "\\\\*\"full_size_url\\\\*\"\\s*:\\s*\\\\*\"(https?:(?:[^\"\\\\]|\\\\+/)+)",
-      "flags": ""
-    },
-    "embedded_shipping": {
-      "source": "\\\\*\"shipping_price\\\\*\"\\s*:\\s*\\{[^{}]*?\\\\*\"amount\\\\*\"\\s*:\\s*\\\\*\"?([0-9.]+)",
-      "flags": ""
     }
   },
   "relative_units": {
@@ -448,15 +400,18 @@ globalThis.FF_PARSER_CONFIG = {
     "attribute_rows": "[data-testid*=\"item-attributes\"], [data-testid*=\"item-details\"], [itemprop=\"brand\"], [itemprop=\"color\"], [itemprop=\"size\"]",
     "description": "[itemprop=\"description\"], [data-testid*=\"item-description\"]",
     "breadcrumbs": "[data-testid*=\"breadcrumb\"] a, nav[aria-label*=\"readcrumb\"] a, [itemtype*=\"BreadcrumbList\"] [itemprop=\"name\"]",
-    "gallery_images": "[data-testid*=\"item-photo\"] img, [data-testid*=\"photo-gallery\"] img, [class*=\"item-photo\"] img, [class*=\"item-photos\"] img",
+    "gallery_images": "img",
     "status_badges": "[data-testid*=\"status\"], [data-testid*=\"closed\"], [data-testid*=\"reserved\"], [class*=\"item-status\"]",
     "seller_rating": "[data-testid*=\"rating\"] [aria-label], [data-testid*=\"rating\"], [class*=\"Rating\"] [aria-label]",
     "seller_reviews": "[data-testid*=\"rating\"] ~ *, [data-testid*=\"review\"], [data-testid*=\"feedback\"]",
     "seller_profile_link": "a[href*=\"/member/\"]",
     "favourite_count": "[data-testid*=\"favourite\"], [aria-label*=\"avorit\"], [aria-label*=\"referit\"], [aria-label*=\"avori\"]",
     "card_testid_suffix": "--([a-z-]+)$",
-    "card_image": "img",
-    "card_summary_link": "a[href*=\"/items/\"][title]"
+    "card_image": "[data-testid$=\"--image\"] img, a[href*=\"/items/\"] img",
+    "card_summary_link": "a[href*=\"/items/\"][title]",
+    "gallery_container": "[data-testid=\"item-photos\"], [data-testid*=\"photo-gallery\"], [class*=\"item-photos\"]",
+    "avatar_images": "header img, nav img, [data-testid*=\"avatar\"] img, [class*=\"avatar\" i] img, img[class*=\"avatar\" i], a[href*=\"/member/\"] img",
+    "card_exclude": "[data-testid*=\"owner\"], [data-testid*=\"avatar\"], [class*=\"avatar\" i], a[href*=\"/member/\"]"
   },
   "limits": {
     "title": 300,
@@ -464,5 +419,71 @@ globalThis.FF_PARSER_CONFIG = {
     "short": 120,
     "images": 20,
     "max_batch": 200
+  },
+  "item_json": {
+    "photos": [
+      "photos"
+    ],
+    "photo_url": [
+      "full_size_url",
+      "url"
+    ],
+    "profile_photo": [
+      "photo",
+      "avatar"
+    ],
+    "markers": [
+      "photos",
+      "title",
+      "favourite_count",
+      "view_count",
+      "is_closed",
+      "price"
+    ],
+    "favourites": [
+      "favourite_count",
+      "favorite_count"
+    ],
+    "views": [
+      "view_count"
+    ],
+    "reserved": [
+      "is_reserved"
+    ],
+    "closed": [
+      "is_closed"
+    ],
+    "closing_action": [
+      "item_closing_action"
+    ],
+    "created": [
+      "created_at_ts",
+      "created_at"
+    ],
+    "material": [
+      "material",
+      "material_title"
+    ],
+    "service_fee": [
+      "service_fee.amount",
+      "service_fee"
+    ],
+    "shipping": [
+      "shipping_price.amount",
+      "shipping_fee.amount",
+      "shipping_price"
+    ],
+    "seller": [
+      "user"
+    ],
+    "seller_id": [
+      "id"
+    ],
+    "seller_rating": [
+      "feedback_reputation"
+    ],
+    "seller_reviews": [
+      "feedback_count"
+    ]
   }
 };

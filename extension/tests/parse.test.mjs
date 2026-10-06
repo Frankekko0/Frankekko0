@@ -211,3 +211,47 @@ test("links without pairing round-trip (UTF-8 safe, compressed batch)", async ()
   const text = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).text();
   assert.deepEqual(JSON.parse(text), { v: 1, source: "vinted_search", query: "felpa", items });
 });
+
+// ------------------------------------------------------------------ regression: foreign images
+test("saved page with my avatar: only the item's gallery, counters and seller of the item", async () => {
+  const html = fixture("item_with_avatars.html");
+  const item = P.parseItem(P.collectHtml(html), "https://www.vinted.it/items/9876543210-felpa-stone-island?ref=1", NOW, C);
+  assert.deepEqual(item.images, [0, 1, 2, 3].map((i) => `https://images1.vinted.net/t/ITEM_${i}/f800/1.jpeg`));
+  assert.equal(item.images_source, "item_json");
+  for (const foreign of ["AVATAR", "SIMILAR", "static.vinted.com", "310x430"]) assert.ok(!item.images.some((u) => u.includes(foreign)), foreign);
+  assert.deepEqual([item.favourite_count, item.view_count, item.seller_rating, item.seller_review_count], [23, 410, 4.5, 12]);
+  assert.equal(item.member_id, "222"); // the seller, never the signed-in user (111)
+  const payload = await P.itemPayload(item, C);
+  assert.equal(payload.images_source, "item_json");
+  assert.equal(payload.image_urls.length, 4);
+});
+
+test("live page after client-side navigation: gallery container only, avatars excluded", () => {
+  const item = P.parseItem(
+    {
+      texts: ["Felpa nuova", "40,00 €"],
+      heading: "Felpa nuova",
+      images: ["https://images1.vinted.net/t/G1/f800/1.jpeg", "https://images1.vinted.net/t/ME/50x50/1.jpeg"],
+      avatarUrls: ["https://images1.vinted.net/t/ME/50x50/1.jpeg"],
+      memberLinks: [],
+    },
+    "https://www.vinted.it/items/55-felpa",
+    NOW,
+    C,
+    { useScripts: false },
+  );
+  assert.deepEqual(item.images, ["https://images1.vinted.net/t/G1/f800/1.jpeg"]);
+  assert.equal(item.images_source, "gallery_dom");
+});
+
+test("embedded reader: escaping levels and objects of other items", () => {
+  const obj = { id: 5, title: 'a "quoted" {brace} \\ back', photos: [{ full_size_url: "https://x/1.jpg" }] };
+  const level0 = JSON.stringify({ other: { id: 6, photos: [] }, item: obj });
+  const level1 = JSON.stringify(level0).slice(1, -1);
+  const keys = P.itemJsonKeys(C);
+  for (const text of [level0, level1, `self.__next_f.push([1,${JSON.stringify(level0)}])`]) {
+    const found = P.findItem([text], "5", keys);
+    assert.equal(found && found.title, obj.title, text.slice(0, 30));
+  }
+  assert.equal(P.findItem([level0], "7", keys), null);
+});

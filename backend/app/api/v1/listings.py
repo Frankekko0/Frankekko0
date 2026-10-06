@@ -218,7 +218,8 @@ def manual_to_provider(
         favourite_count=body.favourite_count,
         view_count=body.view_count,
         capture_level=capture_level,
-        raw={"source": origin},
+        images_authoritative=body.images_source in ("item_json", "gallery_dom") and bool(body.image_urls),
+        raw={"source": origin, "images_source": body.images_source},
     )
 
 

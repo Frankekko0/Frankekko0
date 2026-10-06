@@ -212,6 +212,247 @@
     return "h:" + Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("").slice(0, 24);
   }
 
+
+  // ------------------------------------------------------------------ the item's embedded object
+  // Same algorithm as backend/app/acquisition/embedded.py. A Vinted item page embeds several
+  // objects (the item, its seller, the signed-in user with their profile photo, suggested items):
+  // the item is located by its id and only its own fields are read.
+  const FLIGHT_CHUNK = /self\.__next_f\.push\(\[\s*\d+\s*,\s*("(?:[^"\\]|\\.)*")\s*\]\)/g;
+  const LITERAL = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/y;
+  const MAX_BACKSCAN = 400000;
+  const DEFAULT_ITEM_JSON = {
+    photos: ["photos"],
+    photo_url: ["full_size_url", "url"],
+    profile_photo: ["photo", "avatar"],
+    markers: ["photos", "title", "favourite_count", "view_count", "is_closed", "price"],
+    favourites: ["favourite_count", "favorite_count"],
+    views: ["view_count"],
+    reserved: ["is_reserved"],
+    closed: ["is_closed"],
+    closing_action: ["item_closing_action"],
+    created: ["created_at_ts", "created_at"],
+    material: ["material", "material_title"],
+    service_fee: ["service_fee.amount", "service_fee"],
+    shipping: ["shipping_price.amount", "shipping_fee.amount", "shipping_price"],
+    seller: ["user"],
+    seller_id: ["id"],
+    seller_rating: ["feedback_reputation"],
+    seller_reviews: ["feedback_count"],
+  };
+
+  function itemJsonKeys(C) {
+    return { ...DEFAULT_ITEM_JSON, ...((C && C.raw && C.raw.item_json) || {}) };
+  }
+
+  function payloadTexts(scripts) {
+    const flight = [];
+    const others = [];
+    for (const s of scripts || []) {
+      let found = false;
+      for (const m of String(s).matchAll(FLIGHT_CHUNK)) {
+        found = true;
+        try {
+          flight.push(JSON.parse(m[1]));
+        } catch {
+          /* skip a broken chunk */
+        }
+      }
+      if (!found) others.push(String(s));
+    }
+    return (flight.length ? [flight.join("")] : []).concat(others);
+  }
+
+  class EmbeddedReader {
+    constructor(text, q) {
+      this.t = text;
+      this.q = q;
+      this.m = q + 1;
+      this.decodes = Math.round(Math.log2(this.m)) + 1;
+      this.prefix = "\\".repeat(q) + '"';
+    }
+    isDelim(j) {
+      if (this.t[j] !== '"') return false;
+      let n = 0;
+      while (j - 1 - n >= 0 && this.t[j - 1 - n] === "\\") n += 1;
+      const r = n - this.q;
+      return r >= 0 && r % this.m === 0 && (r / this.m) % 2 === 0;
+    }
+    enclosingObject(pos) {
+      let depth = 0;
+      let inStr = false;
+      const stop = Math.max(0, pos - MAX_BACKSCAN);
+      for (let j = pos - 1; j >= stop; j -= 1) {
+        const c = this.t[j];
+        if (c === '"' && this.isDelim(j)) inStr = !inStr;
+        else if (!inStr) {
+          if (c === "}" || c === "]") depth += 1;
+          else if (c === "{" || c === "[") {
+            if (depth === 0) return c === "{" ? j : null;
+            depth -= 1;
+          }
+        }
+      }
+      return null;
+    }
+    ws(i) {
+      while (i < this.t.length && " \t\r\n".includes(this.t[i])) i += 1;
+      return i;
+    }
+    string(i) {
+      const start = i + this.q;
+      if (this.t[start] !== '"') throw new Error("string expected");
+      let j = start + 1;
+      for (;;) {
+        j = this.t.indexOf('"', j);
+        if (j < 0) throw new Error("unterminated string");
+        if (this.isDelim(j)) break;
+        j += 1;
+      }
+      let value = this.t.slice(start + 1, j - this.q);
+      for (let k = 0; k < this.decodes; k += 1) {
+        try {
+          value = JSON.parse(`"${value}"`);
+        } catch {
+          break;
+        }
+      }
+      return [value, j + 1];
+    }
+    value(i, depth = 0) {
+      if (depth > 60) throw new Error("too deep");
+      i = this.ws(i);
+      const c = this.t[i];
+      if (c === undefined) throw new Error("end of text");
+      if (c === "{") {
+        const obj = {};
+        i = this.ws(i + 1);
+        if (this.t[i] === "}") return [obj, i + 1];
+        for (;;) {
+          i = this.ws(i);
+          if (!this.t.startsWith(this.prefix, i)) throw new Error("key expected");
+          let key;
+          [key, i] = this.string(i);
+          i = this.ws(i);
+          if (this.t[i] !== ":") throw new Error("colon expected");
+          [obj[key], i] = this.value(i + 1, depth + 1);
+          i = this.ws(i);
+          if (this.t[i] === ",") i += 1;
+          else if (this.t[i] === "}") return [obj, i + 1];
+          else throw new Error("comma or brace expected");
+        }
+      }
+      if (c === "[") {
+        const arr = [];
+        i = this.ws(i + 1);
+        if (this.t[i] === "]") return [arr, i + 1];
+        for (;;) {
+          let v;
+          [v, i] = this.value(i, depth + 1);
+          arr.push(v);
+          i = this.ws(i);
+          if (this.t[i] === ",") i += 1;
+          else if (this.t[i] === "]") return [arr, i + 1];
+          else throw new Error("comma or bracket expected");
+        }
+      }
+      if (this.t.startsWith(this.prefix, i)) return this.string(i);
+      LITERAL.lastIndex = i;
+      const m = LITERAL.exec(this.t);
+      if (!m) throw new Error("value expected");
+      const lit = m[0];
+      const end = i + lit.length;
+      if (lit === "true" || lit === "false") return [lit === "true", end];
+      if (lit === "null") return [null, end];
+      return [Number(lit), end];
+    }
+  }
+
+  const escapeKey = (k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  function findItem(scripts, vintedId, keys) {
+    if (!vintedId || !/^\d+$/.test(vintedId)) return null;
+    const wanted = [...keys.photos, ...keys.markers];
+    for (const text of payloadTexts(scripts)) {
+      if (!text.includes(vintedId)) continue;
+      const rx = new RegExp(`(\\\\*)"id\\1"\\s*:\\s*(?:\\\\*")?${vintedId}(?![\\d.])`, "g");
+      for (const m of text.matchAll(rx)) {
+        const q = m[1].length;
+        if ((q + 1) & q) continue;
+        const reader = new EmbeddedReader(text, q);
+        const start = reader.enclosingObject(m.index);
+        if (start === null) continue;
+        let obj;
+        try {
+          [obj] = reader.value(start);
+        } catch {
+          continue;
+        }
+        if (!obj || typeof obj !== "object" || Array.isArray(obj) || String(obj.id) !== vintedId) continue;
+        if (wanted.some((k) => k in obj)) return obj;
+      }
+    }
+    return null;
+  }
+
+  function photoUrlsOf(obj, urlKeys) {
+    const out = new Set();
+    const add = (o) => {
+      for (const k of urlKeys) if (typeof o[k] === "string" && /^https?:\/\//.test(o[k])) out.add(o[k]);
+    };
+    add(obj);
+    for (const v of Object.values(obj)) if (Array.isArray(v)) for (const t of v) if (t && typeof t === "object") add(t);
+    return out;
+  }
+
+  /** Every profile photo in the page (signed-in user, seller, other members): never item photos. */
+  function profilePhotoUrls(scripts, keys) {
+    const urls = new Set();
+    for (const text of payloadTexts(scripts)) {
+      for (const key of keys.profile_photo) {
+        const rx = new RegExp(`(\\\\*)"${escapeKey(key)}\\1"\\s*:\\s*\\{`, "g");
+        for (const m of text.matchAll(rx)) {
+          const q = m[1].length;
+          if ((q + 1) & q) continue;
+          try {
+            const [obj] = new EmbeddedReader(text, q).value(m.index + m[0].length - 1);
+            if (obj && typeof obj === "object") for (const u of photoUrlsOf(obj, keys.photo_url)) urls.add(u);
+          } catch {
+            /* not an object */
+          }
+        }
+      }
+    }
+    return urls;
+  }
+
+  function galleryOf(item, keys) {
+    for (const k of keys.photos) {
+      const photos = item && item[k];
+      if (!Array.isArray(photos)) continue;
+      const urls = [];
+      for (const p of photos) {
+        if (typeof p === "string" && /^https?:\/\//.test(p)) urls.push(p);
+        else if (p && typeof p === "object") {
+          const u = keys.photo_url.map((k2) => p[k2]).find((v) => typeof v === "string" && /^https?:\/\//.test(v));
+          if (u) urls.push(u);
+        }
+      }
+      return [...new Set(urls)];
+    }
+    return [];
+  }
+
+  /** First present value among keys (dotted paths allowed). */
+  function pick(obj, keys) {
+    if (!obj) return null;
+    for (const key of keys) {
+      let cur = obj;
+      for (const part of key.split(".")) cur = cur && typeof cur === "object" ? cur[part] : undefined;
+      if (cur !== undefined && cur !== null && cur !== "") return cur;
+    }
+    return null;
+  }
+
   // ------------------------------------------------------------------ HTML collection
   const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", euro: "€", pound: "£" };
 
@@ -247,6 +488,7 @@
     const src = String(html || "");
     const rx = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<![^>]*>|<(\/?)([a-zA-Z][\w:-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|([^<]+)|</g;
     let skip = 0;
+    let chrome = 0; // inside <header>, <nav> or <footer>: links there are the signed-in user's
     let inH1 = false;
     let h1 = [];
     let m;
@@ -264,6 +506,7 @@
       const tag = rawTag.toLowerCase();
       if (closing) {
         if (SKIP.has(tag)) skip = Math.max(0, skip - 1);
+        if (tag === "header" || tag === "nav" || tag === "footer") chrome = Math.max(0, chrome - 1);
         if (tag === "h1" && inH1) {
           inH1 = false;
           out.heading = h1.join(" ").replace(/\s+/g, " ").trim() || null;
@@ -285,7 +528,9 @@
       } else if (tag === "link" && (a.rel || "").includes("canonical")) {
         out.canonical = a.href || null;
       } else if (tag === "a" && (a.href || "").includes("/member/")) {
-        out.memberLinks.push(a.href);
+        if (chrome === 0) out.memberLinks.push(a.href);
+      } else if (tag === "header" || tag === "nav" || tag === "footer") {
+        chrome += 1;
       } else if (tag === "h1" && out.heading === null && !inH1) {
         inH1 = true;
         h1 = [];
@@ -393,6 +638,7 @@
       buyer_protection_fee: null,
       shipping_fee: null,
       images: [],
+      images_source: "none",
       member_id: null,
       seller_rating: null,
       seller_review_count: null,
@@ -412,10 +658,14 @@
       offer = asArray(product.offers)[0] || {};
       item.sources.push("jsonld");
     }
-    const scripts = useScripts ? c.scripts.join("\n") : "";
+    // The item's own embedded object; never values of the signed-in user or suggested items.
+    const keys = itemJsonKeys(C);
+    const obj = useScripts ? findItem(c.scripts, id, keys) : null;
+    if (obj) item.sources.push("item_json");
     const emb = (name) => {
-      const hit = C.patterns[name].exec(scripts);
-      return hit ? hit[1] : null;
+      const v = pick(obj, keys[name]);
+      if (v === null || typeof v === "object") return null;
+      return String(v);
     };
 
     const title = (product && product.name) || c.heading || first(meta, "og:title") || "";
@@ -447,20 +697,20 @@
     item.color = pairs.color || (product && product.color) || null;
     item.material = pairs.material || (product && product.material) || null;
     if (!item.material) {
-      const mat = emb("embedded_material");
+      const mat = emb("material");
       if (mat) item.material = unescapeJsonString(mat);
     }
     item.category_path = breadcrumbs(c.jsonld);
     if (!item.category_path.length && c.breadcrumbs) item.category_path = c.breadcrumbs.slice(0, 6);
 
     const digits = (s) => String(s || "").replace(/\D/g, "");
-    const fav = emb("embedded_favourites") || digits(pairs.favourites) || digits(c.favourites) || null;
-    const views = emb("embedded_views") || digits(pairs.views) || null;
+    const fav = emb("favourites") || digits(pairs.favourites) || digits(c.favourites) || null;
+    const views = emb("views") || digits(pairs.views) || null;
     item.favourite_count = fav ? Number(fav) : null;
     item.view_count = views ? Number(views) : null;
     if (item.favourite_count !== null || item.view_count !== null) item.sources.push("demand");
 
-    const created = emb("embedded_created");
+    const created = emb("created");
     if (created) {
       const d = new Date(created);
       item.published_at = Number.isNaN(d.getTime()) ? null : created;
@@ -483,17 +733,17 @@
         }
       }
       if (item.buyer_protection_fee === null) {
-        const fee = emb("embedded_service_fee");
+        const fee = emb("service_fee");
         if (fee) item.buyer_protection_fee = parsePrice(fee);
       }
     }
-    const ship = emb("embedded_shipping");
+    const ship = emb("shipping");
     if (ship !== null) item.shipping_fee = parsePrice(ship);
 
     // Status: embedded flags, schema.org availability, then visible badges.
-    const action = emb("embedded_closing_action");
-    const closed = emb("embedded_closed");
-    const reserved = emb("embedded_reserved");
+    const action = emb("closing_action");
+    const closed = emb("closed");
+    const reserved = emb("reserved");
     const availability = String(offer.availability || "");
     const pageText = c.texts.slice(0, 250).join(" ");
     const topText = [...(c.statusTexts || []), ...c.texts.slice(0, 60)].join(" ");
@@ -510,26 +760,50 @@
     else if (C.patterns.status_sold.test(topText)) set("sold", "text");
     else if (C.patterns.status_reserved.test(topText)) set("reserved", "text");
 
-    // Photos, in the page's order.
-    const images = [];
-    if (scripts) for (const hit of scripts.matchAll(C.global.embedded_photo)) images.push(unescapeJsonString(hit[1]));
-    for (const img of asArray(product && product.image)) {
-      const u = typeof img === "string" ? img : img && (img.url || img.contentUrl);
-      if (typeof u === "string") images.push(u);
+    // Photos: only the item's gallery, in its order. The item's structured data first; then the
+    // product's JSON-LD, the page's gallery container, its preview image. Profile photos found
+    // anywhere in the page are excluded whatever the source.
+    let images = galleryOf(obj, keys);
+    item.images_source = images.length ? "item_json" : "none";
+    if (!images.length) {
+      for (const img of asArray(product && product.image)) {
+        const u = typeof img === "string" ? img : img && (img.url || img.contentUrl);
+        if (typeof u === "string") images.push(u);
+      }
+      if (images.length) item.images_source = "jsonld";
     }
-    images.push(...(c.images || []));
-    images.push(...asArray(meta["og:image"]));
-    item.images = [...new Set(images.filter(isHttpUrl))].slice(0, C.limits.images);
+    if (!images.length && (c.images || []).length) {
+      images = [...c.images];
+      item.images_source = "gallery_dom";
+    }
+    if (!images.length && asArray(meta["og:image"]).length) {
+      images = [asArray(meta["og:image"])[0]];
+      item.images_source = "meta";
+    }
+    const avatars = profilePhotoUrls(useScripts ? c.scripts : [], keys);
+    for (const u of c.avatarUrls || []) avatars.add(u);
+    item.images = [...new Set(images.filter((u) => isHttpUrl(u) && !avatars.has(u)))].slice(0, C.limits.images);
 
-    // Seller: member id (hashed before sending), rating, review count. Nothing else.
-    for (const href of c.memberLinks) {
-      const mm = C.patterns.member_id.exec(href);
-      if (mm) {
-        item.member_id = mm[1];
-        break;
+    // Seller: from the item's own seller object (member id hashed before sending), rating and
+    // review count. A member link in the page body only when the page has no structured data.
+    const sellerObj = pick(obj, keys.seller);
+    const seller = sellerObj && typeof sellerObj === "object" && !Array.isArray(sellerObj) ? sellerObj : null;
+    const sid = pick(seller, keys.seller_id);
+    if (sid !== null) item.member_id = String(sid);
+    else if (!obj) {
+      for (const href of c.memberLinks) {
+        const mm = C.patterns.member_id.exec(href);
+        if (mm) {
+          item.member_id = mm[1];
+          break;
+        }
       }
     }
-    const rep = emb("embedded_feedback_reputation");
+    const semb = (name) => {
+      const v = pick(seller, keys[name]);
+      return v === null || typeof v === "object" || typeof v === "boolean" ? null : String(v);
+    };
+    const rep = semb("seller_rating");
     if (rep && Number.isFinite(Number(rep))) {
       const v = Number(rep);
       item.seller_rating = round2(v <= 1 ? v * 5 : v);
@@ -537,7 +811,7 @@
       const v = parsePrice(String(c.sellerRating).replace(/\s*(su|of|sur|von|de)\s*5.*$/i, ""));
       if (v && v <= 5) item.seller_rating = v;
     }
-    const count = emb("embedded_feedback_count") || digits(c.sellerReviews) || null;
+    const count = semb("seller_reviews") || (obj ? null : digits(c.sellerReviews)) || null;
     item.seller_review_count = count ? Number(count) : null;
 
     item.missing = ["title", "price"].filter((k) => !item[k]);
@@ -645,6 +919,7 @@
       status,
       favourite_count: favDigits && favDigits.length <= 6 ? Number(favDigits) : null,
       buyer_protection_fee: fee,
+      images_source: "card",
     };
   }
 
@@ -669,6 +944,7 @@
 
   // ------------------------------------------------------------------ payload for FlipFinder
   const STATUSES = new Set(["active", "reserved", "sold", "removed"]);
+  const IMAGE_SOURCES = new Set(["item_json", "jsonld", "gallery_dom", "meta", "card"]);
 
   function intOrNull(v, max = 1e9) {
     const n = Number(v);
@@ -708,6 +984,7 @@
     const description = cleanMultiline(fields.description, 5000);
     if (description) out.description = description;
     out.image_urls = [...new Set((fields.image_urls || fields.images || []).filter((u) => isHttpUrl(u) && u.length <= 2000))].slice(0, 20);
+    if (IMAGE_SOURCES.has(fields.images_source)) out.images_source = fields.images_source;
     if (fields.seller_key && /^h:[0-9a-f]{24}$/.test(fields.seller_key)) out.seller_key = fields.seller_key;
     const rating = moneyOrNull(fields.seller_rating, 5);
     if (rating !== null) out.seller_rating = rating;
@@ -780,6 +1057,10 @@
     sellerKey,
     decodeEntities,
     collectHtml,
+    payloadTexts,
+    findItem,
+    profilePhotoUrls,
+    itemJsonKeys,
     parseItem,
     parseCardSummary,
     parseCatalogCard,

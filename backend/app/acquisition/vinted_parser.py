@@ -25,6 +25,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
+from app.acquisition.embedded import find_item, gallery, pick, profile_photo_urls
 from app.core.config import get_settings
 from app.domain.enums import CaptureLevel, ListingStatus
 from app.identification.taxonomy import fold
@@ -78,6 +79,32 @@ def load_config() -> ParserConfig:
 
 def config_json() -> dict[str, Any]:
     return load_config().raw
+
+
+DEFAULT_ITEM_JSON: dict[str, list[str]] = {
+    "photos": ["photos"],
+    "photo_url": ["full_size_url", "url"],
+    "profile_photo": ["photo", "avatar"],
+    "markers": ["photos", "title", "favourite_count", "view_count", "is_closed", "price"],
+    "favourites": ["favourite_count", "favorite_count"],
+    "views": ["view_count"],
+    "reserved": ["is_reserved"],
+    "closed": ["is_closed"],
+    "closing_action": ["item_closing_action"],
+    "created": ["created_at_ts", "created_at"],
+    "material": ["material", "material_title"],
+    "service_fee": ["service_fee.amount", "service_fee"],
+    "shipping": ["shipping_price.amount", "shipping_fee.amount", "shipping_price"],
+    "seller": ["user"],
+    "seller_id": ["id"],
+    "seller_rating": ["feedback_reputation"],
+    "seller_reviews": ["feedback_count"],
+}
+
+
+def item_json_keys(cfg: ParserConfig) -> dict[str, list[str]]:
+    """Key names of the embedded item object (``item_json`` in the shared configuration)."""
+    return {**DEFAULT_ITEM_JSON, **(cfg.raw.get("item_json") or {})}
 
 
 # ------------------------------------------------------------------ small helpers
@@ -206,7 +233,12 @@ class _Collector(HTMLParser):
                 self.meta.setdefault(key, []).append(a["content"])
         elif tag == "link" and "canonical" in a.get("rel", ""):
             self.canonical = a.get("href")
-        elif tag == "a" and "/member/" in a.get("href", ""):
+        elif (
+            tag == "a"
+            and "/member/" in a.get("href", "")
+            and not any(t in self._stack for t in ("header", "nav", "footer"))
+        ):
+            # A member link in the page header is the signed-in user, never the seller.
             self.member_links.append(a["href"])
         elif tag == "h1" and self.heading is None:
             self._in_h1 = True
@@ -302,6 +334,8 @@ class ParsedItem:
     buyer_protection_fee: Decimal | None = None
     shipping_fee: Decimal | None = None
     images: list[str] = field(default_factory=list)
+    # Where the photos come from: item_json (the item's gallery) is authoritative.
+    images_source: str = "none"
     seller_key: str | None = None
     seller_rating: Decimal | None = None
     seller_review_count: int | None = None
@@ -349,7 +383,13 @@ class ParsedItem:
             favourite_count=self.favourite_count,
             view_count=self.view_count,
             capture_level=CaptureLevel.FULL,
-            raw={"source": "vinted_page", "parser": load_config().version, "fields": self.sources},
+            images_authoritative=self.images_source == "item_json" and bool(self.images),
+            raw={
+                "source": "vinted_page",
+                "parser": load_config().version,
+                "fields": self.sources,
+                "images_source": self.images_source,
+            },
         )
 
 
@@ -387,11 +427,18 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
         offers = product.get("offers")
         offer = (offers[0] if isinstance(offers, list) and offers else offers) or {}
         item.sources.append("jsonld")
-    scripts = "\n".join(c.scripts)
+    # The item's own embedded object (never values of the signed-in user, the seller's profile
+    # or suggested items that the same scripts contain).
+    keys = item_json_keys(cfg)
+    obj = find_item(c.scripts, item.vinted_id or "", keys["photos"], keys["markers"])
+    if obj is not None:
+        item.sources.append("item_json")
 
     def emb(name: str) -> str | None:
-        hit = cfg.patterns[name].search(scripts)
-        return hit.group(1) if hit else None
+        v = pick(obj, keys[name])
+        if v is None or isinstance(v, dict | list):
+            return None
+        return str(v).lower() if isinstance(v, bool) else str(v)
 
     # Title, price, currency.
     title = (product or {}).get("name") or c.heading or _first(c.meta, "og:title") or ""
@@ -425,20 +472,20 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
     item.condition = normalize_condition(item.condition_label, cfg)
     item.color = pairs.get("color") or (product or {}).get("color")
     item.material = pairs.get("material") or (product or {}).get("material")
-    if item.material is None and (mat := emb("embedded_material")):
+    if item.material is None and (mat := emb("material")):
         item.material = _unescape_json_string(mat)
     item.category_path = _breadcrumbs(c.jsonld)
 
     # Demand signals.
-    fav = emb("embedded_favourites") or re.sub(r"\D", "", pairs.get("favourites", "")) or None
-    views = emb("embedded_views") or re.sub(r"\D", "", pairs.get("views", "")) or None
+    fav = emb("favourites") or re.sub(r"\D", "", pairs.get("favourites", "")) or None
+    views = emb("views") or re.sub(r"\D", "", pairs.get("views", "")) or None
     item.favourite_count = int(fav) if fav else None
     item.view_count = int(views) if views else None
     if any(x is not None for x in (item.favourite_count, item.view_count)):
         item.sources.append("demand")
 
     # Publication date.
-    created = emb("embedded_created")
+    created = emb("created")
     if created:
         try:
             item.published_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
@@ -456,16 +503,16 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
                 if Decimal("0") < diff <= item.price * Decimal("0.2") + Decimal("5"):
                     item.buyer_protection_fee = diff.quantize(Decimal("0.01"))
                     break
-        if item.buyer_protection_fee is None and (fee := emb("embedded_service_fee")):
+        if item.buyer_protection_fee is None and (fee := emb("service_fee")):
             item.buyer_protection_fee = parse_price(fee)
-    if (ship := emb("embedded_shipping")) is not None:
+    if (ship := emb("shipping")) is not None:
         item.shipping_fee = parse_price(ship)
 
     # Status: embedded flags, schema.org availability, then visible badges.
     action, closed, reserved = (
-        emb("embedded_closing_action"),
-        emb("embedded_closed"),
-        emb("embedded_reserved"),
+        emb("closing_action"),
+        emb("closed"),
+        emb("reserved"),
     )
     availability = str(offer.get("availability") or "")
     page_text = " ".join(c.texts[:250])
@@ -486,31 +533,49 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
     elif cfg.patterns["status_reserved"].search(" ".join(c.texts[:60])):
         item.status, item.status_source = ListingStatus.RESERVED, "text"
 
-    # Photos, in the page's order.
-    images: list[str] = []
-    for raw_url in cfg.patterns["embedded_photo"].findall(scripts):
-        images.append(_unescape_json_string(raw_url))
-    ld_images = (product or {}).get("image")
-    for img in ld_images if isinstance(ld_images, list) else [ld_images]:
-        u = img.get("url") if isinstance(img, dict) else img
-        if isinstance(u, str):
-            images.append(u)
-    images += c.meta.get("og:image", [])
-    item.images = list(dict.fromkeys(u for u in images if u.startswith(("http://", "https://"))))[:20]
+    # Photos: only the item's gallery, in its order. Structured data of the item first; the
+    # product's JSON-LD or its preview image only when the page has no gallery object. Profile
+    # photos found anywhere in the page are excluded whatever their source.
+    images = gallery(obj, keys["photos"], keys["photo_url"]) if obj else []
+    item.images_source = "item_json" if images else "none"
+    if not images:
+        ld_images = (product or {}).get("image")
+        for img in ld_images if isinstance(ld_images, list) else [ld_images]:
+            u = img.get("url") if isinstance(img, dict) else img
+            if isinstance(u, str):
+                images.append(u)
+        item.images_source = "jsonld" if images else "none"
+    if not images and (og := _first(c.meta, "og:image")):
+        images.append(og)
+        item.images_source = "meta"
+    avatars = profile_photo_urls(c.scripts, keys["profile_photo"], keys["photo_url"])
+    item.images = list(
+        dict.fromkeys(u for u in images if u.startswith(("http://", "https://")) and u not in avatars)
+    )[:20]
 
-    # Seller: opaque key, rating, review count. Nothing else.
-    member = next(
-        (mm.group(1) for href in c.member_links if (mm := cfg.patterns["member_id"].search(href))), None
-    )
+    # Seller: opaque key, rating, review count. Nothing else. From the item's own seller object;
+    # a member link in the page body only when the page has no structured data.
+    seller = pick(obj, keys["seller"])
+    seller = seller if isinstance(seller, dict) else None
+    member = str(pick(seller, keys["seller_id"]) or "") or None
+    if member is None and obj is None:
+        member = next(
+            (mm.group(1) for href in c.member_links if (mm := cfg.patterns["member_id"].search(href))), None
+        )
     item.seller_key = seller_key(member) if member else None
-    rep = emb("embedded_feedback_reputation")
+
+    def semb(name: str) -> str | None:
+        v = pick(seller, keys[name])
+        return None if v is None or isinstance(v, dict | list | bool) else str(v)
+
+    rep = semb("seller_rating")
     if rep:
         try:
             value = Decimal(rep)
             item.seller_rating = (value * 5 if value <= 1 else value).quantize(Decimal("0.01"))
         except InvalidOperation:
             pass
-    count = emb("embedded_feedback_count")
+    count = semb("seller_reviews")
     item.seller_review_count = int(count) if count else None
     item.title = unescape(item.title)
     return item

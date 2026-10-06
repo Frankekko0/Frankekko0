@@ -45,6 +45,7 @@ def _functions() -> list[Any]:
         func(tasks.refresh_tracked_public, keep_result=0, max_tries=1, timeout=90),
         func(tasks.archive_images, keep_result=0, max_tries=2, timeout=600),
         func(tasks.poll_email, keep_result=0, max_tries=1, timeout=300),
+        func(tasks.clean_foreign_data_task, keep_result=0, max_tries=2, timeout=600),
     ]
 
 
@@ -67,6 +68,7 @@ def _cron_jobs() -> list[Any]:
         cron(tasks.refresh_listings, minute={2, 12, 22, 32, 42, 52}, second=10, timeout=600),
         cron(tasks.recompute_learning, minute={7, 37}, second=20, timeout=300),
         cron(tasks.prune, hour=3, minute=17, second=0, timeout=300),
+        cron(tasks.clean_foreign_data_task, hour=4, minute=41, second=0, run_at_startup=True, timeout=600),
     ]
     if settings.vinted_public_fetch_enabled:
         jobs.append(cron(tasks.refresh_tracked_public, second=40, timeout=90, unique=True))
