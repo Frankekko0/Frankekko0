@@ -57,6 +57,7 @@ export const PRESETS: { id: string; label: string; hint: string }[] = [
 ];
 
 export const SORTS: { id: string; label: string }[] = [
+  { id: "expected", label: "Risk-adjusted profit" },
   { id: "flip", label: "Flip Score" },
   { id: "personal", label: "Personal Score" },
   { id: "profit", label: "Profit" },

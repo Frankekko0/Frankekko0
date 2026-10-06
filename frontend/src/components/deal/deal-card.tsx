@@ -23,9 +23,18 @@ function ProfitLine({ deal }: { deal: OpportunityCard }) {
         label="Profit"
         value={eur(deal.expected_profit, { sign: true })}
         tone={positive ? "success" : "danger"}
-        hint={`cost ${eur(deal.total_acquisition_cost)}`}
+        hint={`ROI ${pct(deal.expected_roi)} · cost ${eur(deal.total_acquisition_cost)}`}
       />
-      <Metric label="ROI" value={pct(deal.expected_roi)} tone={positive ? "success" : "danger"} />
+      <Metric
+        label="Risk-adjusted"
+        value={deal.risk_adjusted_profit !== null ? eur(deal.risk_adjusted_profit, { sign: true }) : "—"}
+        tone={deal.risk_adjusted_profit === null ? undefined : deal.risk_adjusted_profit > 0 ? "success" : "danger"}
+        hint={
+          deal.sale_probability !== null && deal.authenticity_probability !== null
+            ? `sale ${pct(deal.sale_probability)} · authentic ${pct(deal.authenticity_probability)}`
+            : "insufficient data"
+        }
+      />
     </div>
   );
 }

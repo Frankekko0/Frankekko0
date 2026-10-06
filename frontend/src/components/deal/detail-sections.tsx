@@ -198,7 +198,7 @@ export function MarketSection({ d }: { d: OpportunityDetail }) {
       id="market"
       icon={<TrendingUp />}
       title="Market analysis"
-      description={`Based on ${m.n_used} comparable listings (${m.n_sold} sold, ${m.n_active} active)${m.n_outliers ? `, ${m.n_outliers} outliers excluded` : ""}.`}
+      description={`Based on ${m.n_used} comparable listings (${m.n_sold} sold, ${m.n_active} on sale)${m.n_outliers ? `, ${m.n_outliers} outliers excluded` : ""}${m.n_sold && !m.n_active ? ". Enough real sales: asking prices are shown for reference only" : ""}.`}
       action={<Badge tone="outline">Market confidence {m.confidence ?? "—"}</Badge>}
     >
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -540,7 +540,7 @@ export function ComparablesSection({ items }: { items: Comparable[] }) {
               <div className="shrink-0 text-right">
                 <p className="text-[13px] font-semibold tnum text-fg">{eur(c.price)}</p>
                 <p className="text-[11px] text-fg-3">
-                  {!c.included ? "Outlier" : c.is_sold ? "Sold" : "Listed"} · {Math.round(c.similarity * 100)}%
+                  {!c.included ? (c.exclusion_reason === "asking_price" ? "Listed · reference only" : "Outlier") : c.is_sold ? "Sold" : "Listed"} · {Math.round(c.similarity * 100)}%
                 </p>
               </div>
             </a>

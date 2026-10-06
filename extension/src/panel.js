@@ -328,7 +328,7 @@ function beep() {
 
 function onHot(items) {
   const opts = state ? state.options : K.normalizeOptions({});
-  const best = items.filter((e) => K.passesFilters(e, filters)).sort((a, b) => b.flip_score - a.flip_score)[0];
+  const best = K.rank(items, filters, 1)[0];
   if (!best) return;
   if (opts.alertsVisual) {
     const box = $("alert");

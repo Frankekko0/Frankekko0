@@ -8,18 +8,28 @@ keeps the core deterministic, fast to test and reusable for ad-hoc analyses.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from app.ai.deal_analyst import DealAnalysis, DealContext, RuleBasedDealAnalyst, ScenarioSummary
+from app.analytics.calibration import Calibration
+from app.authenticity.assess import AuthInput, assess, photo_evidence
 from app.demand.analysis import DemandResult, VelocityResult, analyze_demand, analyze_velocity
 from app.demand.time_online import time_online
 from app.domain.enums import Condition, DealTier, RecommendedAction
+from app.opportunities import insights as ins
 from app.pricing.comparables import ItemProfile, ScoredComparable, select_comparables
 from app.pricing.comparison import market_comparison
-from app.pricing.market_value import MarketEstimate, SegmentPrior, estimate_market_value
+from app.pricing.market_value import (
+    SOLD_ONLY_MIN,
+    MarketEstimate,
+    SegmentPrior,
+    _euros,
+    estimate_market_value,
+)
 from app.profit.calculator import CostProfile, Scenario, acquisition_cost, max_buy_price, profit_scenarios
 from app.profit.offers import OfferPlan, build_offer_plan
 from app.scoring.confidence import ConfidenceInput, ConfidenceResult, compute_confidence
@@ -30,6 +40,9 @@ from app.scoring.seller import SellerProfile, SellerScore, seller_reliability
 from app.scoring.signals import Signal, SignalInput, build_signals, description_quality, worst_level
 
 PRICING_COMPARABLES = 60
+# On-sale listings kept next to enough sold ones: reference only (see ``estimate_market_value``).
+REFERENCE_ASKS = 20
+SAME_ITEM_ANOMALY = "Molti annunci identici dello stesso venditore"
 # Below this many direct comparables the estimate is labelled "indicative".
 LIMITED_BELOW = 8
 
@@ -60,6 +73,10 @@ class SubjectContext:
     description: str = ""
     # Buyer protection actually shown on the listing (None: the user's cost profile applies).
     buyer_protection_fee: Decimal | None = None
+    price_history: list[tuple[datetime, Decimal]] = field(default_factory=list)
+    # Price behaviour of the seller's other listings (see ``AnalysisPipeline.seller_habits``).
+    seller_habits: dict[str, Any] | None = None
+    seller_last_active_days: float | None = None
 
     @property
     def suspicious_terms(self) -> list[str]:
@@ -100,6 +117,10 @@ class AnalysisResult:
     risk_signals: list[Signal] = field(default_factory=list)
     headline: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
+    insights: dict[str, Any] = field(default_factory=dict)
+    risk_adjusted_profit: float | None = None
+    sale_probability: float | None = None
+    authenticity: dict[str, Any] = field(default_factory=dict)
 
     def scenario(self, name: str) -> Scenario | None:
         return next((s for s in self.scenarios if s.name == name), None)
@@ -123,13 +144,17 @@ def run_analysis(
     targets: EconomicTargets,
     prior: SegmentPrior | None = None,
     weights: dict[str, float] | None = None,
+    calibration: Calibration | None = None,
 ) -> AnalysisResult:
-    # Every similar listing (sold, on sale, removed); prices come only from sold and on-sale ones:
-    # a removed listing tells nothing about what the item is worth.
-    similar = select_comparables(subject.profile, candidates, now, max_count=10_000)
+    # The condition the photos show when worse than the declared one: prices follow the item.
+    condition = ins.effective_condition(subject.profile.condition, subject.vision)
+    priced = (
+        subject.profile
+        if condition == subject.profile.condition
+        else replace(subject.profile, condition=condition)
+    )
+    similar, comps, market = price_estimate(priced, candidates, now, prior, calibration)
     pool = [c for c in similar if c.item.status in ("sold", "active")]
-    comps = pool[:PRICING_COMPARABLES]
-    market = estimate_market_value(comps, subject.profile.condition, now, prior)
 
     # ---- demand & velocity (whole similar pool, not only the pricing sample) ----------------
     sold = sum(1 for c in similar if c.item.status == "sold")
@@ -232,7 +257,7 @@ def run_analysis(
             identification_confidence=subject.identification_confidence,
             comparables_used=market.n_used,
             market_confidence=market.confidence,
-            condition=subject.profile.condition,
+            condition=condition,
             photos_reused_by_other_seller=bool(subject.identification.get("photos_reused_by_other_seller")),
             is_repost=subject.is_repost,
             brand_known=subject.profile.brand is not None,
@@ -271,7 +296,7 @@ def run_analysis(
             market_dispersion=market.stats.dispersion if market.stats else None,
             market_confidence=market.confidence,
             identification_confidence=subject.identification_confidence,
-            condition=subject.profile.condition,
+            condition=condition,
             suspicious_terms=bool(subject.suspicious_terms),
             brand_counterfeit_risk=subject.brand_counterfeit_risk,
             risk_score=risk.score,
@@ -313,9 +338,13 @@ def run_analysis(
         risk,
     )
     analysis = RuleBasedDealAnalyst().analyze_sync(ctx)
-    comparison = market_comparison(subject.profile, similar, market)
+    comparison = market_comparison(priced, similar, market)
     online = time_online(similar, now)
     quality, reason = assess_data_quality(market, len(similar))
+    auth = assess_authenticity(subject, price, fmv)
+    p_sale = sale_probability(similar, now, prior)
+    margin = float(expected.result.net_profit) if expected and market.has_value else None
+    rap = ins.risk_adjusted_profit(margin, p_sale["p"], auth.p_authentic)
     result = AnalysisResult(
         subject=subject,
         market=market,
@@ -342,9 +371,176 @@ def run_analysis(
         market_comparison=comparison,
         time_online=online,
         risk_signals=signals,
+        risk_adjusted_profit=rap,
+        sale_probability=p_sale["p"],
+        authenticity=auth.as_dict(),
     )
     result.headline = build_headline(result)
+    result.insights = build_insights(result, similar, now, condition, p_sale, margin)
     return result
+
+
+def sale_probability(
+    similar: list[ScoredComparable], now: datetime, prior: SegmentPrior | None
+) -> dict[str, Any]:
+    """P(sold within 30 days) from similar listings with a known outcome; the segment's sold
+    share only when those are too few (and said so); otherwise "dati insufficienti"."""
+    p = ins.probability_of_sale(similar, now)
+    if p["p"] is None and prior and prior.sample_size >= 20 and prior.sell_through_rate is not None:
+        return {
+            "p": round(float(prior.sell_through_rate), 3),
+            "n": prior.sample_size,
+            "horizon_days": ins.HORIZON_DAYS,
+            "source": "segment",
+            "reason": f"{p['reason']} Usata la quota di venduti del segmento (brand e categoria).",
+        }
+    return {**p, "source": "similar" if p["p"] is not None else None}
+
+
+def assess_authenticity(subject: SubjectContext, price: Decimal, fmv: Decimal | None) -> Any:
+    seller = subject.seller
+    photos = photo_evidence(subject.vision)
+    return assess(
+        AuthInput(
+            brand_slug=subject.profile.brand,
+            brand_name=subject.brand_name,
+            brand_counterfeit_risk=subject.brand_counterfeit_risk,
+            price=float(price),
+            market_value=float(fmv) if fmv else None,
+            photo_count=subject.photo_count,
+            suspicious_terms=subject.suspicious_terms,
+            seller_reviews=seller.review_count if seller else None,
+            seller_rating=float(seller.rating) if seller and seller.rating is not None else None,
+            seller_account_age_days=subject.seller_account_age_days,
+            seller_multi_size_same_item=bool(seller and SAME_ITEM_ANOMALY in seller.anomalies),
+            photos_reused_by_other_seller=bool(subject.identification.get("photos_reused_by_other_seller")),
+            **photos,
+        )
+    )
+
+
+def _float(v: Decimal | None) -> float | None:
+    return float(v) if v is not None else None
+
+
+def _conf(n: int | None, scale: float) -> int:
+    return round(100 * (1 - math.exp(-(n or 0) / scale)))
+
+
+def build_insights(
+    r: AnalysisResult,
+    similar: list[ScoredComparable],
+    now: datetime,
+    condition: str,
+    p_sale: dict[str, Any],
+    margin: float | None,
+) -> dict[str, Any]:
+    s, m = r.subject, r.market
+    seller = s.seller
+    inp = ins.InsightInput(
+        now=now,
+        price=s.profile.price,
+        favourites=s.favourite_count or 0,
+        listing_age_hours=s.listing_age_hours,
+        size=s.profile.size,
+        color=s.profile.color,
+        condition_declared=s.profile.condition,
+        condition_effective=condition,
+        price_history=s.price_history,
+        seller_rating=float(seller.rating) if seller and seller.rating is not None else None,
+        seller_reviews=seller.review_count if seller else None,
+        seller_account_age_days=s.seller_account_age_days,
+        seller_last_active_days=s.seller_last_active_days,
+        seller_habits=s.seller_habits,
+        identification=s.identification,
+        vision=s.vision,
+    )
+    tracked = {c.item.id for c in similar if c.item.tracked}
+    has = m.has_value
+    comp = r.flip.components
+    margin_pillar = sum(comp[k]["score"] for k in ("undervaluation", "roi", "profit")) / 3 if has else 0.0
+    demand_pillar = (r.demand.score + r.velocity.score) / 2
+    roi = r.expected_roi
+    d: dict[str, Any] = {
+        "resale": {
+            "low": _float(m.quick_sale_price),
+            "probable": _float(m.expected_sale_price),
+            "high": _float(m.optimistic_sale_price),
+            "confidence": m.confidence if has else 0,
+            "calibrated": any("calibrati" in n for n in m.notes),
+        },
+        "net_margin": margin,
+        "roi": float(roi) if roi is not None and has else None,
+        "margin_confidence": m.confidence if has else 0,
+        "days_to_sell": r.velocity.estimated_days if r.velocity.sample_size or has else None,
+        "days_confidence": _conf(r.velocity.sample_size, 8),
+        "max_price": float(r.max_buy_price) if r.max_buy_price is not None else None,
+        "suggested_offer": float(r.offer.suggested_offer) if r.offer.suggested_offer is not None else None,
+        "offer_confidence": m.confidence if has else 0,
+        "p_sale": {**p_sale, "confidence": _conf(p_sale.get("n"), 15) if p_sale["p"] is not None else 0},
+        "authenticity": r.authenticity,
+        "risk_adjusted_profit": r.risk_adjusted_profit,
+        "pillars": ins.pillars(margin_pillar, demand_pillar, r.risk.score, r.seller.score),
+        "demand": ins.demand_detail(inp, similar, tracked),
+        "seller": ins.seller_detail(inp),
+        "identification": ins.identification_detail(s.identification),
+        "condition": ins.condition_check(inp),
+        "insufficient_reason": r.insufficient_reason,
+        "comparables_rule": "sold_only" if m.n_sold and not m.n_active else "sold_and_active",
+    }
+    d["reason"] = ins.reason_lines(d)
+    return d
+
+
+def pricing_comparables(pool: list[ScoredComparable]) -> list[ScoredComparable]:
+    """The most similar listings; with enough sales, the most similar *sold* ones (real prices),
+    plus a few on-sale ones shown for reference."""
+    sold = [c for c in pool if c.item.status == "sold"]
+    if len(sold) >= SOLD_ONLY_MIN:
+        active = [c for c in pool if c.item.status != "sold"]
+        return sold[:PRICING_COMPARABLES] + active[:REFERENCE_ASKS]
+    return pool[:PRICING_COMPARABLES]
+
+
+def price_estimate(
+    subject: ItemProfile,
+    candidates: list[ItemProfile],
+    now: datetime,
+    prior: SegmentPrior | None,
+    calibration: Calibration | None = None,
+) -> tuple[list[ScoredComparable], list[ScoredComparable], MarketEstimate]:
+    """(every similar listing, comparables used for the price, market estimate).
+
+    Every similar listing (sold, on sale, removed) feeds demand and timing; prices come only
+    from sold and on-sale ones: a removed listing tells nothing about what the item is worth.
+    The same function runs in the retroactive check, so measured errors are the real ones.
+    """
+    similar = select_comparables(subject, candidates, now, max_count=10_000)
+    pool = [c for c in similar if c.item.status in ("sold", "active")]
+    comps = pricing_comparables(pool)
+    market = estimate_market_value(comps, subject.condition, now, prior)
+    if calibration is not None and calibration.active and market.has_value:
+        market = calibrate(market, calibration, subject)
+    return similar, comps, market
+
+
+def calibrate(market: MarketEstimate, cal: Calibration, subject: ItemProfile) -> MarketEstimate:
+    """Minimum and maximum resale from the errors measured on real sales (about 8 in 10 real
+    sales fall between them); the probable price moves only if that proved more accurate."""
+    expected = float(market.expected_sale_price)  # type: ignore[arg-type]
+    low, mid, high = cal.apply(
+        expected, subject.category, subject.brand, subject.condition, market.confidence
+    )
+
+    mid_d = _euros(mid)
+    return replace(
+        market,
+        fair_market_value=mid_d,
+        expected_sale_price=mid_d,
+        quick_sale_price=min(_euros(low, "floor"), mid_d),
+        optimistic_sale_price=max(_euros(high), mid_d),
+        notes=[*market.notes, f"Minimo e massimo calibrati sugli errori misurati su {cal.n} vendite reali."],
+    )
 
 
 def assess_data_quality(market: MarketEstimate, found: int) -> tuple[str, str | None]:

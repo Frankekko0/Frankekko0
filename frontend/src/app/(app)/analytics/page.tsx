@@ -1,6 +1,6 @@
 "use client";
 
-import { Brain, Database, Layers, Store } from "lucide-react";
+import { Brain, Database, Layers, Store, Target } from "lucide-react";
 import { useState, type CSSProperties } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState, Skeleton } from "@/components/ui/feedback";
@@ -8,8 +8,8 @@ import { Input, Select } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/misc";
 import { Button } from "@/components/ui/button";
 import { eur, pct } from "@/lib/format";
-import { useBrandAnalytics, useBrands, useCategories, useCategoryAnalytics, useInsights, useMarketDatabase } from "@/lib/queries";
-import type { SegmentStats } from "@/lib/types";
+import { useAccuracy, useBrandAnalytics, useBrands, useCategories, useCategoryAnalytics, useInsights, useMarketDatabase } from "@/lib/queries";
+import type { ErrorStats, SegmentStats } from "@/lib/types";
 
 function SegmentTable({ rows, loading, kind }: { rows?: SegmentStats[]; loading: boolean; kind: "brand" | "category" }) {
   if (loading) return <Skeleton className="h-80 rounded-xl" />;
@@ -198,6 +198,82 @@ function Personal() {
   );
 }
 
+function ErrorRow({ label, e }: { label: string; e: ErrorStats | undefined }) {
+  if (!e || !e.n) {
+    return (
+      <tr className="border-t border-line">
+        <td className="py-2 pr-3 text-fg-2">{label}</td>
+        <td colSpan={5} className="py-2 text-fg-3">insufficient data</td>
+      </tr>
+    );
+  }
+  return (
+    <tr className="border-t border-line tnum">
+      <td className="py-2 pr-3 text-fg-2">
+        {label} <span className="text-fg-3">({e.n})</span>
+      </td>
+      <td className="py-2 pr-3 font-semibold">{eur(e.mae_eur)}</td>
+      <td className="py-2 pr-3">{pct(e.median_ape)}</td>
+      <td className="py-2 pr-3">{pct(e.mape)}</td>
+      <td className="py-2 pr-3">{pct(e.bias, { sign: true })}</td>
+      <td className="py-2">{pct(e.in_range)}</td>
+    </tr>
+  );
+}
+
+/** Retroactive check: the newer half of past sales, estimated with only earlier data. */
+function AccuracyCard() {
+  const q = useAccuracy();
+  const m = q.data?.metrics;
+  return (
+    <Card className="reveal">
+      <CardHeader>
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <Target className="size-4 text-fg-3" /> Resale estimate accuracy
+          </CardTitle>
+          <CardDescription>
+            Every sold item re-estimated with only what was known when it was listed; corrections are learned on older sales and measured on newer ones. Updated daily.
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {q.isLoading ? (
+          <Skeleton className="h-40" />
+        ) : !m ? (
+          <EmptyState title="Not measured yet" description="The check needs past sales; it runs every day and after each restart." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[560px] text-left text-[13px]">
+              <thead className="text-[11px] uppercase tracking-[0.06em] text-fg-3">
+                <tr>
+                  <th className="pb-2 font-semibold">On {m.test_sales} newer sales</th>
+                  <th className="pb-2 font-semibold">Mean error</th>
+                  <th className="pb-2 font-semibold">Median error</th>
+                  <th className="pb-2 font-semibold">Mean % error</th>
+                  <th className="pb-2 font-semibold">Bias</th>
+                  <th className="pb-2 font-semibold">Within min–max</th>
+                </tr>
+              </thead>
+              <tbody>
+                <ErrorRow label="Before" e={m.before} />
+                <ErrorRow label="Now" e={m.after} />
+                <ErrorRow label="Now · high confidence" e={m.after_by_confidence.high} />
+                <ErrorRow label="Now · medium confidence" e={m.after_by_confidence.mid} />
+                <ErrorRow label="Now · low confidence" e={m.after_by_confidence.low} />
+                <ErrorRow label="Your resales" e={m.own} />
+              </tbody>
+            </table>
+            <p className="mt-3 text-xs text-fg-3">
+              Learned on {m.learn_sales} older sales{m.own_resales ? ` and ${m.own_resales} of your resales` : ""}. Bias &gt; 0 means estimates above the realized price.
+            </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function AnalyticsPage() {
   const brands = useBrandAnalytics();
   const categories = useCategoryAnalytics();
@@ -213,7 +289,11 @@ export default function AnalyticsPage() {
           <TabsTrigger value="categories">Categories</TabsTrigger>
           <TabsTrigger value="market">Market database</TabsTrigger>
           <TabsTrigger value="personal">Your performance</TabsTrigger>
+          <TabsTrigger value="accuracy">Estimate accuracy</TabsTrigger>
         </TabsList>
+        <TabsContent value="accuracy" className="mt-4">
+          <AccuracyCard />
+        </TabsContent>
         <TabsContent value="brands" className="mt-4">
           <Card className="reveal">
             <CardHeader>

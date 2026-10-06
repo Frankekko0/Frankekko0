@@ -20,6 +20,7 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 from app.ai.service import run_ai_analysis, run_vision
 from app.alerts.channels.base import ChannelError
 from app.alerts.service import deliver_alert, evaluate_alerts
+from app.analytics.accuracy import fit_price_calibration
 from app.analytics.learning import recompute_all_affinities
 from app.analytics.market_stats import recompute_market_statistics
 from app.core.cache import NS_FEED, cache
@@ -488,6 +489,23 @@ async def clean_foreign_data_task(ctx: dict[str, Any]) -> dict[str, Any]:
         await _set_state("cleanup_foreign_data", {**report.as_dict(), "at": datetime.now(UTC).isoformat()})
         await cache.bump(NS_FEED)
     return report.as_dict()
+
+
+async def fit_price_calibration_task(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Daily retroactive accuracy check + calibration of the resale ranges, then re-analysis of
+    the active opportunities so every range and score uses it."""
+    async with session_scope() as s:
+        metrics = await fit_price_calibration(s)
+        ids = [
+            str(i)
+            for i in (
+                await s.execute(select(Opportunity.listing_id).where(Opportunity.is_active.is_(True)))
+            ).scalars()
+        ]
+    for chunk in _chunks(ids, ANALYSIS_BATCH_DEFAULT):
+        await enqueue("analyze_batch", chunk, high=False, job_id=_batch_job_id(chunk))
+    await cache.bump(NS_FEED)
+    return {k: metrics.get(k) for k in ("test_sales", "before", "after")}
 
 
 async def recompute_learning(ctx: dict[str, Any]) -> int:

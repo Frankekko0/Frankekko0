@@ -46,7 +46,7 @@ export function DealsExplorer({
   const pathname = usePathname();
   const params = useSearchParams();
   const urlFilters = useMemo(() => filtersFromParams(new URLSearchParams(params.toString())), [params]);
-  const filters: OpportunityFilters = { sort: "flip", ...urlFilters, ...fixed };
+  const filters: OpportunityFilters = { sort: "expected", ...urlFilters, ...fixed };
   const feed = useFeed(filters);
   const prefs = usePreferences();
   const [open, setOpen] = useState(false);

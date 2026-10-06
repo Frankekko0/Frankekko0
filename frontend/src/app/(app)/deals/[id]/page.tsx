@@ -17,6 +17,7 @@ import {
   SellerSection,
 } from "@/components/deal/detail-sections";
 import { DataQualityBanner } from "@/components/deal/analysis-detail";
+import { AuthenticitySection, DecisionSection, InsightDetails } from "@/components/deal/decision";
 import { ListingImage } from "@/components/deal/listing-image";
 import { RiskBadge, ScoreRing } from "@/components/deal/score";
 import { PurchaseDialog } from "@/components/forms/flip-forms";
@@ -32,6 +33,8 @@ import type { OpportunityDetail } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const NAV = [
+  ["decision", "Decision"],
+  ["authenticity", "Authenticity"],
   ["why", "Why"],
   ["offer", "Action"],
   ["market", "Market"],
@@ -307,6 +310,9 @@ export default function DealPage({ params }: { params: Promise<{ id: string }> }
             <Summary d={d} />
           </div>
           <DataQualityBanner quality={d.score.data_quality} reason={d.score.insufficient_reason} />
+          <DecisionSection d={d} />
+          <AuthenticitySection d={d} />
+          {d.insights && <InsightDetails i={d.insights} />}
           <ExplanationSection d={d} />
           <OfferCard d={d} />
           <MarketSection d={d} />

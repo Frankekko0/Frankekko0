@@ -73,6 +73,7 @@ class ItemProfile:
     removed_at: datetime | None = None
     url: str | None = None
     favourite_count: int | None = None
+    tracked: bool = False  # followed by the user (its selling time is observed first hand)
 
     @property
     def is_sold(self) -> bool:

@@ -98,6 +98,90 @@ export interface OpportunityCard {
   insufficient_reason: string | null;
   headline: string | null;
   analysis_depth: "quick" | "full";
+  /** Expected profit × P(sold within 30 days) × P(authentic), on the user's costs: the ranking key. */
+  risk_adjusted_profit: number | null;
+  sale_probability: number | null;
+  authenticity_probability: number | null;
+  authenticity_verdict: AuthVerdict | null;
+}
+
+export type AuthVerdict = "probably_authentic" | "uncertain" | "counterfeit_risk" | "not_verifiable";
+
+export interface AuthEvidence {
+  direction: "+" | "-" | "?";
+  label: string;
+  weight: number;
+  photo: number | null;
+  /** [x, y, w, h] in 0..1 of the photo: the detail to look at. */
+  box: number[] | null;
+}
+
+export interface Authenticity {
+  verdict: AuthVerdict;
+  label: string;
+  p_authentic: number;
+  confidence: number;
+  evidence: AuthEvidence[];
+  missing_photos: string[];
+  seller_message: string | null;
+  checks: string[];
+}
+
+export interface DealInsights {
+  resale: { low: number | null; probable: number | null; high: number | null; confidence: number; calibrated: boolean };
+  net_margin: number | null;
+  roi: number | null;
+  margin_confidence: number;
+  days_to_sell: number | null;
+  days_confidence: number;
+  max_price: number | null;
+  suggested_offer: number | null;
+  offer_confidence: number;
+  p_sale: { p: number | null; n: number; horizon_days: number; source: "similar" | "segment" | null; reason?: string; confidence: number };
+  authenticity: Authenticity;
+  risk_adjusted_profit: number | null;
+  pillars: { key: string; label: string; score: number }[];
+  reason: string[];
+  comparables_rule: "sold_only" | "sold_and_active";
+  insufficient_reason: string | null;
+  demand: {
+    favourites_per_day: number | null;
+    listing_age_days: number | null;
+    price_drops: { count: number; total_pct: number; last_at: string | null };
+    sell_share: { overall: number | null; n: number };
+    size: { size: string | null; sell_share: number | null; n: number };
+    color: { color: string | null; sell_share: number | null; n: number };
+    seasonality: { available: boolean; reason?: string; month?: string; factor?: number | null; best_months?: string[] };
+    tracked_similar: { n: number; median_days_to_sell: number | null };
+  };
+  seller: {
+    rating: number | null;
+    reviews: number | null;
+    account_age_days: number | null;
+    last_active_days: number | null;
+    response_time: null;
+    lowers_prices: { listings_seen: number; with_drops: number; share: number | null; avg_drop_pct: number | null; sold_after_drop: number };
+  };
+  identification: {
+    brand: string | null;
+    line: string | null;
+    model: string | null;
+    category: string | null;
+    season: string | null;
+    product_code: string | null;
+    original_price_claimed: number | null;
+    original_price_list: number | null;
+    hidden_opportunities: string[];
+    confidence: number | null;
+  };
+  condition: {
+    declared: string;
+    declared_label: string;
+    effective: string;
+    photos_checked: boolean;
+    defects: { kind: string; severity: string; certainty: string; description: string | null }[];
+    differences: string[];
+  };
 }
 
 export interface QuickStats {
@@ -301,6 +385,7 @@ export interface MarketInfo {
 }
 
 export interface OpportunityDetail {
+  insights: DealInsights | null;
   card: OpportunityCard;
   listing: ListingDetail;
   identification: Identification | null;
@@ -980,4 +1065,31 @@ export interface ExtensionKey {
 export interface ExtensionKeyCreated extends ExtensionKey {
   /** Shown once: only its hash is stored. */
   key: string;
+}
+
+export interface ErrorStats {
+  n: number;
+  mae_eur?: number;
+  mape?: number;
+  median_ape?: number;
+  bias?: number;
+  in_range?: number;
+}
+
+export interface Accuracy {
+  active: boolean;
+  sales_used: number;
+  fitted_at: string | null;
+  shift_applied: boolean;
+  metrics: {
+    measured_at: string;
+    split_at: string;
+    learn_sales: number;
+    test_sales: number;
+    own_resales: number;
+    before: ErrorStats;
+    after: ErrorStats;
+    after_by_confidence: Record<"low" | "mid" | "high", ErrorStats>;
+    own: ErrorStats;
+  } | null;
 }

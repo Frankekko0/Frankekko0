@@ -248,14 +248,21 @@
 
   const scored = (ev) => ev.flip_score !== null && ev.flip_score !== undefined;
 
-  /** Best first: scored items by score then margin; items without enough data never outrank them. */
+  const hasRap = (ev) => ev.risk_adjusted_profit !== null && ev.risk_adjusted_profit !== undefined;
+
+  /** Best first: risk-adjusted profit (margin x P(sale) x P(authentic)), then score and margin;
+   * items without enough data never outrank scored ones. */
+  function compare(a, b) {
+    if (scored(a) !== scored(b)) return scored(a) ? -1 : 1;
+    if (!scored(a)) return (b.seenAt || 0) - (a.seenAt || 0);
+    if (hasRap(a) !== hasRap(b)) return hasRap(a) ? -1 : 1;
+    if (hasRap(a) && b.risk_adjusted_profit !== a.risk_adjusted_profit) return b.risk_adjusted_profit - a.risk_adjusted_profit;
+    return b.flip_score - a.flip_score || (b.net_margin ?? 0) - (a.net_margin ?? 0);
+  }
+
   function rank(evals, filters, n = 5) {
     const list = evals.filter((e) => passesFilters(e, filters));
-    list.sort((a, b) => {
-      if (scored(a) !== scored(b)) return scored(a) ? -1 : 1;
-      if (!scored(a)) return (b.seenAt || 0) - (a.seenAt || 0);
-      return b.flip_score - a.flip_score || (b.net_margin ?? 0) - (a.net_margin ?? 0);
-    });
+    list.sort(compare);
     return list.slice(0, n);
   }
 
@@ -280,9 +287,9 @@
 
   /** Session ranking -> CSV (Excel-friendly: BOM, semicolons). */
   function rankingCsv(rows) {
-    const head = ["posizione", "vinted_id", "titolo", "brand", "taglia", "prezzo", "costo_totale", "rivendita_stimata", "margine_netto", "roi", "score", "confidenza", "motivo", "url", "visto_alle"];
+    const head = ["posizione", "vinted_id", "titolo", "brand", "taglia", "prezzo", "costo_totale", "rivendita_stimata", "margine_netto", "profitto_corretto_rischio", "prob_vendita", "prob_autentico", "roi", "score", "confidenza", "motivo", "url", "visto_alle"];
     const lines = rows.map((r, i) =>
-      [i + 1, r.vinted_id, r.title, r.brand, r.size, r.price, r.total_cost, r.resale_expected, r.net_margin, r.roi, r.flip_score ?? "dati insufficienti", r.confidence, r.reason, r.url, r.seenAt ? new Date(r.seenAt).toISOString() : ""]
+      [i + 1, r.vinted_id, r.title, r.brand, r.size, r.price, r.total_cost, r.resale_expected, r.net_margin, r.risk_adjusted_profit, r.sale_probability, r.authenticity_probability, r.roi, r.flip_score ?? "dati insufficienti", r.confidence, r.reason, r.url, r.seenAt ? new Date(r.seenAt).toISOString() : ""]
         .map(csvCell)
         .join(";"),
     );
@@ -311,6 +318,7 @@
     isRefusal,
     passesFilters,
     rank,
+    compare,
     isHot,
     eur,
     csvCell,

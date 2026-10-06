@@ -1,0 +1,126 @@
+{
+  "about": "Regole di autenticità aggiornabili senza toccare il codice. key_photos: foto senza le quali l'esito è 'non verificabile'. checks: cosa controllare (mostrato all'utente e usato nell'analisi delle foto). likelihood_ratios: peso di ogni prova (>1 a favore, <1 contro). counterfeit_prior per brand sostituisce il rischio del catalogo.",
+  "version": "2026.10.7-1",
+  "likelihood_ratios": {
+    "price_far_below": 0.35,
+    "price_below": 0.75,
+    "suspicious_text": 0.25,
+    "multi_size_same_item": 0.4,
+    "new_seller_no_reviews": 0.8,
+    "established_seller": 1.3,
+    "reused_photos": 0.35,
+    "stock_photos": 0.55,
+    "screenshot": 0.6,
+    "foreign_watermark": 0.5,
+    "edited_or_generated": 0.45,
+    "photo_concern_certain": 0.25,
+    "photo_concern_probable": 0.55,
+    "photo_consistent_certain": 1.8,
+    "photo_consistent_probable": 1.25,
+    "max_positive_total": 4.0
+  },
+  "default": {
+    "key_photos": [
+      "label",
+      "care_tag",
+      "logo"
+    ],
+    "min_coverage": 0.5,
+    "price_floor_ratio": 0.45,
+    "checks": [
+      "Etichetta interna: marchio, font e cuciture regolari, nessun refuso",
+      "Etichetta di lavaggio e composizione: testo nitido e coerente con il brand",
+      "Logo o ricamo: proporzioni, spaziature e densità del ricamo",
+      "Coerenza tra le foto: stesso articolo, stessa luce, nessun ritocco evidente"
+    ]
+  },
+  "brands": {
+    "stone-island": {
+      "key_photos": [
+        "code"
+      ],
+      "price_floor_ratio": 0.5,
+      "checks": [
+        "Badge della bussola: bottoni sul retro, cuciture e colori regolari",
+        "Etichetta interna con codice articolo ed eventuale etichetta di autenticazione leggibili"
+      ]
+    },
+    "moncler": {
+      "key_photos": [
+        "code"
+      ],
+      "price_floor_ratio": 0.55,
+      "checks": [
+        "Etichetta di autenticazione (codice/QR) leggibile",
+        "Logo in feltro: bordi e cuciture",
+        "Piumino: imbottitura uniforme, cerniere di marca"
+      ]
+    },
+    "nike": {
+      "key_photos": [
+        "code"
+      ],
+      "checks": [
+        "Etichetta interna (linguetta o collo): codice stile leggibile e coerente con la scatola",
+        "Cuciture dello swoosh e proporzioni"
+      ]
+    },
+    "supreme": {
+      "price_floor_ratio": 0.55,
+      "checks": [
+        "Box logo: font, spaziature e ricamo",
+        "Etichetta del collo e di lavaggio coerenti con la stagione"
+      ]
+    },
+    "gucci": {
+      "key_photos": [
+        "code"
+      ],
+      "price_floor_ratio": 0.6,
+      "checks": [
+        "Etichetta interna con codice prodotto",
+        "Minuteria metallica: incisioni nitide e peso"
+      ]
+    },
+    "burberry": {
+      "price_floor_ratio": 0.55,
+      "checks": [
+        "Motivo check: allineamento alle cuciture",
+        "Etichetta interna e di lavaggio coerenti"
+      ]
+    },
+    "the-north-face": {
+      "checks": [
+        "Ricamo del logo sul petto e sulla schiena: densità e proporzioni",
+        "Etichette interne e cerniere di marca"
+      ]
+    },
+    "cp-company": {
+      "checks": [
+        "Lenti della giacca: incisione del marchio",
+        "Etichetta interna con codice articolo"
+      ]
+    },
+    "ralph-lauren": {
+      "checks": [
+        "Ricamo del pony: dettagli del cavaliere e della mazza",
+        "Etichetta del collo e di lavaggio coerenti con la linea"
+      ]
+    },
+    "lacoste": {
+      "checks": [
+        "Coccodrillo ricamato: denti e coda dettagliati",
+        "Etichetta del collo con taglia numerica"
+      ]
+    },
+    "arcteryx": {
+      "key_photos": [
+        "code"
+      ],
+      "checks": [
+        "Logo stampato o ricamato nitido",
+        "Etichetta interna con codice e cerniere di marca"
+      ]
+    }
+  }
+}

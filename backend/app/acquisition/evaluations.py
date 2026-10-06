@@ -115,6 +115,10 @@ async def quick_evaluations(
                 net_margin=None if insufficient or c is None else c.expected_profit,
                 roi=None if insufficient or c is None else c.expected_roi,
                 days_to_sell=None if insufficient or c is None else c.estimated_days_to_sell,
+                risk_adjusted_profit=None if insufficient or c is None else c.risk_adjusted_profit,
+                sale_probability=c.sale_probability if c else None,
+                authenticity_probability=c.authenticity_probability if c else None,
+                authenticity_verdict=c.authenticity_verdict if c else None,
                 reason=reason,
                 analyzed_at=c.analyzed_at if c else None,
             )

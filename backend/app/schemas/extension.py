@@ -63,6 +63,11 @@ class QuickEval(Schema):
     net_margin: Money | None
     roi: Ratio | None
     days_to_sell: float | None
+    # Net margin x P(sold within 30 days) x P(authentic): the ranking key.
+    risk_adjusted_profit: Money | None = None
+    sale_probability: Ratio | None = None
+    authenticity_probability: Ratio | None = None
+    authenticity_verdict: str | None = None
     reason: str | None
     analyzed_at: datetime | None
 

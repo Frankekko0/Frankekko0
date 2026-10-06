@@ -123,6 +123,17 @@ test("live ranking: filters, best first, insufficient data never outranks a scor
   assert.equal(K.isHot(ev("4", { flip_score: null }), { minScore: 0, minMargin: -100 }), false);
 });
 
+test("live ranking: risk-adjusted profit decides among scored items", () => {
+  const evals = [
+    ev("1", { flip_score: 95, net_margin: 40, risk_adjusted_profit: 6 }), // likely fake: low adjusted profit
+    ev("2", { flip_score: 70, net_margin: 15, risk_adjusted_profit: 12 }),
+    ev("3", { flip_score: 99, net_margin: 30 }), // no probabilities yet: after the ones that have them
+    ev("4", { flip_score: 60, net_margin: -5, risk_adjusted_profit: -5 }),
+  ];
+  const f = { minMargin: null };
+  assert.deepEqual(K.rank(evals, f, 5).map((e) => e.vinted_id), ["2", "1", "4", "3"]);
+});
+
 test("ranking export is spreadsheet-safe", () => {
   const csv = K.rankingCsv([ev("1", { title: '=HYPERLINK("x")', reason: 'a; "b"' }), ev("2", { flip_score: null })]);
   assert.ok(csv.startsWith("﻿posizione;vinted_id"));

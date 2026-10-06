@@ -33,6 +33,7 @@ from app.db.models import (
     UserAffinity,
 )
 from app.domain.enums import FavoriteState
+from app.opportunities import insights as ins
 from app.opportunities.engine import EconomicTargets
 from app.profit.calculator import AcquisitionCost, CostProfile, SaleRevenue, max_buy_price, profit_for
 from app.profit.offers import build_offer_plan
@@ -71,6 +72,39 @@ PRESETS: dict[str, dict[str, Any]] = {
     "under_20": {"max_price": 20, "min_profit": 5, "sort": "flip"},
     "ultra": {"ultra_only": True, "sort": "flip"},
 }
+
+
+def risk_adjusted_sql(profit: ColumnElement[Any]) -> ColumnElement[Any]:
+    """The user's expected profit x P(sale) x P(authentic); a loss stays a loss."""
+    return case(
+        (profit > 0, profit * Opportunity.sale_probability * Opportunity.authenticity_probability),
+        else_=profit,
+    )
+
+
+def risk_adjusted(profit: Decimal | None, p_sale: Decimal | None, p_auth: Decimal | None) -> Decimal | None:
+    if profit is None:
+        return None
+    if profit <= 0:
+        return profit
+    if p_sale is None or p_auth is None:
+        return None
+    return (profit * p_sale * p_auth).quantize(Decimal("0.01"))
+
+
+def user_insights(stored: dict[str, Any] | None, card: OpportunityCard, smart: Any) -> dict[str, Any] | None:
+    """Stored insights with the money figures recomputed on the user's own costs."""
+    if not stored:
+        return None
+    d = dict(stored)
+    f = lambda v: float(v) if v is not None else None  # noqa: E731
+    d["net_margin"] = f(card.expected_profit)
+    d["roi"] = f(card.expected_roi)
+    d["risk_adjusted_profit"] = f(card.risk_adjusted_profit)
+    d["max_price"] = f(getattr(smart, "max_buy_price", None))
+    d["suggested_offer"] = f(getattr(smart, "suggested_offer", None))
+    d["reason"] = ins.reason_lines(d)
+    return d
 
 
 def price_band(price: float) -> str:
@@ -294,7 +328,9 @@ class OpportunityQueries:
                 Opportunity.identification_confidence < 70, Opportunity.discount_vs_market >= 0.3
             )
 
+        rap = risk_adjusted_sql(profit)
         sort_cols = {
+            "expected": [rap.desc().nulls_last(), Opportunity.flip_score.desc()],
             "flip": [Opportunity.flip_score.desc(), Opportunity.confidence_score.desc()],
             "personal": [personal.desc(), Opportunity.flip_score.desc()],
             "profit": [profit.desc().nulls_last()],
@@ -307,7 +343,7 @@ class OpportunityQueries:
             "risk_asc": [Opportunity.risk_score.asc(), Opportunity.flip_score.desc()],
         }[params["sort"]]
         stmt = stmt.order_by(*sort_cols, Opportunity.id)
-        return stmt, {"tac": tac, "profit": profit, "roi": roi}
+        return stmt, {"tac": tac, "profit": profit, "roi": roi, "rap": rap}
 
     async def feed(self, f: OpportunityFilters) -> tuple[list[OpportunityCard], int]:
         stmt, _ = self.build(f)
@@ -390,6 +426,14 @@ class OpportunityQueries:
             insufficient_reason=o.insufficient_reason,
             headline=o.headline,
             analysis_depth=o.analysis_depth,
+            risk_adjusted_profit=risk_adjusted(
+                scenario.net_profit if scenario else None, o.sale_probability, o.authenticity_probability
+            )
+            if o.expected_sale_price is not None
+            else None,
+            sale_probability=o.sale_probability,
+            authenticity_probability=o.authenticity_probability,
+            authenticity_verdict=o.authenticity_verdict,
         )
 
     async def card_by_listing_ids(self, listing_ids: list[uuid.UUID]) -> list[OpportunityCard]:
@@ -553,7 +597,9 @@ class OpportunityQueries:
                 )
             },
         }
+        insights = user_insights(breakdown.get("insights"), card, smart)
         return OpportunityDetail(
+            insights=insights,
             card=card,
             listing=listing_out,
             identification=listing.identification,

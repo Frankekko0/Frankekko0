@@ -34,6 +34,7 @@ class Opportunity(Base):
         Index("ix_opportunities_active_flip", "is_active", text("flip_score DESC")),
         Index("ix_opportunities_ultra", "is_ultra_deal", postgresql_where=text("is_active")),
         Index("ix_opportunities_analyzed_at", "analyzed_at"),
+        Index("ix_opportunities_active_rap", "is_active", text("risk_adjusted_profit DESC NULLS LAST")),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -99,6 +100,11 @@ class Opportunity(Base):
     comparables_count: Mapped[int] = mapped_column(Integer, default=0)
     sold_comparables_count: Mapped[int] = mapped_column(Integer, default=0)
     identification_confidence: Mapped[int | None] = mapped_column(SmallInteger)
+    # Net margin x P(sold within 30 days) x P(authentic): the ranking key.
+    risk_adjusted_profit: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    sale_probability: Mapped[Decimal | None] = mapped_column(Ratio)
+    authenticity_probability: Mapped[Decimal | None] = mapped_column(Ratio)
+    authenticity_verdict: Mapped[str | None] = mapped_column(String(24))
 
     score_breakdown: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     explanation: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)

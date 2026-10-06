@@ -370,3 +370,27 @@ async def test_alerts_endpoints(auth_client: httpx.AsyncClient) -> None:
     assert unread == {"unread": 0, "latest_high_priority": None}
     assert (await auth_client.post(f"{API}/alerts/read-all")).status_code == 200
     assert (await auth_client.get(f"{API}/alerts")).json()["total"] == 0
+
+
+async def test_feed_ranks_by_risk_adjusted_profit_and_detail_explains_it(
+    auth_client: httpx.AsyncClient, make_listing
+) -> None:
+    opp_id = await seed_deal(make_listing)
+    feed = (await auth_client.get(f"{API}/opportunities", params={"page_size": 50})).json()["items"]
+    raps = [i["risk_adjusted_profit"] for i in feed]
+    known = [v for v in raps if v is not None]
+    assert known == sorted(known, reverse=True)  # default order: risk-adjusted profit
+    assert raps[: len(known)] == known  # items without probabilities come last
+    card = next(i for i in feed if i["id"] == opp_id)
+    assert card["sale_probability"] is not None and 0 < card["authenticity_probability"] <= 0.97
+    expected = card["expected_profit"] * card["sale_probability"] * card["authenticity_probability"]
+    assert card["risk_adjusted_profit"] == pytest.approx(expected, abs=0.02)
+
+    d = (await auth_client.get(f"{API}/opportunities/{opp_id}")).json()["insights"]
+    assert len(d["reason"]) == 3 and {p["key"] for p in d["pillars"]} == {"margin", "demand", "risk", "seller"}
+    assert d["net_margin"] == pytest.approx(card["expected_profit"])
+    assert d["resale"]["low"] <= d["resale"]["probable"] <= d["resale"]["high"]
+    assert d["authenticity"]["verdict"] == "not_verifiable"  # photos not analysed: never "authentic"
+
+    acc = (await auth_client.get(f"{API}/analytics/accuracy")).json()
+    assert acc["active"] is False and acc["metrics"] is None  # nothing measured yet: no numbers shown

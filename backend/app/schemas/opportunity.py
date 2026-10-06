@@ -20,6 +20,7 @@ Preset = Literal[
     "ultra",
 ]
 SortKey = Literal[
+    "expected",
     "flip",
     "personal",
     "profit",
@@ -62,7 +63,7 @@ class OpportunityFilters(Schema):
     include_insufficient: bool = False
     state: Literal["saved", "ignored", "purchased", "watching", "sold"] | None = None
     preset: Preset | None = None
-    sort: SortKey = "flip"
+    sort: SortKey = "expected"
     page: int = Field(default=1, ge=1, le=10_000)
     page_size: int = Field(default=24, ge=1, le=100)
 
@@ -119,6 +120,11 @@ class OpportunityCard(Schema):
     insufficient_reason: str | None = None
     headline: str | None = None
     analysis_depth: str = "full"
+    # Expected profit x P(sold within 30 days) x P(authentic), with the user's costs.
+    risk_adjusted_profit: Money | None = None
+    sale_probability: Ratio | None = None
+    authenticity_probability: Ratio | None = None
+    authenticity_verdict: str | None = None
 
 
 class QuickStats(Schema):
@@ -252,6 +258,8 @@ class OpportunityDetail(Schema):
     recommended_action: str
     market_comparison: dict[str, Any] | None = None
     time_online: dict[str, Any] | None = None
+    # Resale range, P(sale), authenticity, demand/seller/condition detail, pillars and reason.
+    insights: dict[str, Any] | None = None
 
 
 class FavoriteStateIn(Schema):

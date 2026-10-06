@@ -92,6 +92,9 @@ class MarketEstimate:
         }
 
 
+SOLD_ONLY_MIN = 5
+
+
 def _euros(value: float, mode: str = "round") -> Decimal:
     rounding = ROUND_FLOOR if mode == "floor" else ROUND_HALF_UP
     return Decimal(str(value)).quantize(Decimal("1"), rounding=rounding).quantize(Decimal("0.01"))
@@ -112,6 +115,7 @@ def estimate_market_value(
     subject_condition: str,
     now: datetime,
     prior: SegmentPrior | None = None,
+    sold_only_min: int | None = SOLD_ONLY_MIN,
 ) -> MarketEstimate:
     sold = [c for c in comparables if c.is_sold]
     active = [c for c in comparables if not c.is_sold]
@@ -133,6 +137,13 @@ def estimate_market_value(
     else:
         k_ask = DEFAULT_ASK_TO_SALE
 
+    # Enough real sales: asking prices are shown for reference but do not set the price (they
+    # overstate it; measured on past sales).
+    if sold_only_min is not None and len(sold_in) >= sold_only_min:
+        for c in active_in:
+            c.included = False
+            c.exclusion_reason = "asking_price"
+        active_in = []
     active_factor = 0.7 if len(sold_in) < 5 else 0.35
     realized: list[WeightedValue] = [WeightedValue(c.adjusted_price, c.weight) for c in sold_in]
     realized += [WeightedValue(c.adjusted_price * k_ask, c.weight * active_factor) for c in active_in]

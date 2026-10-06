@@ -4,6 +4,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { toast } from "sonner";
 import { api, errorMessage } from "./api";
 import type {
+  Accuracy,
   ExtensionKey,
   ExtensionKeyCreated,
   AcquisitionStatus,
@@ -292,6 +293,10 @@ export function useMarketDatabase(params: { brand?: string; category?: string; q
     queryFn: () => api<Page<MarketSegment>>("/analytics/market", { query: { ...params, page_size: 25 } }),
     placeholderData: keepPreviousData,
   });
+}
+
+export function useAccuracy() {
+  return useQuery({ queryKey: ["analytics", "accuracy"], queryFn: () => api<Accuracy>("/analytics/accuracy"), staleTime: 10 * 60_000 });
 }
 
 export function useInsights() {

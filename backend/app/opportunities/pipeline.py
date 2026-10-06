@@ -14,12 +14,24 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.analytics.calibration import STATE_KEY as CALIBRATION_KEY
+from app.analytics.calibration import Calibration
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
-from app.db.models import Listing, MarketComparable, MarketStatistic, Opportunity, OpportunityScore, Seller
+from app.db.models import (
+    Listing,
+    ListingPriceHistory,
+    MarketComparable,
+    MarketStatistic,
+    Opportunity,
+    OpportunityScore,
+    Seller,
+    SystemState,
+)
 from app.domain.enums import AcquisitionMode, CaptureLevel, ListingStatus
 from app.ingestion.catalog import Catalog, load_catalog
 from app.opportunities.engine import (
+    SAME_ITEM_ANOMALY,
     AnalysisResult,
     EconomicTargets,
     SubjectContext,
@@ -118,6 +130,7 @@ def profile_from_row(row: Any, catalog: Catalog) -> ItemProfile:
         removed_at=getattr(row, "removed_at", None),
         url=row.url,
         favourite_count=row.favourite_count,
+        tracked=getattr(row, "tracked_at", None) is not None,
     )
 
 
@@ -173,6 +186,7 @@ class AnalysisPipeline:
             Listing.removed_at,
             Listing.url,
             Listing.favourite_count,
+            Listing.tracked_at,
         )
 
     async def _fetch_split(
@@ -321,7 +335,7 @@ class AnalysisPipeline:
             for r in items:
                 fps[r.title_fingerprint] = fps.get(r.title_fingerprint, 0) + 1
             if any(n >= 3 for fp, n in fps.items() if fp):
-                anomalies.append("Molti annunci identici dello stesso venditore")
+                anomalies.append(SAME_ITEM_ANOMALY)
             risky = sum(
                 1
                 for r in items
@@ -331,6 +345,57 @@ class AnalysisPipeline:
             if risky >= 4:
                 anomalies.append("Molti annunci di brand spesso contraffatti in poco tempo")
             out[seller_id] = tuple(anomalies)
+        return out
+
+    async def calibration(self) -> Calibration:
+        state = await self.session.get(SystemState, CALIBRATION_KEY)
+        return Calibration.from_state(state.value if state else None)
+
+    async def price_histories(
+        self, listing_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, list[tuple[datetime, Decimal]]]:
+        if not listing_ids:
+            return {}
+        rows = (
+            await self.session.execute(
+                select(
+                    ListingPriceHistory.listing_id, ListingPriceHistory.observed_at, ListingPriceHistory.price
+                )
+                .where(ListingPriceHistory.listing_id.in_(listing_ids))
+                .order_by(ListingPriceHistory.listing_id, ListingPriceHistory.observed_at)
+            )
+        ).all()
+        out: dict[uuid.UUID, list[tuple[datetime, Decimal]]] = {}
+        for r in rows:
+            out.setdefault(r.listing_id, []).append((r.observed_at, r.price))
+        return out
+
+    async def seller_habits(self, seller_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, Any]]:
+        """How often each seller lowered prices on the listings seen so far (offer leverage)."""
+        if not seller_ids:
+            return {}
+        top = func.max(ListingPriceHistory.price)
+        rows = (
+            await self.session.execute(
+                select(Listing.seller_id, Listing.status, Listing.price, top.label("top"))
+                .outerjoin(ListingPriceHistory, ListingPriceHistory.listing_id == Listing.id)
+                .where(Listing.seller_id.in_(set(seller_ids)), Listing.duplicate_of_id.is_(None))
+                .group_by(Listing.seller_id, Listing.id)
+            )
+        ).all()
+        out: dict[uuid.UUID, dict[str, Any]] = {}
+        for r in rows:
+            h = out.setdefault(
+                r.seller_id, {"listings": 0, "with_drops": 0, "drops": [], "sold_after_drop": 0}
+            )
+            h["listings"] += 1
+            if r.top is not None and r.top > r.price > 0:
+                h["with_drops"] += 1
+                h["drops"].append(float((r.top - r.price) / r.top))
+                h["sold_after_drop"] += r.status == ListingStatus.SOLD
+        for h in out.values():
+            drops = h.pop("drops")
+            h["avg_drop_pct"] = sum(drops) / len(drops) if drops else None
         return out
 
     def subject_context(
@@ -362,6 +427,9 @@ class AnalysisPipeline:
             vision=ident.get("vision"),
             description=listing.description or "",
             buyer_protection_fee=listing.buyer_protection_fee,
+            seller_last_active_days=(now - seller.last_active_at).total_seconds() / 86400
+            if seller and seller.last_active_at
+            else None,
         )
 
     # ---------------------------------------------------------------- analysis
@@ -414,7 +482,13 @@ class AnalysisPipeline:
             self.subject_context(x, catalog, now, anomalies.get(x.seller_id, ()) if x.seller_id else ())
             for x in listings
         ]
+        histories = await self.price_histories([x.id for x in listings])
+        habits = await self.seller_habits([x.seller_id for x in listings if x.seller_id is not None])
+        for x, subject in zip(listings, subjects, strict=True):
+            subject.price_history = histories.get(x.id, [])
+            subject.seller_habits = habits.get(x.seller_id) if x.seller_id else None
         priors = await self.segment_priors([(x.brand_id, x.category_id, x.model_name) for x in listings])
+        calibration = await self.calibration()
 
         pools: dict[tuple[int, tuple[int, ...]], CandidatePool] = {}
         cost, targets = default_cost_profile(self.settings), default_targets(self.settings)
@@ -428,7 +502,9 @@ class AnalysisPipeline:
                 if key not in pools:
                     pools[key] = await self.candidate_pool(listing.brand_id, cat_ids, catalog, now)
                 cands = pools[key].for_subject(listing.id)
-            results.append((listing, run_analysis(subject, cands, now, cost, targets, prior)))
+            results.append(
+                (listing, run_analysis(subject, cands, now, cost, targets, prior, calibration=calibration))
+            )
         return await self.persist_many(results, now, mode)
 
     async def persist(self, listing: Listing, result: AnalysisResult, now: datetime) -> AnalysisOutcome:
@@ -621,7 +697,12 @@ def opportunity_values(
         "comparables_count": m.n_used,
         "sold_comparables_count": m.n_sold,
         "identification_confidence": r.subject.identification_confidence,
+        "risk_adjusted_profit": dec(r.risk_adjusted_profit),
+        "sale_probability": Decimal(str(r.sale_probability)) if r.sale_probability is not None else None,
+        "authenticity_probability": Decimal(str(r.authenticity["p_authentic"])) if r.authenticity else None,
+        "authenticity_verdict": r.authenticity.get("verdict") if r.authenticity else None,
         "score_breakdown": {
+            "insights": r.insights,
             "components": r.flip.components,
             "penalties": r.flip.penalties,
             "cap": r.flip.cap,

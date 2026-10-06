@@ -18,6 +18,9 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
 
+from rapidfuzz import fuzz
+from rapidfuzz.distance import JaroWinkler
+
 from app.domain.enums import Certainty
 from app.identification.taxonomy import (
     DEFAULT_TAXONOMY,
@@ -106,6 +109,9 @@ class IdentificationResult:
     suspicious_terms: list[str] = field(default_factory=list)
     defect_terms: list[str] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
+    # Hidden opportunities and seller claims: misspelled_brand, category_mismatch,
+    # claimed_original_price (never verified facts).
+    flags: dict[str, Any] = field(default_factory=dict)
     confidence: int = 0
 
     @property
@@ -147,11 +153,17 @@ class IdentificationResult:
             "suspicious_terms": self.suspicious_terms,
             "defect_terms": self.defect_terms,
             "evidence": self.evidence,
+            "flags": self.flags,
             "confidence": self.confidence,
         }
 
 
 _WORD = re.compile(r"\w+")
+# "pagata 250€", "prezzo di listino 180 euro", "retail 300 €" in the (folded) description.
+CLAIMED_PRICE = re.compile(
+    r"(?:pagat[oaie]|prezzo (?:di |d')?(?:listino|originale|negozio|acquisto)|costo originale|retail|"
+    r"costava|acquistat[oaie] a|paid|original price|rrp)\D{0,20}?(\d{2,5}(?:[.,]\d{1,2})?)\s?(?:€|eur|euro)"
+)
 
 
 def _gate(literal: str) -> frozenset[str]:
@@ -206,6 +218,17 @@ class IdentificationEngine:
         self._brand_aliases = [
             (_gate(alias), pattern, brand, alias) for pattern, brand, alias in taxonomy.brand_alias_patterns
         ]
+        # Brand names and long aliases for misspellings ("Ralf Loren", "Carhart"): short aliases
+        # are excluded, they would match ordinary words.
+        self._fuzzy_aliases = sorted(
+            {
+                (fold(a), brand)
+                for brand in taxonomy.all_brands
+                for a in (brand.name, *brand.aliases)
+                if len(fold(a)) >= 5
+            },
+            key=lambda x: x[0],
+        )
         self._category_keywords = [
             (_gate(kw), pattern, cat, kw) for pattern, cat, kw in taxonomy.category_keyword_patterns
         ]
@@ -281,6 +304,15 @@ class IdentificationEngine:
                 res.brand = Attribute(inferred.slug, Certainty.PROBABLE, "model_keyword", 0.55)
                 chosen = (inferred, inferred.name)
                 res.evidence.append(f"Brand '{inferred.name}' dedotto dal nome del modello")
+            elif fz := self._fuzzy_brand(fold(item.brand_field or "")) or self._fuzzy_brand(title):
+                brand, written, alias = fz
+                res.brand = Attribute(brand.slug, Certainty.PROBABLE, "fuzzy", 0.55)
+                chosen = (brand, alias)
+                res.flags["misspelled_brand"] = {"written": written, "brand": brand.name}
+                res.evidence.append(
+                    f"Brand scritto male: '{written}' → {brand.name}. Chi cerca '{brand.name}' "
+                    "probabilmente non lo trova: possibile occasione (verifica che sia davvero quel brand)."
+                )
             elif vision and vision.brand and (vb := self._match_brand(fold(vision.brand.value))):
                 res.brand = Attribute(vb[0].slug, vision.brand.certainty, "image", vision.brand.confidence)
                 chosen = (vb[0], vb[1])
@@ -306,6 +338,37 @@ class IdentificationEngine:
                     res.brand.confidence = max(res.brand.confidence, 0.95)
                     res.evidence.append("Brand confermato da logo/etichetta nelle foto")
         return title_masked, desc_masked
+
+    def _fuzzy_brand(self, text: str) -> tuple[BrandSpec, str, str] | None:
+        """(brand, written form, catalog alias) for a near-miss spelling of a known brand."""
+        words = _WORD.findall(text)
+        best: tuple[float, BrandSpec, str, str] | None = None
+        for n in (1, 2, 3):
+            for i in range(len(words) - n + 1):
+                cand = " ".join(words[i : i + n])
+                if len(cand) < 5:
+                    continue
+                cand_words = cand.split()
+                for alias, brand in self._fuzzy_aliases:
+                    if cand == alias or abs(len(alias) - len(cand)) > 3:
+                        continue
+                    alias_words = alias.split()
+                    if len(alias_words) != len(cand_words):
+                        continue
+                    if len(alias_words) == 1:
+                        score = fuzz.ratio(cand, alias)
+                        ok = score >= 86
+                    else:
+                        # word by word: every word close, the whole close on average
+                        parts = [
+                            100 * JaroWinkler.normalized_similarity(a, b)
+                            for a, b in zip(cand_words, alias_words, strict=True)
+                        ]
+                        score = sum(parts) / len(parts)
+                        ok = min(parts) >= 82 and score >= 88 and cand_words[0][0] == alias_words[0][0]
+                    if ok and (best is None or score > best[0]):
+                        best = (score, brand, cand, alias)
+        return (best[1], best[2], best[3]) if best else None
 
     def _brand_from_lines(self, text: str) -> BrandSpec | None:
         """Infer the brand from a distinctive model name, only when it points to a single brand."""
@@ -395,6 +458,24 @@ class IdentificationEngine:
             add(vision.category.value, 2 * vision.category.confidence, "image")
         if not scores:
             return
+        # Filed under another category than its title says: fewer buyers browse to it.
+        declared = [slug for slug, src in sources.items() if src == "provider_field"]
+        title_scores = self._keyword_scores(title)
+        if declared and title_scores:
+            decl = max(declared, key=lambda s: scores[s])
+            seen = max(title_scores, key=lambda s: title_scores[s])
+            parents = {c.slug: c.parent for c in self.tax.leaf_categories()}
+            if (
+                seen != decl
+                and parents.get(seen) != parents.get(decl)
+                and title_scores[seen] >= 2
+                and title_scores.get(decl, 0) == 0
+            ):
+                res.flags["category_mismatch"] = {"declared": decl, "detected": seen}
+                res.evidence.append(
+                    f"Categoria dichiarata '{decl}' ma il titolo indica '{seen}': chi cerca in quella "
+                    "categoria non lo vede (possibile occasione)."
+                )
         best = max(scores, key=lambda s: scores[s])
         total = sum(scores.values())
         share = scores[best] / total if total else 0
@@ -513,6 +594,13 @@ class IdentificationEngine:
         ):
             res.suspicious_terms.append(f"'tipo {res.brand_name}'")
         res.defect_terms = sorted({label for p, label in self._defects if p.search(text)})
+        if m := CLAIMED_PRICE.search(desc):
+            try:
+                value = float(m.group(1).replace(".", "").replace(",", "."))
+            except ValueError:
+                value = 0
+            if 10 <= value <= 20000:
+                res.flags["claimed_original_price"] = value
         concerns = list(vision.authenticity_concerns) if vision else []
         if res.suspicious_terms or concerns:
             res.authenticity = Attribute(
