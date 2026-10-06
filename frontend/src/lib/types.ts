@@ -807,6 +807,115 @@ export interface AcquisitionStatus {
   recent_failures: AcquisitionFailure[];
 }
 
+export interface Snapshot {
+  observed_at: string;
+  acquisition_mode: AcquisitionMode;
+  capture_level: CaptureLevel | null;
+  status: ListingStatus | null;
+  price: number | null;
+  favourite_count: number | null;
+  view_count: number | null;
+  note: string | null;
+}
+
+export interface Attempt {
+  started_at: string;
+  mode: AcquisitionMode;
+  action: string;
+  outcome: string;
+  http_status: number | null;
+  message: string | null;
+  duration_ms: number | null;
+}
+
+export interface ItemImage {
+  position: number;
+  url: string;
+  /** Internal copy taken at capture time; null until archived (or when archiving is not possible). */
+  local_url: string | null;
+  archive_status: "ok" | "failed" | "skipped" | null;
+}
+
+export interface Tracking {
+  tracked: boolean;
+  tracked_at: string | null;
+  last_checked_at: string | null;
+  next_check_at: string | null;
+  check_failures: number;
+  status: ListingStatus;
+  status_changed_at: string | null;
+  sold_at: string | null;
+  sold_detected_at: string | null;
+  last_active_at: string | null;
+  last_active_price: number | null;
+  days_to_sell: number | null;
+  removed_at: string | null;
+  refresh_modes: AcquisitionMode[];
+}
+
+export interface AnalysisSummary {
+  opportunity_id: Uuid;
+  analyzed_at: string;
+  algorithm_version: string;
+  acquisition_mode: AcquisitionMode | null;
+  analysis_depth: "quick" | "full";
+  data_quality: DataQuality;
+  insufficient_reason: string | null;
+  is_active: boolean;
+  flip_score: number | null;
+  confidence_score: number;
+  risk_score: number;
+  risk_level: RiskLevel;
+  verdict: "BUY" | "CONSIDER" | "SKIP" | null;
+  recommended_action: Action;
+  headline: string | null;
+  market: Partial<MarketComparison> & {
+    comparables_found: number;
+    comparables_sold: number;
+    fair_market_value: number | null;
+    min: number | null;
+    p25: number | null;
+    median: number | null;
+    p75: number | null;
+    notes: string[];
+  };
+  velocity: Partial<TimeOnline> & { estimated_days: number | null; sell_through_rate: number | null };
+  economics: {
+    listing_price: number | null;
+    total_acquisition_cost: number | null;
+    resale_low: number | null;
+    resale_expected: number | null;
+    resale_high: number | null;
+    expected_net_revenue: number | null;
+    net_margin: number | null;
+    roi: number | null;
+    net_margin_low: number | null;
+    net_margin_high: number | null;
+    max_buy_price: number | null;
+  };
+  risk_signals: RiskSignal[];
+  reasons: Reason[];
+  listing_status: ListingStatus;
+}
+
+export interface ItemDetail {
+  item: Item;
+  description: string;
+  category: string | null;
+  color: string | null;
+  material: string | null;
+  view_count: number;
+  shipping_fee: number | null;
+  buyer_protection_fee: number | null;
+  published_at: string | null;
+  seller: { rating: number | null; review_count: number } | null;
+  images: ItemImage[];
+  tracking: Tracking;
+  snapshots: Snapshot[];
+  attempts: Attempt[];
+  analysis: AnalysisSummary | null;
+}
+
 export interface BatchImportInput {
   items: ManualListingInput[];
   source: "vinted_search" | "manual";

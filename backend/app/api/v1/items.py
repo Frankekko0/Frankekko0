@@ -15,6 +15,7 @@ from app.core.errors import NotFoundError
 from app.core.rate_limit import RateLimit
 from app.db.models import AcquisitionAttempt, Favorite, Listing, ListingSnapshot, Opportunity
 from app.domain.enums import FavoriteState
+from app.media.archive import schedule_archive
 from app.schemas.common import Page
 from app.schemas.items import (
     AttemptOut,
@@ -220,12 +221,11 @@ async def item_detail(ref: str, user: CurrentUser, db: DB) -> ItemDetailOut:
 
 
 def image_out(img: Any) -> dict[str, Any]:
-    local = getattr(img, "local_path", None)
     return {
         "position": img.position,
         "url": img.url,
-        "local_url": f"/api/v1/media/{img.id}" if local else None,
-        "archive_status": getattr(img, "archive_status", None),
+        "local_url": f"/api/v1/media/{img.id}" if img.local_path else None,
+        "archive_status": img.archive_status,
     }
 
 
@@ -241,6 +241,8 @@ async def refresh_now(ref: str, user: CurrentUser, db: DB) -> dict[str, Any]:
     listing = await _listing(db, ref)
     result = await refresh_listing(db, listing)
     await db.commit()
+    if result.outcome == "updated":
+        await schedule_archive([listing.id])
     if result.outcome in ("updated", "not_found"):
         await cache.bump(NS_FEED)
     return result.as_dict()
@@ -283,6 +285,7 @@ async def track(ref: str, user: CurrentUser, db: DB) -> dict[str, Any]:
         )
     await db.commit()
     await cache.bump(NS_FEED)
+    await schedule_archive([listing.id])
     return {"listing_id": str(listing.id), "tracked": True, "next_check_at": next_check}
 
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Bookmark, BookmarkCheck, Eye, EyeOff, ExternalLink, Flame, Heart, ShoppingBag, TrendingDown } from "lucide-react";
+import { ArrowLeft, Bookmark, BookmarkCheck, Eye, EyeOff, ExternalLink, Flame, Heart, History, ShoppingBag, TrendingDown } from "lucide-react";
 import Link from "next/link";
 import { use, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
@@ -177,6 +177,11 @@ function Summary({ d }: { d: OpportunityDetail }) {
           <EyeOff /> {state === "ignored" ? "Ignored" : "Ignore"}
         </Button>
       </div>
+      <Button asChild variant="ghost" size="sm" className="mt-2 w-full">
+        <Link href={`/items/${c.listing_id}`}>
+          <History /> Tracking, photos & history
+        </Link>
+      </Button>
       {!c.is_active && <p className="mt-3 rounded-lg bg-warning-soft px-3 py-2 text-[13px] text-warning">This listing is no longer available ({c.listing_status}).</p>}
     </Card>
   );

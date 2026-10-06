@@ -19,8 +19,9 @@ Data migration (no listing, price or analysis is lost):
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision: str = "0002"
 down_revision: str | None = "0001"
@@ -127,13 +128,15 @@ def upgrade() -> None:
     )
     # One provider for real Vinted items, whatever the acquisition mode.
     op.execute(
-        f"""
+        sa.text(
+            """
         UPDATE listings
            SET provider = 'vinted'
          WHERE provider = 'manual'
            AND external_id ~ '^[0-9]+$'
-           AND url ~* '{VINTED_ITEM_URL}'
+           AND url ~* :pattern
         """
+        ).bindparams(pattern=VINTED_ITEM_URL)
     )
     op.execute(
         """

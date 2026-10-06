@@ -444,6 +444,14 @@ async def refresh_listings(ctx: dict[str, Any]) -> dict[str, int]:
     return stats
 
 
+async def archive_images(ctx: dict[str, Any], listing_ids: list[str]) -> dict[str, int]:
+    """Local copies of the photos of captured listings (kept after a sale or removal)."""
+    from app.media.archive import archive_listing_images
+
+    async with session_scope() as s:
+        return await archive_listing_images(s, [uuid.UUID(i) for i in listing_ids])
+
+
 async def refresh_tracked_public(ctx: dict[str, Any]) -> dict[str, Any] | None:
     """Opt-in server-side refresh: one overdue tracked Vinted listing per run (the fetcher itself
     enforces the minimum interval, the daily cap and the circuit breaker)."""

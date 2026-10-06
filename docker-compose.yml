@@ -16,6 +16,8 @@ x-backend-env: &backend-env
   REDIS_URL: redis://redis:6379/0
   PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}
   CORS_ORIGINS: ${PUBLIC_APP_URL:-http://localhost:3000}
+  # Local copies of listing photos (internal use only), on a persistent volume.
+  MEDIA_DIR: /data/media
 
 services:
   postgres:
@@ -57,6 +59,8 @@ services:
     ports:
       # Bound to localhost: the browser reaches the API through the frontend's /api proxy.
       - "127.0.0.1:8000:8000"
+    volumes:
+      - media:/data/media
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,6 +76,8 @@ services:
         required: false
     environment:
       <<: *backend-env
+    volumes:
+      - media:/data/media
     healthcheck:
       disable: true
     depends_on:
@@ -93,3 +99,4 @@ services:
 volumes:
   pgdata:
   redisdata:
+  media:

@@ -149,6 +149,16 @@ class ListingImage(Base):
     phash: Mapped[str | None] = mapped_column(String(16), index=True)
     width: Mapped[int | None] = mapped_column(Integer)
     height: Mapped[int | None] = mapped_column(Integer)
+    # Internal copy taken at capture time (the original link can disappear after a sale).
+    # Internal use only: served to signed-in users, never republished.
+    local_path: Mapped[str | None] = mapped_column(String(200))
+    sha256: Mapped[str | None] = mapped_column(String(64))
+    content_type: Mapped[str | None] = mapped_column(String(40))
+    byte_size: Mapped[int | None] = mapped_column(Integer)
+    archive_status: Mapped[str | None] = mapped_column(String(16))  # ok | failed | skipped
+    archive_error: Mapped[str | None] = mapped_column(String(200))
+    archive_attempts: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")
+    archived_at: Mapped[datetime | None] = mapped_column()
 
     listing: Mapped[Listing] = relationship(back_populates="images")
 

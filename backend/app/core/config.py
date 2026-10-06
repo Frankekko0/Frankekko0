@@ -74,6 +74,15 @@ class Settings(BaseSettings):
     lifecycle_stale_hours: int = 6
     algorithm_version: str = "2026.10-2"
 
+    # Local copies of listing photos (internal use only). Downloaded once from the allowed image
+    # hosts (Vinted's CDN), https only, public addresses only, size-limited.
+    image_archive_enabled: bool = True
+    media_dir: str = "var/media"
+    image_archive_hosts: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["vinted.net", "vinted.com"]
+    )
+    image_archive_max_bytes: int = Field(default=10 * 1024 * 1024, ge=100_000, le=50 * 1024 * 1024)
+
     # Vinted selectors/labels/patterns (shared with the extension). Unset: the bundled file.
     # Point it to a mounted file to update the parser without rebuilding or republishing.
     parser_config_path: str | None = None
@@ -139,7 +148,7 @@ class Settings(BaseSettings):
     # never-logged password is generated, so the account is reachable only via demo sign-in.
     demo_user_password: SecretStr | None = None
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins", "image_archive_hosts", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
         if isinstance(value, str):

@@ -17,6 +17,7 @@ import type {
   ImportResult,
   Insights,
   Item,
+  ItemDetail,
   ItemFilters,
   LinkImportResult,
   ManualListingInput,
@@ -363,14 +364,22 @@ export function useItems(filters: ItemFilters) {
   });
 }
 
+export function useItem(ref: string) {
+  return useQuery({
+    queryKey: ["item", ref],
+    queryFn: ({ signal }) => api<ItemDetail>(`/items/${encodeURIComponent(ref)}`, { signal }),
+    retry: (count, err) => (err as { status?: number }).status !== 404 && count < 2,
+  });
+}
+
 export function useTrackItem() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, track }: { id: string; track: boolean }) =>
       api<{ tracked: boolean }>(`/items/${id}/track`, { method: track ? "POST" : "DELETE" }),
-    onSuccess: (r, v) => {
+    onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ["items"] });
-      qc.invalidateQueries({ queryKey: ["item", v.id] });
+      qc.invalidateQueries({ queryKey: ["item"] });
       qc.invalidateQueries({ queryKey: ["opportunities"] });
       toast.success(r.tracked ? "Tracking on: FlipFinder will check its status" : "Tracking off: history kept");
     },
@@ -417,8 +426,8 @@ export function useRefreshItem() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api<RefreshResult>(`/items/${id}/refresh`, { method: "POST" }),
-    onSuccess: (_r, id) => {
-      qc.invalidateQueries({ queryKey: ["item", id] });
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["item"] });
       qc.invalidateQueries({ queryKey: ["items"] });
     },
   });

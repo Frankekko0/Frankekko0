@@ -238,7 +238,9 @@ export default function ItemsPage() {
                       <div className="flex items-center gap-3">
                         <ListingImage src={it.image_url} alt={it.title} className="size-11 shrink-0 rounded-lg" />
                         <div className="min-w-0">
-                          <p className="max-w-[300px] truncate font-medium text-fg">{it.title}</p>
+                          <Link href={`/items/${it.id}`} className="block max-w-[300px] truncate font-medium text-fg hover:underline">
+                            {it.title}
+                          </Link>
                           <p className="text-xs text-fg-3">
                             {[it.brand, it.size, it.vinted_id ? `#${it.vinted_id}` : null].filter(Boolean).join(" · ") || "—"}
                           </p>

@@ -43,6 +43,7 @@ def _functions() -> list[Any]:
         func(tasks.recompute_learning, keep_result=0, max_tries=2, timeout=300),
         func(tasks.prune, keep_result=0, max_tries=1, timeout=300),
         func(tasks.refresh_tracked_public, keep_result=0, max_tries=1, timeout=90),
+        func(tasks.archive_images, keep_result=0, max_tries=2, timeout=600),
         func(tasks.poll_email, keep_result=0, max_tries=1, timeout=300),
     ]
 

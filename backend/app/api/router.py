@@ -7,6 +7,7 @@ from app.api.v1 import (
     demo,
     items,
     listings,
+    media,
     monitoring,
     opportunities,
     portfolio,
@@ -20,5 +21,15 @@ api_router.include_router(system.router)
 api_router.include_router(demo.router)
 api_router.include_router(auth.router)
 _limited = [Depends(RateLimit("api"))]
-for module in (opportunities, listings, items, acquisition, monitoring, portfolio, settings, analytics):
+for module in (
+    opportunities,
+    listings,
+    items,
+    acquisition,
+    media,
+    monitoring,
+    portfolio,
+    settings,
+    analytics,
+):
     api_router.include_router(module.router, dependencies=_limited)
