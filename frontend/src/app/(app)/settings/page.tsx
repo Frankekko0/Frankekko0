@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState, type ReactNode, type CSSProperties } from "react";
 import { toast } from "sonner";
 import { DataSourcesCard } from "@/components/settings/data-sources";
+import { ExtensionKeysCard } from "@/components/settings/extension-keys";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/feedback";
@@ -445,6 +446,7 @@ export default function SettingsPage() {
       </div>
       {prefs.data ? <PreferencesForm initial={prefs.data} /> : <Skeleton className="h-96 rounded-2xl" />}
       {notif.data ? <NotificationsForm initial={notif.data} /> : <Skeleton className="h-96 rounded-2xl" />}
+      <ExtensionKeysCard />
       <DataSourcesCard />
       <Block icon={<LogOut />} title="Account">
         <div className="flex flex-wrap items-center justify-between gap-3">

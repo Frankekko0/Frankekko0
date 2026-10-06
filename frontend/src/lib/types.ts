@@ -967,3 +967,17 @@ export interface QuickAnalysis {
   ai_analysis: { verdict: "BUY" | "CONSIDER" | "SKIP"; summary: string };
   comparables_used: number;
 }
+
+export interface ExtensionKey {
+  id: Uuid;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface ExtensionKeyCreated extends ExtensionKey {
+  /** Shown once: only its hash is stored. */
+  key: string;
+}

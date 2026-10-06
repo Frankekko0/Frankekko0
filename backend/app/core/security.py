@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import secrets
 import uuid
@@ -74,3 +75,16 @@ def csrf_tokens_match(cookie_value: str | None, header_value: str | None) -> boo
     if not cookie_value or not header_value:
         return False
     return hmac.compare_digest(cookie_value, header_value)
+
+
+API_KEY_PREFIX = "ff_ext_"
+
+
+def new_api_key() -> str:
+    """A fresh extension key: ``ff_ext_`` + 43 url-safe characters (256 bits)."""
+    return API_KEY_PREFIX + secrets.token_urlsafe(32)
+
+
+def hash_api_key(key: str) -> str:
+    """Keys are random and long, so a plain SHA-256 is enough (no password stretching needed)."""
+    return hashlib.sha256(key.encode()).hexdigest()

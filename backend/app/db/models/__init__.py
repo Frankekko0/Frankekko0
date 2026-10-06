@@ -9,13 +9,14 @@ from app.db.models.opportunity import Opportunity, OpportunityScore
 from app.db.models.portfolio import Favorite, InventoryItem, Purchase, Sale, UserAffinity
 from app.db.models.seller import Seller
 from app.db.models.system import AnalysisJob, SystemState
-from app.db.models.user import NotificationSettings, PushSubscription, User, UserPreferences
+from app.db.models.user import ApiKey, NotificationSettings, PushSubscription, User, UserPreferences
 
 __all__ = [
     "AcquisitionAttempt",
     "Alert",
     "AlertDelivery",
     "AnalysisJob",
+    "ApiKey",
     "Brand",
     "Category",
     "Favorite",

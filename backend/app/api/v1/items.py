@@ -7,14 +7,13 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from app.api.deps import DB, CurrentUser
 from app.core.cache import NS_FEED, cache
 from app.core.errors import NotFoundError
 from app.core.rate_limit import RateLimit
-from app.db.models import AcquisitionAttempt, Favorite, Listing, ListingSnapshot, Opportunity
-from app.domain.enums import FavoriteState
+from app.db.models import AcquisitionAttempt, Listing, ListingSnapshot, Opportunity
 from app.media.archive import schedule_archive
 from app.schemas.common import Page
 from app.schemas.items import (
@@ -25,7 +24,7 @@ from app.schemas.items import (
     SnapshotOut,
     TrackingOut,
 )
-from app.tracking.policy import schedule
+from app.tracking.actions import set_tracked
 from app.tracking.queries import ItemFilters, ItemQueries, build_query, export_csv, row_dict
 from app.tracking.summary import analysis_summary
 
@@ -252,37 +251,7 @@ async def refresh_now(ref: str, user: CurrentUser, db: DB) -> dict[str, Any]:
 async def track(ref: str, user: CurrentUser, db: DB) -> dict[str, Any]:
     """Track a listing: periodic status checks (adaptive) and a place in the user's watching list."""
     listing = await _listing(db, ref)
-    now = datetime.now(UTC)
-    tracked_at = listing.tracked_at or now
-    next_check = schedule(
-        status=listing.status,
-        tracked_at=tracked_at,
-        acquisition_mode=listing.acquisition_mode,
-        now=now,
-        published_at=listing.published_at,
-        favourite_count=listing.favourite_count,
-        unchanged_checks=listing.unchanged_checks,
-        check_failures=listing.check_failures,
-    )
-    await db.execute(
-        update(Listing)
-        .where(Listing.id == listing.id)
-        .values(tracked_at=tracked_at, next_check_at=listing.next_check_at or next_check)
-    )
-    fav = (
-        await db.execute(
-            select(Favorite).where(Favorite.user_id == user.id, Favorite.listing_id == listing.id)
-        )
-    ).scalar_one_or_none()
-    if fav is None:
-        opp_id = (
-            await db.execute(select(Opportunity.id).where(Opportunity.listing_id == listing.id))
-        ).scalar_one_or_none()
-        db.add(
-            Favorite(
-                user_id=user.id, listing_id=listing.id, opportunity_id=opp_id, state=FavoriteState.WATCHING
-            )
-        )
+    next_check = await set_tracked(db, user.id, listing, True)
     await db.commit()
     await cache.bump(NS_FEED)
     await schedule_archive([listing.id])
@@ -293,19 +262,7 @@ async def track(ref: str, user: CurrentUser, db: DB) -> dict[str, Any]:
 async def untrack(ref: str, user: CurrentUser, db: DB) -> dict[str, Any]:
     """Stop periodic checks. The listing, its history and analyses stay in the archive."""
     listing = await _listing(db, ref)
-    keep_schedule = listing.acquisition_mode == "provider_scan"
-    await db.execute(
-        update(Listing)
-        .where(Listing.id == listing.id)
-        .values(tracked_at=None, next_check_at=listing.next_check_at if keep_schedule else None)
-    )
-    fav = (
-        await db.execute(
-            select(Favorite).where(Favorite.user_id == user.id, Favorite.listing_id == listing.id)
-        )
-    ).scalar_one_or_none()
-    if fav is not None and fav.state == FavoriteState.WATCHING:
-        await db.delete(fav)
+    await set_tracked(db, user.id, listing, False)
     await db.commit()
     await cache.bump(NS_FEED)
     return {"listing_id": str(listing.id), "tracked": False}

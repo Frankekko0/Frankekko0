@@ -4,6 +4,8 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { toast } from "sonner";
 import { api, errorMessage } from "./api";
 import type {
+  ExtensionKey,
+  ExtensionKeyCreated,
   AcquisitionStatus,
   AiAnalysis,
   AlertItem,
@@ -449,5 +451,25 @@ export function useBatchImport() {
 export function useQuickAnalysis() {
   return useMutation({
     mutationFn: (body: ManualListingInput) => api<QuickAnalysis>("/analyze", { method: "POST", body }),
+  });
+}
+
+export function useExtensionKeys() {
+  return useQuery({ queryKey: ["extension-keys"], queryFn: () => api<ExtensionKey[]>("/extension/keys") });
+}
+
+export function useCreateExtensionKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => api<ExtensionKeyCreated>("/extension/keys", { method: "POST", body: { name } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["extension-keys"] }),
+  });
+}
+
+export function useRevokeExtensionKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api<ExtensionKey>(`/extension/keys/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["extension-keys"] }),
   });
 }

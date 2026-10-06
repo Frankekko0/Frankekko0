@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FlipFinder for Vinted · Opzioni</title>
+    <link rel="stylesheet" href="ui.css" />
+    <style>
+      main { max-width: 680px; margin: 0 auto; padding: 28px 16px 48px; }
+      header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+      .pair { display: grid; gap: 10px; }
+      .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 4px; }
+      #errors li { padding: 6px 0; border-top: 1px solid var(--line); font-size: 12px; }
+      #errors li:first-child { border-top: 0; }
+      .saved { font-size: 12px; color: var(--success); opacity: 0; transition: opacity 200ms ease; }
+      .saved.on { opacity: 1; }
+      .facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 13px; }
+      .facts dt { color: var(--text-3); }
+      .facts dd { margin: 0; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg></span>
+        <div class="grow">
+          <h1>FlipFinder for Vinted</h1>
+          <p class="muted" id="version"></p>
+        </div>
+        <span class="saved" id="saved" role="status">Salvato</span>
+      </header>
+
+      <section class="card" aria-labelledby="h-pair">
+        <h2 id="h-pair">Collegamento a FlipFinder</h2>
+        <p class="muted">Crea una chiave in FlipFinder → Impostazioni → Browser extension e incollala qui. È una chiave di FlipFinder, revocabile: il tuo accesso a Vinted, i cookie e i token non vengono mai letti né inviati.</p>
+        <div class="pair">
+          <label class="field"><span>Indirizzo di FlipFinder</span><input id="appUrl" type="url" placeholder="http://localhost:3000" autocomplete="off" /></label>
+          <label class="field"><span>Chiave dell'estensione</span><input id="apiKey" type="password" placeholder="ff_ext_…" autocomplete="off" spellcheck="false" /></label>
+          <div class="actions">
+            <button class="btn primary" id="pair" type="button">Associa</button>
+            <button class="btn ghost" id="unpair" type="button" hidden>Disassocia</button>
+            <span class="status" id="pairStatus" role="status"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="h-features">
+        <h2 id="h-features">Funzioni</h2>
+        <p class="muted">L'estensione legge solo le pagine di Vinted che apri e scorri tu. Non naviga, non scorre e non apre annunci da sola; nessuna azione sul tuo account Vinted.</p>
+        <label class="switch"><input type="checkbox" data-opt="enabled" /><span><b>Attiva su Vinted</b><small>Spegnila per usare Vinted senza FlipFinder.</small></span></label>
+        <label class="switch"><input type="checkbox" data-opt="captureCards" /><span><b>Valuta le schede mentre scorri</b><small>Ricerche, cataloghi, armadi e preferiti: ogni scheda viene valutata quando entra a schermo.</small></span></label>
+        <label class="switch"><input type="checkbox" data-opt="captureItems" /><span><b>Analizza gli annunci che apri</b><small>Tutti i campi e tutte le foto, con analisi completa.</small></span></label>
+        <label class="switch"><input type="checkbox" data-opt="badges" /><span><b>Badge sulle schede</b><small>Score, margine netto e "già tracciato", con le azioni rapide.</small></span></label>
+      </section>
+
+      <section class="card" aria-labelledby="h-thresholds">
+        <h2 id="h-thresholds">Soglie</h2>
+        <p class="muted">Un articolo è "da guardare" (badge verde, avviso) quando supera entrambe.</p>
+        <div class="grid2">
+          <label class="field"><span>Score minimo (0–100)</span><input type="number" min="0" max="100" step="1" data-opt="minScore" /></label>
+          <label class="field"><span>Margine netto minimo (€)</span><input type="number" step="1" data-opt="minMargin" /></label>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="h-filters">
+        <h2 id="h-filters">Filtri predefiniti del pannello live</h2>
+        <p class="muted">Li puoi cambiare al volo nel pannello; questi sono quelli di partenza.</p>
+        <div class="grid2">
+          <label class="field"><span>Budget massimo, costo totale (€)</span><input type="number" min="1" step="1" data-opt="budget" placeholder="nessun limite" /></label>
+          <label class="field"><span>Taglie (separate da virgola)</span><input type="text" data-opt="sizes" placeholder="M, L, 42" /></label>
+        </div>
+        <label class="field" style="margin-top:10px"><span>Brand (separati da virgola)</span><input type="text" data-opt="brands" placeholder="Ralph Lauren, Carhartt" /></label>
+        <label class="switch"><input type="checkbox" data-opt="excludeFakeRisk" /><span><b>Escludi il rischio contraffazione</b><small>Nasconde gli articoli con rischio medio o alto. Nessun articolo viene dichiarato autentico.</small></span></label>
+      </section>
+
+      <section class="card" aria-labelledby="h-alerts">
+        <h2 id="h-alerts">Avvisi</h2>
+        <label class="switch"><input type="checkbox" data-opt="alertsVisual" /><span><b>Avviso visivo</b><small>Evidenzia la scheda e la segnala nel pannello.</small></span></label>
+        <label class="switch"><input type="checkbox" data-opt="alertsSound" /><span><b>Suono</b><small>Un breve segnale dal pannello live quando compare un articolo sopra le soglie.</small></span></label>
+      </section>
+
+      <section class="card" aria-labelledby="h-slow">
+        <h2 id="h-slow">Letture lente (facoltative, spente di default)</h2>
+        <p class="muted">Leggono altre pagine di Vinted senza cookie, una alla volta, solo mentre hai una scheda di Vinted aperta: al massimo una ogni 30–60 secondi e 20 all'ora. Al primo rifiuto di Vinted si fermano per 6 ore, senza tentativi di aggiramento. Le condizioni di Vinted vietano la raccolta automatica: attivale solo se lo accetti.</p>
+        <label class="switch"><input type="checkbox" data-opt="autoDeep" /><span><b>Analisi approfondita automatica dei migliori candidati</b><small>Al massimo 3 per ricerca, tra quelli sopra le soglie.</small></span></label>
+        <label class="field" style="max-width:240px"><span>Al massimo all'ora</span><input type="number" min="1" max="20" step="1" data-opt="autoDeepPerHour" /></label>
+        <label class="switch"><input type="checkbox" data-opt="slowRefresh" /><span><b>Aggiorna lo stato degli articoli tracciati</b><small>Venduto, riservato, rimosso: un controllo per volta, secondo il calendario adattivo di FlipFinder.</small></span></label>
+      </section>
+
+      <section class="card" aria-labelledby="h-state">
+        <h2 id="h-state">Stato</h2>
+        <dl class="facts" id="facts"></dl>
+        <div class="actions" style="margin-top:10px">
+          <button class="btn small" id="flush" type="button">Invia ora</button>
+          <button class="btn small ghost" id="clear" type="button">Svuota la coda</button>
+        </div>
+        <h2 style="margin-top:14px">Ultimi errori</h2>
+        <ul class="plain" id="errors"></ul>
+      </section>
+    </main>
+    <script src="core.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

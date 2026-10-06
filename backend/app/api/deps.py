@@ -4,15 +4,25 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated
 
 from fastapi import Depends, Request
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AuthenticationError, PermissionDeniedError
-from app.core.security import ACCESS_COOKIE, CSRF_COOKIE, CSRF_HEADER, csrf_tokens_match, decode_access_token
-from app.db.models import User, UserPreferences
+from app.core.security import (
+    ACCESS_COOKIE,
+    API_KEY_PREFIX,
+    CSRF_COOKIE,
+    CSRF_HEADER,
+    csrf_tokens_match,
+    decode_access_token,
+    hash_api_key,
+)
+from app.db.models import ApiKey, User, UserPreferences
 from app.db.session import get_db
 from app.opportunities.engine import EconomicTargets
 from app.profit.calculator import CostProfile
@@ -62,6 +72,34 @@ async def get_current_user(request: Request, db: DB) -> User:
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
+async def get_capture_user(request: Request, db: DB) -> User:
+    """The browser extension authenticates with its own revocable key (``Bearer ff_ext_…``);
+    the web app's session works too. Vinted cookies or tokens are never involved."""
+    token = _bearer(request)
+    if not token or not token.startswith(API_KEY_PREFIX):
+        return await get_current_user(request, db)
+    key = (
+        await db.execute(
+            select(ApiKey).where(ApiKey.key_hash == hash_api_key(token), ApiKey.revoked_at.is_(None))
+        )
+    ).scalar_one_or_none()
+    user = await db.get(User, key.user_id) if key else None
+    if key is None or user is None or not user.is_active:
+        raise AuthenticationError(
+            "Chiave dell'estensione non valida o revocata: generane una nuova in Impostazioni.",
+            code="invalid_extension_key",
+        )
+    now = datetime.now(UTC)
+    if key.last_used_at is None or now - key.last_used_at > timedelta(minutes=5):
+        await db.execute(update(ApiKey).where(ApiKey.id == key.id).values(last_used_at=now))
+        await db.commit()
+    request.state.user_id = str(user.id)
+    return user
+
+
+CaptureUser = Annotated[User, Depends(get_capture_user)]
+
+
 @dataclass(frozen=True)
 class UserEconomics:
     costs: CostProfile
@@ -83,4 +121,9 @@ async def get_user_economics(user: CurrentUser) -> UserEconomics:
     return economics_for(user.preferences)
 
 
+async def get_capture_economics(user: CaptureUser) -> UserEconomics:
+    return economics_for(user.preferences)
+
+
 Economics = Annotated[UserEconomics, Depends(get_user_economics)]
+CaptureEconomics = Annotated[UserEconomics, Depends(get_capture_economics)]

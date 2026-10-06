@@ -94,3 +94,22 @@ class PushSubscription(UUIDPk, Base):
     auth: Mapped[str] = mapped_column(String(255))
     user_agent: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
+
+
+class ApiKey(UUIDPk, Base):
+    """Revocable key that lets the browser extension send captures for one user.
+
+    Only a SHA-256 of the key is stored; the key itself is shown once, when it is created. It
+    is a FlipFinder credential: it opens the capture endpoints only (scope ``extension``).
+    """
+
+    __tablename__ = "api_keys"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    prefix: Mapped[str] = mapped_column(String(16))
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    scope: Mapped[str] = mapped_column(String(20), default="extension", server_default="extension")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column()
+    revoked_at: Mapped[datetime | None] = mapped_column()
