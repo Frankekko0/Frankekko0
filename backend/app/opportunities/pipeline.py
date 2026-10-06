@@ -434,12 +434,15 @@ class AnalysisPipeline:
             {"id": uuid.uuid4(), "created_at": now, **opportunity_values(listing, result, version, now)}
             for listing, result in ordered
         ]
-        stmt = pg_insert(Opportunity).values(rows)
+        # One single-row statement run with many parameter sets ("insertmanyvalues"): compiled
+        # once and cached, where a 200-row VALUES clause took ~0.5 s just to compile.
+        table = Opportunity.__table__
+        stmt = pg_insert(table)
         stmt = stmt.on_conflict_do_update(
             index_elements=["listing_id"],
             set_={k: stmt.excluded[k] for k in rows[0] if k not in ("id", "created_at", "listing_id")},
-        ).returning(Opportunity.id, Opportunity.listing_id)
-        opp_ids = {r.listing_id: r.id for r in (await self.session.execute(stmt)).all()}
+        ).returning(table.c.id, table.c.listing_id)
+        opp_ids = {r.listing_id: r.id for r in (await self.session.execute(stmt, rows)).all()}
 
         # Core (not ORM) executemany: no per-row ORM bookkeeping on the hot path.
         await self.session.execute(

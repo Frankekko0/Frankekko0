@@ -243,6 +243,11 @@ Primo avvio su database vuoto (10.800 annunci simulati, 5.937 da analizzare; mac
 I risultati delle analisi sono identici a prima (verificato confrontando punteggi, valore di
 mercato e comparabili su 400 annunci, e il riconoscimento prodotti su 15.120).
 
+Import in blocco dall'estensione (`POST /listings/import/batch`, 200 annunci nuovi):
+~2,1 s in totale (importazione 0,2 s, analisi 1,7 s, card 0,15 s). Il salvataggio usa un'unica
+istruzione SQL precompilata eseguita con molti parametri: prima la query a 200 righe richiedeva
+~0,5 s solo per essere compilata (salvataggio da 1,33 s a 0,51 s).
+
 Job schedulati (UTC):
 
 | Job | Quando | Cosa fa |
@@ -295,6 +300,11 @@ Adapter inclusi:
 - **Import manuale** — pagina **Analyze a listing** (`/analyze`) o `POST /api/v1/listings/import`:
   incolli link, titolo, prezzo e (facoltativi) brand, taglia, condizioni, descrizione, foto e dati
   del venditore. *Quick check* (`POST /api/v1/analyze`) calcola tutto senza salvare.
+- **Import in blocco** — `POST /api/v1/listings/import/batch` (fino a 200 annunci, stesso formato):
+  li importa, li analizza tutti insieme con i costi dell'utente e restituisce le card ordinate per
+  opportunità (Flip Score personale, poi profitto). Gli annunci già noti vengono aggiornati, con
+  storico prezzi: reimportare la stessa ricerca più tardi mostra i ribassi. Lo usa la pagina
+  **Import a Vinted search** (`/import`).
 
 ### Vinted
 
@@ -303,12 +313,24 @@ Integrations*) richiede un account Pro approvato e non include la ricerca nel ca
 Scansionare Vinted in automatico vorrebbe dire usare la sua API interna aggirando le protezioni
 anti-bot, cosa che FlipFinder per scelta non fa. Le strade legittime sono due:
 
-- **Estensione browser "FlipFinder for Vinted"** ([`extension/`](extension/README.md)): mentre
-  navighi su Vinted, un clic su *Analizza con FlipFinder* apre l'analisi dell'annuncio che stai
-  guardando. L'estensione legge solo la pagina aperta (nessuna richiesta a Vinted, nessuna
-  automazione); i dati passano nel frammento dell'URL (`/analyze#import=…`) e FlipFinder li
-  valida, compila il modulo e avvia subito il *Quick check*. Funziona anche se non hai ancora
-  fatto l'accesso: dopo il login torni direttamente all'analisi.
+- **Estensione browser "FlipFinder for Vinted"** ([`extension/`](extension/README.md)):
+  - **su un annuncio**, *Analizza con FlipFinder* apre l'analisi completa di quell'annuncio
+    (`/analyze#import=…`): FlipFinder valida i dati, compila il modulo e avvia il *Quick check*;
+  - **su una ricerca o un catalogo**, *Analizza N articoli* porta in FlipFinder **tutti gli
+    annunci caricati nella pagina** (fino a 200), li analizza e li mostra in classifica
+    (`/import#batch=…`, JSON compresso: 48 annunci ≈ 2 KB). Vuoi più articoli? Scorri i risultati
+    o passa alla pagina successiva e premi di nuovo.
+
+  L'estensione legge solo la pagina che hai aperto: nessuna richiesta a Vinted, niente
+  navigazione o scorrimento automatico, nessun acquisto o messaggio. I dati viaggiano nel
+  frammento dell'URL, che il browser non invia a nessun server, e FlipFinder li ricontrolla come
+  input non fidato. Funziona anche se non hai ancora fatto l'accesso: dopo il login torni
+  direttamente all'analisi.
+
+  Perché non "tutta Vinted"? Non esiste un modo autorizzato per scaricarne l'intero catalogo:
+  servirebbe interrogare l'API interna aggirando le protezioni anti-bot. L'importazione per
+  pagina dà lo stesso risultato pratico (le migliori occasioni della ricerca che ti interessa)
+  restando dentro le regole.
 - **Feed autorizzato**: se ottieni un accesso ufficiale o un feed da un partner autorizzato,
   basta esporlo nel formato sopra e impostare `MARKETPLACE_PROVIDER=feed`.
 
@@ -451,7 +473,7 @@ cd frontend
 npm run typecheck && npm run lint && npm test && npm run build
 ```
 
-Estensione browser (parsing degli annunci Vinted, nessuna dipendenza):
+Estensione browser (parsing di annunci e pagine di ricerca Vinted, nessuna dipendenza):
 
 ```bash
 node --test "extension/tests/*.test.mjs"

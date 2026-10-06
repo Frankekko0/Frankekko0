@@ -178,6 +178,10 @@
 @keyframes grow-x {
   from { transform: scaleX(0); }
 }
+@keyframes indeterminate {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
 @keyframes grow-y {
   from { transform: scaleY(0); }
 }
@@ -250,6 +254,20 @@
     background: linear-gradient(90deg, var(--surface-2) 0px, var(--surface-3) 120px, var(--surface-2) 240px);
     background-size: 800px 100%;
     animation: var(--animate-shimmer);
+  }
+  /* Work of unknown length (e.g. analysing an import): a soft bar sweeping across a track. */
+  .progress-indeterminate {
+    position: relative;
+    overflow: hidden;
+  }
+  .progress-indeterminate::after {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 40%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    animation: indeterminate 1.4s var(--ease-in-out, ease-in-out) infinite;
   }
   .scrollbar-none {
     scrollbar-width: none;
@@ -390,6 +408,11 @@
   :root {
     --motion-y: 0px;
     --motion-scale: 1;
+  }
+  .progress-indeterminate::after {
+    width: 100%;
+    opacity: 0.35;
+    animation: none;
   }
   .dialog-anim[data-state="open"],
   .drawer-anim[data-state="open"] {

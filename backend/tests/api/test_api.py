@@ -238,6 +238,61 @@ async def test_listing_import_and_adhoc_analysis(auth_client: httpx.AsyncClient,
     assert body["flip_score"] < 50
 
 
+async def test_batch_import_of_a_search_page_ranks_listings(
+    auth_client: httpx.AsyncClient, make_listing
+) -> None:
+    await seed_deal(make_listing)
+    base = {"brand": "Ralph Lauren", "size": "M", "condition": "Ottime condizioni"}
+    page = [
+        {
+            **base,
+            "url": "https://www.vinted.it/items/111-polo",
+            "title": "Polo Ralph Lauren Custom Slim Fit blu",
+            "price": 30,
+        },
+        {
+            **base,
+            "url": "https://www.vinted.it/items/222-polo",
+            "title": "Polo Ralph Lauren Custom Slim Fit rossa",
+            "price": 9,
+        },
+        {
+            **base,
+            "url": "https://www.vinted.it/items/333-polo",
+            "title": "Polo Ralph Lauren Custom Slim Fit verde",
+            "price": 16,
+        },
+        # The same item twice on one page (promoted + organic) counts once.
+        {
+            **base,
+            "url": "https://www.vinted.it/items/222-polo",
+            "title": "Polo Ralph Lauren Custom Slim Fit rossa",
+            "price": 9,
+        },
+    ]
+    r = await auth_client.post(
+        f"{API}/listings/import/batch", json={"items": page, "source": "vinted_search"}
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert (body["received"], body["unique"], body["imported"], body["analyzed"]) == (4, 3, 3, 3)
+    assert [c["listing_price"] for c in body["items"]] == [9, 16, 30]
+    scores = [c["personal_flip_score"] or c["flip_score"] for c in body["items"]]
+    assert scores == sorted(scores, reverse=True)
+
+    # Re-importing the same search later updates known listings and spots price drops.
+    page[0]["price"] = 20
+    again = await auth_client.post(f"{API}/listings/import/batch", json={"items": page[:3]})
+    assert again.status_code == 201, again.text
+    assert (again.json()["imported"], again.json()["updated"], again.json()["price_drops"]) == (0, 3, 1)
+    feed = await auth_client.get(f"{API}/opportunities", params={"page_size": 50})
+    assert {"111", "222", "333"} <= {c["url"].split("/items/")[1].split("-")[0] for c in feed.json()["items"]}
+
+    too_many = await auth_client.post(f"{API}/listings/import/batch", json={"items": [page[0]] * 201})
+    assert too_many.status_code == 422
+    assert "Traceback" not in too_many.text
+
+
 # --------------------------------------------------------------------------- portfolio
 async def test_purchase_sale_and_portfolio(auth_client: httpx.AsyncClient) -> None:
     p = await auth_client.post(

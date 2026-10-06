@@ -1,6 +1,9 @@
 /* FlipFinder for Vinted - opens the analysis tab requested by the content script or popup. */
 "use strict";
 
+// Only FlipFinder's two import pages can be opened, whatever a page script might send.
+const OPENABLE = new Set(["/analyze", "/import"]);
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || message.type !== "flipfinder:open") return false;
   let url;
@@ -10,7 +13,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: false });
     return false;
   }
-  if (!/^https?:$/.test(url.protocol) || url.pathname !== "/analyze") {
+  if (!/^https?:$/.test(url.protocol) || !OPENABLE.has(url.pathname)) {
     sendResponse({ ok: false });
     return false;
   }

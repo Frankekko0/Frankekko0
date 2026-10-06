@@ -1,9 +1,11 @@
 /*
  * FlipFinder for Vinted - content script.
  *
- * Runs only on Vinted pages the user opens. It reads what is already rendered on the item
- * page (no requests to Vinted, no automation) and, when the user clicks, opens FlipFinder's
- * analysis with the data in the URL fragment (never sent to any server by the browser).
+ * Runs only on Vinted pages the user opens. It reads what is already rendered (no requests
+ * to Vinted, no scrolling or clicking on the user's behalf) and, when the user clicks, opens
+ * FlipFinder with the data in the URL fragment (never sent to any server by the browser):
+ *  - on an item page: the full analysis of that listing (/analyze);
+ *  - on a search/catalog page: every listing loaded on the page, analysed and ranked (/import).
  */
 (() => {
   "use strict";
@@ -80,6 +82,73 @@
     };
   }
 
+  // ------------------------------------------------------------------ search-results pages
+  const ITEM_LINK = 'a[href*="/items/"]';
+
+  function linkId(a) {
+    return P.itemId(a.getAttribute("href") || "");
+  }
+
+  /** Distinct listings currently rendered on the page (cheap: used to label the button). */
+  function countCards() {
+    const ids = new Set();
+    for (const a of document.querySelectorAll(ITEM_LINK)) {
+      const id = linkId(a);
+      if (id) ids.add(id);
+    }
+    return ids.size;
+  }
+
+  /** The largest ancestor of an item link that contains no other item: the result card. */
+  function cardRoot(link, id) {
+    let el = link;
+    for (let depth = 0; depth < 10; depth += 1) {
+      const parent = el.parentElement;
+      if (!parent || parent === document.body) break;
+      for (const a of parent.querySelectorAll(ITEM_LINK)) {
+        if (linkId(a) !== id) return el;
+      }
+      el = parent;
+    }
+    return el;
+  }
+
+  function collectCard(root, link) {
+    const img = root.querySelector("img");
+    const testids = {};
+    root.querySelectorAll("[data-testid]").forEach((el) => {
+      const suffix = /--([a-z-]+)$/.exec(el.getAttribute("data-testid") || "")?.[1];
+      if (suffix && !(suffix in testids)) testids[suffix] = text(el);
+    });
+    const texts = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode() && texts.length < 40) {
+      const t = (walker.currentNode.textContent || "").replace(/\s+/g, " ").trim();
+      if (t && t.length <= 200) texts.push(t);
+    }
+    const summaryLink = root.querySelector(`${ITEM_LINK}[title]`) || link;
+    return {
+      href: link.getAttribute("href") || "",
+      summary: summaryLink.getAttribute("title") || summaryLink.getAttribute("aria-label") || "",
+      alt: img?.getAttribute("alt") || "",
+      image: img?.currentSrc || img?.getAttribute("src") || "",
+      testids,
+      texts,
+    };
+  }
+
+  function collectCatalog() {
+    const cards = [];
+    const done = new Set();
+    for (const link of document.querySelectorAll(ITEM_LINK)) {
+      const id = linkId(link);
+      if (!id || done.has(id)) continue;
+      done.add(id);
+      cards.push(collectCard(cardRoot(link, id), link));
+    }
+    return cards;
+  }
+
   async function appUrl() {
     try {
       const stored = await chrome.storage.sync.get({ appUrl: DEFAULT_APP_URL });
@@ -89,11 +158,21 @@
     }
   }
 
+  async function prepareCatalog() {
+    const result = P.parseCatalog(collectCatalog(), location.href);
+    if (!result.total) {
+      return { error: "Nessun articolo leggibile qui. Apri una ricerca di Vinted o un annuncio e riprova." };
+    }
+    return {
+      url: await P.importUrl(await appUrl(), result.data),
+      count: result.data.items.length,
+      overLimit: result.overLimit,
+    };
+  }
+
   /** Returns { url } to open, or { error } with a message for the user. */
   async function prepare() {
-    if (!ITEM_PATH.test(location.pathname)) {
-      return { error: "Apri la pagina di un singolo articolo su Vinted." };
-    }
+    if (!ITEM_PATH.test(location.pathname)) return prepareCatalog();
     const result = P.parseListing(collect());
     if (result.staleItem && result.missing.length) {
       return { error: "La pagina non è ancora aggiornata: ricaricala (F5) e riprova." };
@@ -132,6 +211,8 @@
         }
         button:focus-visible { outline: 3px solid rgba(42, 120, 214, 0.6); outline-offset: 3px; }
         svg { width: 18px; height: 18px; flex: none; }
+        .label { font-variant-numeric: tabular-nums; }
+        button[aria-busy="true"] { cursor: progress; opacity: 0.8; }
         .msg { max-width: 280px; padding: 10px 12px; border-radius: 12px; background: #141415; color: #f5f5f3;
           font-weight: 400; font-size: 13px; line-height: 1.4; box-shadow: 0 10px 30px -12px rgba(0,0,0,.5); }
         .msg[hidden] { display: none; }
@@ -139,9 +220,9 @@
       </style>
       <div class="wrap">
         <div class="msg" role="status" hidden></div>
-        <button type="button" aria-label="Analizza questo annuncio con FlipFinder">
+        <button type="button">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>
-          Analizza con FlipFinder
+          <span class="label">Analizza con FlipFinder</span>
         </button>
       </div>`;
     const msg = shadow.querySelector(".msg");
@@ -152,16 +233,30 @@
       clearTimeout(timer);
       timer = setTimeout(() => (msg.hidden = true), 5000);
     };
-    shadow.querySelector("button").addEventListener("click", async () => {
-      const res = await prepare();
-      if (res.error) return say(res.error);
+    const button = shadow.querySelector("button");
+    button.addEventListener("click", async () => {
+      if (button.getAttribute("aria-busy") === "true") return;
+      button.setAttribute("aria-busy", "true");
       try {
+        const res = await prepare();
+        if (res.error) return say(res.error);
+        if (res.overLimit) say(`Analizzo i primi ${res.count} articoli (massimo ${P.MAX_BATCH} per volta).`);
         await chrome.runtime.sendMessage({ type: "flipfinder:open", url: res.url });
       } catch {
         say("Estensione aggiornata: ricarica la pagina di Vinted e riprova.");
+      } finally {
+        button.removeAttribute("aria-busy");
       }
     });
     document.documentElement.appendChild(host);
+  }
+
+  function setButtonLabel(label, aria) {
+    const shadow = host?.shadowRoot;
+    if (!shadow) return;
+    const span = shadow.querySelector(".label");
+    if (span.textContent !== label) span.textContent = label;
+    shadow.querySelector("button").setAttribute("aria-label", aria);
   }
 
   function unmountButton() {
@@ -169,13 +264,18 @@
     host = null;
   }
 
-  // Vinted navigates client-side: follow the path and show the button only on item pages.
-  let lastPath = "";
+  // Vinted navigates client-side and loads results as you browse: keep the button in step.
   function sync() {
-    if (location.pathname === lastPath) return;
-    lastPath = location.pathname;
-    if (ITEM_PATH.test(lastPath)) mountButton();
-    else unmountButton();
+    if (ITEM_PATH.test(location.pathname)) {
+      mountButton();
+      setButtonLabel("Analizza con FlipFinder", "Analizza questo annuncio con FlipFinder");
+      return;
+    }
+    const count = countCards();
+    if (count < 2) return unmountButton();
+    mountButton();
+    const n = Math.min(count, P.MAX_BATCH);
+    setButtonLabel(`Analizza ${n} articoli`, `Analizza con FlipFinder i ${n} articoli caricati in questa pagina`);
   }
   sync();
   setInterval(sync, 800);

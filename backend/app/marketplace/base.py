@@ -15,7 +15,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
@@ -135,6 +135,16 @@ class ManualListingInput(BaseModel):
     seller_review_count: int | None = Field(default=None, ge=0)
     country: str | None = Field(default=None, min_length=2, max_length=2)
     shipping_fee: Decimal | None = Field(default=None, ge=0, le=1000)
+
+
+MAX_BATCH_IMPORT = 200
+
+
+class BatchImportInput(BaseModel):
+    """Several listings the user is looking at (e.g. a marketplace search-results page)."""
+
+    items: list[ManualListingInput] = Field(min_length=1, max_length=MAX_BATCH_IMPORT)
+    source: Literal["vinted_search", "manual"] = "manual"
 
 
 class MarketplaceProvider(ABC):

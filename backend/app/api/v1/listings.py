@@ -9,7 +9,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -17,13 +17,20 @@ from app.ai.nl_search import NaturalLanguageParser
 from app.api.deps import DB, CurrentUser, Economics
 from app.core.cache import NS_FEED, cache
 from app.core.errors import InsufficientDataError, NotFoundError
+from app.core.rate_limit import RateLimit
 from app.core.serialization import jsonable
 from app.db.models import Brand, Category, Listing, ListingImage, Opportunity
 from app.identification.engine import ListingText
 from app.ingestion.catalog import load_catalog
 from app.ingestion.normalizer import normalize_condition, title_fingerprint
 from app.ingestion.service import IngestionService, get_engine, listing_columns
-from app.marketplace.base import ManualListingInput, ProviderImage, ProviderListing, ProviderSeller
+from app.marketplace.base import (
+    BatchImportInput,
+    ManualListingInput,
+    ProviderImage,
+    ProviderListing,
+    ProviderSeller,
+)
 from app.opportunities.engine import SubjectContext, run_analysis
 from app.opportunities.pipeline import AnalysisPipeline, profile_from_row
 from app.opportunities.queries import OpportunityQueries
@@ -156,7 +163,7 @@ async def get_listing(listing_id: uuid.UUID, user: CurrentUser, db: DB) -> dict[
     }
 
 
-def manual_to_provider(body: ManualListingInput) -> ProviderListing:
+def manual_to_provider(body: ManualListingInput, origin: str = "manual_import") -> ProviderListing:
     url = str(body.url)
     m = VINTED_ID.search(url)
     external_id = m.group(1) if m else title_fingerprint(url)[:24]
@@ -185,7 +192,7 @@ def manual_to_provider(body: ManualListingInput) -> ProviderListing:
         published_at=datetime.now(UTC),
         shipping_fee=body.shipping_fee,
         buyer_protection_fee=(Decimal("0.70") + body.price * Decimal("0.05")).quantize(Decimal("0.01")),
-        raw={"source": "manual_import"},
+        raw={"source": origin},
     )
 
 
@@ -206,6 +213,60 @@ async def import_listing(body: ManualListingInput, user: CurrentUser, db: DB) ->
         "flip_score": outcome.result.flip.score,
         "is_new": outcome.is_new,
     }
+
+
+class BatchImportOut(BaseModel):
+    received: int
+    unique: int
+    imported: int
+    updated: int
+    reposts: int
+    price_drops: int
+    analyzed: int
+    items: list[OpportunityCard]
+
+
+batch_limit = RateLimit("import-batch", per_minute=20)
+
+
+@router.post(
+    "/listings/import/batch",
+    response_model=BatchImportOut,
+    status_code=201,
+    dependencies=[Depends(batch_limit)],
+)
+async def import_batch(body: BatchImportInput, user: CurrentUser, econ: Economics, db: DB) -> BatchImportOut:
+    """Import up to 200 listings the user is looking at, analyse them all, return them ranked.
+
+    Listings already known are updated (price history included), so re-importing the same
+    search later surfaces price drops. Results use the user's own costs and targets.
+    """
+    origin = "vinted_search_import" if body.source == "vinted_search" else "manual_import"
+    # The same item can appear twice on a page (promoted + organic): keep its last occurrence.
+    by_id = {pl.external_id: pl for pl in (manual_to_provider(i, origin) for i in body.items)}
+    result = await IngestionService(db, "manual").ingest(list(by_id.values()))
+    ids = list(dict.fromkeys([*result.new_ids, *result.updated_ids]))
+    outcomes = await AnalysisPipeline(db).analyze_many(ids)
+    await db.commit()
+    await cache.bump(NS_FEED)
+    cards = await OpportunityQueries(db, user.id, econ).card_by_listing_ids([o.listing_id for o in outcomes])
+    cards.sort(
+        key=lambda c: (
+            c.personal_flip_score if c.personal_flip_score is not None else c.flip_score,
+            c.expected_profit or 0,
+        ),
+        reverse=True,
+    )
+    return BatchImportOut(
+        received=len(body.items),
+        unique=len(by_id),
+        imported=len(result.new_ids),
+        updated=len(result.updated_ids),
+        reposts=len(result.duplicates),
+        price_drops=sum(1 for pc in result.price_changes if pc.new_price < pc.old_price),
+        analyzed=len(outcomes),
+        items=cards,
+    )
 
 
 @router.post("/analyze/{listing_id}", response_model=dict[str, Any])

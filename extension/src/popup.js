@@ -35,16 +35,16 @@ $("save").addEventListener("click", async () => {
 });
 
 $("analyze").addEventListener("click", async () => {
-  setStatus("Leggo l'annuncio…");
+  setStatus("Leggo la pagina…");
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || tab.id === undefined) return setStatus("Nessuna scheda attiva.", true);
   let res;
   try {
     res = await chrome.tabs.sendMessage(tab.id, { type: "flipfinder:prepare" });
   } catch {
-    return setStatus("Apri un annuncio su Vinted (se è già aperto, ricarica la pagina).", true);
+    return setStatus("Apri un annuncio o una ricerca su Vinted (se è già aperta, ricarica la pagina).", true);
   }
-  if (!res || res.error) return setStatus(res ? res.error : "Annuncio non leggibile.", true);
+  if (!res || res.error) return setStatus(res ? res.error : "Pagina non leggibile.", true);
   await chrome.tabs.create({ url: res.url, index: tab.index + 1, openerTabId: tab.id });
   window.close();
 });

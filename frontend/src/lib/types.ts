@@ -608,6 +608,24 @@ export interface ManualListingInput {
   shipping_fee?: number;
 }
 
+export interface BatchImportInput {
+  items: ManualListingInput[];
+  source: "vinted_search" | "manual";
+}
+
+export interface BatchImportResult {
+  received: number;
+  unique: number;
+  imported: number;
+  updated: number;
+  /** Re-posts of listings FlipFinder already knew. */
+  reposts: number;
+  price_drops: number;
+  analyzed: number;
+  /** Best opportunity first, with your costs and targets. */
+  items: OpportunityCard[];
+}
+
 export interface ImportResult {
   listing_id: Uuid;
   opportunity_id: Uuid;

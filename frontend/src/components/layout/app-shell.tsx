@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, LogOut, Menu as MenuIcon, Monitor, Moon, ScanSearch, Search, Sun } from "lucide-react";
+import { Bell, Import, LogOut, Menu as MenuIcon, Monitor, Moon, ScanSearch, Search, Sun } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
@@ -80,6 +80,9 @@ function UserMenu() {
         <MenuSeparator />
         <MenuItem onSelect={() => router.push("/analyze")}>
           <ScanSearch /> Analyze a listing
+        </MenuItem>
+        <MenuItem onSelect={() => router.push("/import")}>
+          <Import /> Import a Vinted search
         </MenuItem>
         {NAV.filter((n) => !n.mobile).map((n) => (
           <MenuItem key={n.href} onSelect={() => router.push(n.href)} className="md:hidden">

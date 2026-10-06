@@ -47,15 +47,15 @@ export interface ImportedListing {
   missing: ("url" | "title" | "price")[];
 }
 
-const CONDITIONS = new Set(["new_with_tags", "new_without_tags", "very_good", "good", "satisfactory"]);
+export const CONDITIONS = new Set(["new_with_tags", "new_without_tags", "very_good", "good", "satisfactory"]);
 const MAX_PAYLOAD = 200_000;
 
-function str(value: unknown, max: number): string {
+export function str(value: unknown, max: number): string {
   if (typeof value !== "string" && typeof value !== "number") return "";
   return String(value).replace(/[\u0000-\u0008\u000b-\u001f]/g, "").trim().slice(0, max);
 }
 
-function httpUrl(value: unknown): string {
+export function httpUrl(value: unknown): string {
   const s = str(value, 2000);
   if (!/^https?:\/\//i.test(s)) return "";
   try {
@@ -65,11 +65,14 @@ function httpUrl(value: unknown): string {
   }
 }
 
-function decodeBase64Url(payload: string): string {
+export function base64UrlToBytes(payload: string): Uint8Array<ArrayBuffer> {
   const b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
   const binary = atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4));
-  const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
-  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  return Uint8Array.from(binary, (c) => c.charCodeAt(0));
+}
+
+function decodeBase64Url(payload: string): string {
+  return new TextDecoder("utf-8", { fatal: true }).decode(base64UrlToBytes(payload));
 }
 
 /** Parses `#import=...`; returns null when absent or unreadable. */

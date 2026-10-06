@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowRight, ChevronDown, CircleCheck, CircleMinus, CirclePlus, Info, PlugZap, ScanSearch, Sparkles } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { toast } from "sonner";
@@ -427,7 +428,11 @@ function ExtensionCard() {
       <div className="px-5 py-4 text-[13px] text-fg-2">
         <p>
           While you browse Vinted, one click on <span className="font-medium text-fg">Analizza con FlipFinder</span> opens the full analysis
-          of the listing you are viewing.
+          of the listing you are viewing. On a search page it becomes{" "}
+          <Link href="/import" className="font-medium text-accent hover:underline">
+            Analizza N articoli
+          </Link>
+          : every listing loaded, analysed and ranked.
         </p>
         <ol className="mt-3 list-decimal space-y-1.5 pl-4 marker:text-fg-3">
           <li>

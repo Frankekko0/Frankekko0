@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "FlipFinder for Vinted",
   "short_name": "FlipFinder",
-  "version": "0.1.0",
-  "description": "Analizza con FlipFinder l'annuncio Vinted che stai guardando: valore di mercato, profitto, ROI e rischio.",
+  "version": "0.2.0",
+  "description": "Analizza con FlipFinder l'annuncio o la ricerca Vinted che stai guardando: valore di mercato, profitto, ROI e rischio.",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",

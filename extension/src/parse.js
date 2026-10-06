@@ -1,9 +1,10 @@
 /*
- * FlipFinder for Vinted - pure parsing of the listing the user is viewing.
+ * FlipFinder for Vinted - pure parsing of the page the user is viewing.
  *
  * The content script collects what is already on the page (JSON-LD, meta tags, attribute
- * label/value pairs) and this module turns it into FlipFinder's manual-import format. No
- * network access, no DOM access: it is unit-tested in Node (see tests/parse.test.mjs).
+ * label/value pairs, or the result cards of a search) and this module turns it into
+ * FlipFinder's import format. No network access, no DOM access: it is unit-tested in Node
+ * (see tests/parse.test.mjs).
  */
 (function (root, factory) {
   const api = factory();
@@ -194,9 +195,158 @@
     return { ok: missing.length === 0 && isHttpUrl(url), data, missing, staleItem };
   }
 
-  /** UTF-8 JSON -> base64url, the payload of FlipFinder's /analyze#import=... */
-  function encodeImport(data) {
-    const bytes = new TextEncoder().encode(JSON.stringify(data));
+  // ------------------------------------------------------------------ search-results pages
+
+  /** FlipFinder analyses at most this many listings per import (the server enforces it too). */
+  const MAX_BATCH = 200;
+
+  const CURRENCIES = [
+    ["EUR", /€|\beur\b/i],
+    ["GBP", /£/],
+    ["PLN", /zł/i],
+    ["CZK", /kč/i],
+    ["HUF", /\bft\b/i],
+    ["RON", /\blei\b/i],
+    ["SEK", /\bkr\b/i],
+    ["USD", /\$/],
+  ];
+  const CURRENCY = "(?:€|£|\\$|zł|kč|kr|ft|lei|eur)";
+  const AMOUNT = "\\d{1,3}(?:[.,\\s\\u00a0\\u202f]\\d{3})*(?:[.,]\\d{1,2})?";
+  // "15,00 €", "€15.00", "1 234,50 zł" - an amount is only a price next to a currency.
+  const PRICE_TOKEN = new RegExp(`${CURRENCY}\\s?${AMOUNT}|${AMOUNT}\\s?${CURRENCY}(?![a-z])`, "i");
+  const LABEL_WORDS = Object.values(LABELS)
+    .flat()
+    .sort((a, b) => b.length - a.length)
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const SUMMARY_LABEL = new RegExp(`,\\s*(${LABEL_WORDS.join("|")})\\s*:\\s*`, "gi");
+
+  function currencyOf(text) {
+    for (const [code, pattern] of CURRENCIES) if (pattern.test(text)) return code;
+    return "";
+  }
+
+  /** First price in a text, with its currency: { price, currency, index } or null. */
+  function findPrice(text) {
+    const m = PRICE_TOKEN.exec(text || "");
+    if (!m) return null;
+    const price = parsePrice(m[0].replace(/[\s\u00a0\u202f](?=\d{3}\b)/g, ""));
+    return price ? { price, currency: currencyOf(m[0]), index: m.index } : null;
+  }
+
+  /**
+   * The one-line summary Vinted puts on each result card (link title / image alt), e.g.
+   * "Polo Ralph Lauren, brand: Ralph Lauren, condizioni: Ottime, taglia: M, 15,00 €, 16,45 € include la Protezione acquisti".
+   */
+  function parseCardSummary(text) {
+    const s = clean(text, 600);
+    const out = { title: "", attrs: {}, price: null, currency: "" };
+    if (!s) return out;
+    const first = findPrice(s);
+    // Everything after the first price is buyer-protection small print.
+    const head = first ? s.slice(0, first.index).replace(/[,\s]+$/, "") : s;
+    if (first) Object.assign(out, { price: first.price, currency: first.currency });
+    const marks = [];
+    SUMMARY_LABEL.lastIndex = 0;
+    let m;
+    while ((m = SUMMARY_LABEL.exec(head))) marks.push({ key: labelKey(m[1]), start: m.index, from: SUMMARY_LABEL.lastIndex });
+    out.title = clean(marks.length ? head.slice(0, marks[0].start) : head, LIMITS.title);
+    marks.forEach((mark, i) => {
+      const value = clean(head.slice(mark.from, i + 1 < marks.length ? marks[i + 1].start : head.length), LIMITS.short);
+      if (mark.key && value && !out.attrs[mark.key]) out.attrs[mark.key] = value;
+    });
+    return out;
+  }
+
+  function absoluteItemUrl(href, base) {
+    try {
+      const url = new URL(href, base);
+      if (!/^https?:$/.test(url.protocol) || !itemId(url.pathname)) return "";
+      return url.origin + url.pathname; // no tracking parameters
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * One result card -> FlipFinder import item, or null when it can't be read.
+   * raw = { href, summary, alt, image, testids: {suffix: text}, texts: [leaf texts] }
+   */
+  function parseCatalogCard(raw, base) {
+    const url = absoluteItemUrl(raw.href, base);
+    if (!url) return null;
+    const summary = parseCardSummary(raw.summary || "");
+    const alt = parseCardSummary(raw.alt || "");
+    const ids = raw.testids || {};
+    const texts = (raw.texts || []).map((t) => clean(t, 200)).filter(Boolean);
+
+    let price = summary.price || alt.price || null;
+    let currency = summary.currency || alt.currency || "";
+    for (const candidate of [ids["price-text"], ...texts]) {
+      if (price) break;
+      const found = findPrice(candidate);
+      if (found) ({ price, currency } = found);
+    }
+
+    // Card subtitle: "M · Ottime" (size and condition, in either order).
+    const sub = { size: "", condition: "" };
+    for (const part of clean(ids["description-subtitle"], 200).split(/\s*[·•|]\s*/)) {
+      if (!part) continue;
+      if (!sub.condition && normalizeCondition(part)) sub.condition = part;
+      else if (!sub.size && part.length <= 30) sub.size = part;
+    }
+    const attrs = { ...alt.attrs, ...summary.attrs };
+    const brand = attrs.brand || clean(ids["description-title"], LIMITS.short);
+    const conditionText = attrs.condition || sub.condition;
+    const title =
+      summary.title || alt.title || clean(ids["title"], LIMITS.title) || [brand, sub.size].filter(Boolean).join(" ");
+    return {
+      url,
+      title: stripSiteSuffix(title),
+      price,
+      currency: currency || "EUR",
+      brand,
+      size: attrs.size || sub.size,
+      condition: normalizeCondition(conditionText),
+      condition_label: conditionText,
+      color: attrs.color || "",
+      image_urls: isHttpUrl(raw.image) ? [raw.image] : [],
+    };
+  }
+
+  /**
+   * Every listing card loaded on a search/catalog page -> the batch FlipFinder imports.
+   * Returns { items, unreadable, overLimit, total } - duplicates (promoted + organic) count once.
+   */
+  function parseCatalog(rawCards, location) {
+    const seen = new Set();
+    const items = [];
+    let unreadable = 0;
+    for (const raw of rawCards || []) {
+      const item = parseCatalogCard(raw, location);
+      const id = item && itemId(item.url);
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      if (!item || !item.title || item.title.length < 3 || !item.price) {
+        unreadable += 1;
+        continue;
+      }
+      items.push(item);
+    }
+    let query = "";
+    try {
+      query = clean(new URL(location).searchParams.get("search_text"), LIMITS.short);
+    } catch {
+      /* not a URL */
+    }
+    return {
+      total: items.length,
+      unreadable,
+      overLimit: Math.max(0, items.length - MAX_BATCH),
+      data: { v: 1, source: "vinted_search", query, items: items.slice(0, MAX_BATCH) },
+    };
+  }
+
+  function toBase64Url(bytes) {
     let binary = "";
     for (let i = 0; i < bytes.length; i += 0x8000) {
       binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
@@ -204,10 +354,43 @@
     return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   }
 
-  function analyzeUrl(appUrl, data) {
-    const base = String(appUrl || "http://localhost:3000").replace(/\/+$/, "");
-    return `${base}/analyze#import=${encodeImport(data)}`;
+  /** UTF-8 JSON -> base64url, the payload of FlipFinder's /analyze#import=... */
+  function encodeImport(data) {
+    return toBase64Url(new TextEncoder().encode(JSON.stringify(data)));
   }
 
-  return { parseListing, parsePrice, normalizeCondition, encodeImport, analyzeUrl, itemId, labelKey };
+  /** UTF-8 JSON -> deflate-raw -> base64url, the payload of FlipFinder's /import#batch=... */
+  async function encodeBatch(data) {
+    const json = new Blob([JSON.stringify(data)]).stream();
+    const zipped = await new Response(json.pipeThrough(new CompressionStream("deflate-raw"))).arrayBuffer();
+    return toBase64Url(new Uint8Array(zipped));
+  }
+
+  function appBase(appUrl) {
+    return String(appUrl || "http://localhost:3000").replace(/\/+$/, "");
+  }
+
+  function analyzeUrl(appUrl, data) {
+    return `${appBase(appUrl)}/analyze#import=${encodeImport(data)}`;
+  }
+
+  async function importUrl(appUrl, data) {
+    return `${appBase(appUrl)}/import#batch=${await encodeBatch(data)}`;
+  }
+
+  return {
+    MAX_BATCH,
+    parseListing,
+    parseCatalog,
+    parseCatalogCard,
+    parseCardSummary,
+    parsePrice,
+    normalizeCondition,
+    encodeImport,
+    encodeBatch,
+    analyzeUrl,
+    importUrl,
+    itemId,
+    labelKey,
+  };
 });

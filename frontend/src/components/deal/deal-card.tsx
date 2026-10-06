@@ -5,7 +5,7 @@ import Link from "next/link";
 import type { CSSProperties } from "react";
 import { CONDITION_LABEL, DEMAND_LABEL, days, eur, pct, timeAgo } from "@/lib/format";
 import { useSetFavorite } from "@/lib/queries";
-import type { OpportunityCard } from "@/lib/types";
+import type { FavoriteState, OpportunityCard } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,9 +42,25 @@ function Metric({ label, value, hint, tone }: { label: string; value: string; hi
   );
 }
 
-export function DealCard({ deal, priority = false, index = 0 }: { deal: OpportunityCard; priority?: boolean; index?: number }) {
+export function DealCard({
+  deal,
+  priority = false,
+  index = 0,
+  rank,
+  onStateChange,
+}: {
+  deal: OpportunityCard;
+  priority?: boolean;
+  index?: number;
+  /** Position in a ranking (1 = best), shown on the photo. */
+  rank?: number;
+  /** For lists held outside the query cache (e.g. an import's results). */
+  onStateChange?: (state: FavoriteState | null) => void;
+}) {
   const setFav = useSetFavorite();
   const saved = deal.favorite_state === "saved" || deal.favorite_state === "watching";
+  const setState = (state: FavoriteState | null) =>
+    setFav.mutate({ id: deal.id, state }, { onSuccess: () => onStateChange?.(state) });
   const discount = deal.discount_vs_market;
   return (
     <article
@@ -66,6 +82,11 @@ export function DealCard({ deal, priority = false, index = 0 }: { deal: Opportun
         <span className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-black/30 to-transparent" aria-hidden />
         <div className="absolute inset-x-0 top-0 flex items-start justify-between p-2.5">
           <div className="flex flex-col items-start gap-1.5">
+            {rank !== undefined && (
+              <Badge tone="dark" className="tnum">
+                #{rank}
+              </Badge>
+            )}
             {deal.is_ultra_deal && (
               <Badge tone="ultra" className="shadow-card">
                 <Flame /> ULTRA DEAL
@@ -131,13 +152,13 @@ export function DealCard({ deal, priority = false, index = 0 }: { deal: Opportun
               variant="outline"
               size="icon-sm"
               aria-label={saved ? "Remove from saved" : "Save deal"}
-              onClick={() => setFav.mutate({ id: deal.id, state: saved ? null : "saved" })}
+              onClick={() => setState(saved ? null : "saved")}
             >
               {saved ? <BookmarkCheck className="text-accent" /> : <Bookmark />}
             </Button>
           </Tip>
           <Tip content="Not interested (teaches your recommendations)">
-            <Button variant="ghost" size="icon-sm" aria-label="Ignore deal" onClick={() => setFav.mutate({ id: deal.id, state: "ignored" })}>
+            <Button variant="ghost" size="icon-sm" aria-label="Ignore deal" onClick={() => setState("ignored")}>
               <EyeOff />
             </Button>
           </Tip>

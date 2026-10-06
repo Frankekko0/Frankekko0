@@ -6,6 +6,8 @@ import { api, errorMessage } from "./api";
 import type {
   AiAnalysis,
   AlertItem,
+  BatchImportInput,
+  BatchImportResult,
   Brand,
   Category,
   FavoriteState,
@@ -340,6 +342,18 @@ export function useImportListing() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: ManualListingInput) => api<ImportResult>("/listings/import", { method: "POST", body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["opportunities"] });
+      qc.invalidateQueries({ queryKey: qk.stats });
+    },
+  });
+}
+
+/** Imports and analyses many listings at once (a Vinted search page); returns them ranked. */
+export function useBatchImport() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BatchImportInput) => api<BatchImportResult>("/listings/import/batch", { method: "POST", body }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["opportunities"] });
       qc.invalidateQueries({ queryKey: qk.stats });
