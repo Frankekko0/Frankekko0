@@ -60,7 +60,9 @@ def analysis_summary(o: Opportunity, listing: Listing) -> dict[str, Any]:
             "net_margin_high": _f(o.optimistic_profit),
             "max_buy_price": _f(o.max_buy_price),
         },
-        "risk_signals": breakdown.get("risk_signals") or o.risk_factors or [],
+        "risk_signals": breakdown.get("risk_signals") or [],
+        "risk_factors": o.risk_factors or [],
+        "headline": o.headline,
         "reasons": o.explanation or [],
         "listing_status": listing.status,
     }

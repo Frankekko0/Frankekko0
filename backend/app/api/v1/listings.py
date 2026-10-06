@@ -224,9 +224,8 @@ def manual_to_provider(
         published_at=body.published_at,
         status=ListingStatus(body.status),
         shipping_fee=body.shipping_fee,
-        buyer_protection_fee=body.buyer_protection_fee
-        if body.buyer_protection_fee is not None
-        else (Decimal("0.70") + body.price * Decimal("0.05")).quantize(Decimal("0.01")),
+        # Only the fee actually shown on the listing; otherwise the user's cost profile applies.
+        buyer_protection_fee=body.buyer_protection_fee,
         favourite_count=body.favourite_count,
         view_count=body.view_count,
         capture_level=capture_level,
@@ -394,6 +393,8 @@ async def analyze_adhoc(
         identification_confidence=ident.confidence,
         seller=seller,
         seller_account_age_days=None,
+        description=pl.description,
+        buyer_protection_fee=pl.buyer_protection_fee,
     )
     pipeline = AnalysisPipeline(db)
     now = datetime.now(UTC)

@@ -8,7 +8,8 @@ All money is ``Decimal``. Formulas (configurable cost profile):
     Net Profit             = Net Sale Revenue - Total Acquisition Cost
     ROI                    = Net Profit / Total Acquisition Cost
 
-Buyer protection is ``fixed + pct x purchase price`` (Vinted style). The maximum buy price is
+Buyer protection is ``fixed + pct x purchase price`` (Vinted style), or the fee actually shown on
+the listing when it was captured (more precise: it reflects the buyer's market). The maximum buy price is
 the closed-form inverse of these formulas under both the minimum-profit and minimum-ROI
 constraints, rounded *down* so the targets are always met.
 """
@@ -97,9 +98,16 @@ class ProfitResult:
 
 
 def acquisition_cost(
-    purchase_price: Decimal, profile: CostProfile, listing_shipping: Decimal | None = None
+    purchase_price: Decimal,
+    profile: CostProfile,
+    listing_shipping: Decimal | None = None,
+    listing_buyer_protection: Decimal | None = None,
 ) -> AcquisitionCost:
-    bp = money(profile.buyer_protection_fixed + profile.buyer_protection_pct * purchase_price)
+    bp = money(
+        listing_buyer_protection
+        if listing_buyer_protection is not None
+        else profile.buyer_protection_fixed + profile.buyer_protection_pct * purchase_price
+    )
     shipping = money(profile.shipping(listing_shipping))
     other = money(profile.other_acquisition)
     price = money(purchase_price)
@@ -129,9 +137,11 @@ def profit_for(
     sale_price: Decimal,
     profile: CostProfile,
     listing_shipping: Decimal | None = None,
+    listing_buyer_protection: Decimal | None = None,
 ) -> ProfitResult:
     return compute_profit(
-        acquisition_cost(purchase_price, profile, listing_shipping), sale_revenue(sale_price, profile)
+        acquisition_cost(purchase_price, profile, listing_shipping, listing_buyer_protection),
+        sale_revenue(sale_price, profile),
     )
 
 
@@ -151,6 +161,7 @@ def profit_scenarios(
     profile: CostProfile,
     listing_shipping: Decimal | None = None,
     days: tuple[float | None, float | None, float | None] = (None, None, None),
+    listing_buyer_protection: Decimal | None = None,
 ) -> list[Scenario]:
     out: list[Scenario] = []
     for name, price, d in (
@@ -159,7 +170,14 @@ def profit_scenarios(
         ("optimistic", optimistic, days[2]),
     ):
         if price is not None:
-            out.append(Scenario(name, price, profit_for(purchase_price, price, profile, listing_shipping), d))
+            out.append(
+                Scenario(
+                    name,
+                    price,
+                    profit_for(purchase_price, price, profile, listing_shipping, listing_buyer_protection),
+                    d,
+                )
+            )
     return out
 
 

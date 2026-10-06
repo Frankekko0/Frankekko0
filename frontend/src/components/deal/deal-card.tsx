@@ -99,9 +99,15 @@ export function DealCard({
             )}
             {!deal.is_active && <Badge tone="dark">{deal.listing_status === "sold" ? "Sold" : "No longer available"}</Badge>}
           </div>
-          <div className="rounded-full bg-surface/90 p-0.5 shadow-card ring-1 ring-black/5 backdrop-blur-md">
-            <ScoreRing score={deal.flip_score} size={44} stroke={3.5} />
-          </div>
+          {deal.data_quality === "insufficient" ? (
+            <Tip content={deal.insufficient_reason ?? "Too few comparable listings for a reliable estimate"}>
+              <Badge tone="dark">Insufficient data</Badge>
+            </Tip>
+          ) : (
+            <div className="rounded-full bg-surface/90 p-0.5 shadow-card ring-1 ring-black/5 backdrop-blur-md">
+              <ScoreRing score={deal.flip_score} size={44} stroke={3.5} />
+            </div>
+          )}
         </div>
         <div className="absolute inset-x-0 bottom-0 flex items-end justify-between p-2.5">
           <Badge tone="dark">

@@ -48,6 +48,8 @@ class Opportunity(Base):
     # the score is not shown and no alert is sent).
     data_quality: Mapped[str] = mapped_column(String(16), default="ok", server_default="ok")
     insufficient_reason: Mapped[str | None] = mapped_column(String(300))
+    # The main reason in one line (feed, extension, tracking page).
+    headline: Mapped[str | None] = mapped_column(String(200))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
     listing_price: Mapped[Decimal] = mapped_column()

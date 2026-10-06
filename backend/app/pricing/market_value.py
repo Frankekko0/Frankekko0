@@ -6,7 +6,9 @@ Pipeline (pure function ``estimate_market_value``):
 2. "realized" distribution = sold prices (full weight) + active asking prices discounted by the
    ask-to-sale ratio (asks are systematically higher than what items actually sell for) with a
    reduced weight that shrinks as sold evidence grows;
-3. optional Bayesian blend with the segment prior from the Market Database when evidence is thin;
+3. optional Bayesian blend with the segment prior from the Market Database when direct evidence
+   is thin (3-9 comparables). With fewer than 3 direct comparables there is **no estimate**: the
+   segment median is reported as a reference only, never used as the item's value;
 4. FMV = weighted median of the realized distribution; scenarios: quick = P25,
    expected = FMV, optimistic = P75 (capped at P90);
 5. market confidence from sample size, sold share, similarity, dispersion and recency.
@@ -138,8 +140,13 @@ def estimate_market_value(
     n_used = len(used)
     avg_sim = sum(c.similarity for c in used) / n_used if used else 0.0
 
-    if n_used < MIN_COMPARABLES and not (prior and prior.sample_size >= 5):
+    if n_used < MIN_COMPARABLES:
         notes.append("Non ci sono abbastanza dati per stimare con affidabilità il prezzo di mercato.")
+        if prior and prior.sample_size >= 5:
+            notes.append(
+                f"Riferimento di segmento (brand e categoria): mediana €{prior.median_price:.0f} su "
+                f"{prior.sample_size} annunci. Solo indicativo, non usato come stima."
+            )
         return MarketEstimate(
             None,
             None,
@@ -162,12 +169,8 @@ def estimate_market_value(
         )
 
     used_prior = False
-    if n_used >= MIN_COMPARABLES:
-        stats = describe(realized)
-        median, p25, p75, p90, max_r = stats.median, stats.p25, stats.p75, stats.p90, stats.max_reasonable
-    else:
-        stats = None
-        median = p25 = p75 = p90 = max_r = 0.0
+    stats = describe(realized)
+    median, p25, p75, p90, max_r = stats.median, stats.p25, stats.p75, stats.p90, stats.max_reasonable
 
     if prior and prior.sample_size >= 5 and n_used < 10:
         # Shrink towards the segment prior (condition-adjusted) when direct evidence is thin.
@@ -179,14 +182,11 @@ def estimate_market_value(
         )
         k = 3.0
         w_direct = n_used / (n_used + k)
-        if stats is None:
-            median, p25, p75, p90, max_r = pm, p25p, p75p, p75p * 1.1, p75p * 1.2
-            notes.append("Stima basata sulle statistiche del segmento (pochi comparabili diretti).")
-        else:
-            median = w_direct * median + (1 - w_direct) * pm
-            p25 = w_direct * p25 + (1 - w_direct) * p25p
-            p75 = w_direct * p75 + (1 - w_direct) * p75p
+        median = w_direct * median + (1 - w_direct) * pm
+        p25 = w_direct * p25 + (1 - w_direct) * p25p
+        p75 = w_direct * p75 + (1 - w_direct) * p75p
         used_prior = True
+        notes.append("Pochi comparabili diretti: stima affiancata alle statistiche del segmento.")
 
     quick = min(p25, median * 0.93)
     optimistic = max(p75, median * 1.07)
@@ -196,7 +196,7 @@ def estimate_market_value(
     sample_f = 1 - math.exp(-n_used / 10)
     sold_f = min(1.0, len(sold_in) / 8)
     sim_f = min(1.0, max(0.0, (avg_sim - 0.4) / 0.6)) if used else 0.0
-    dispersion = stats.dispersion if stats else 0.6
+    dispersion = stats.dispersion
     disp_f = 1 / (1 + 2 * dispersion)
     recent = [c for c in used if (obs := c.item.observed_at()) and (now - obs).days <= 45]
     recency_f = 0.6 + 0.4 * (len(recent) / n_used) if used else 0.6
@@ -208,8 +208,6 @@ def estimate_market_value(
         "recency": recency_f,
     }
     confidence = 100 * (0.35 * sample_f + 0.20 * sold_f + 0.20 * sim_f + 0.15 * disp_f + 0.10 * recency_f)
-    if stats is None:
-        confidence = min(confidence, 30)
     if n_used < 5:
         notes.append(f"Solo {n_used} comparabili utilizzabili: stima indicativa.")
     if dispersion > 0.6:

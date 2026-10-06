@@ -70,6 +70,7 @@ class ItemProfile:
     published_at: datetime | None = None
     sold_at: datetime | None = None
     last_seen_at: datetime | None = None
+    removed_at: datetime | None = None
     url: str | None = None
     favourite_count: int | None = None
 

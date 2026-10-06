@@ -58,6 +58,8 @@ class OpportunityFilters(Schema):
     ultra_only: bool = False
     include_inactive: bool = False
     include_ignored: bool = False
+    # Listings without a reliable estimate (too few comparables) are hidden from the feed.
+    include_insufficient: bool = False
     state: Literal["saved", "ignored", "purchased", "watching", "sold"] | None = None
     preset: Preset | None = None
     sort: SortKey = "flip"
@@ -112,6 +114,11 @@ class OpportunityCard(Schema):
     favorite_state: str | None = None
     previous_price: Money | None = None
     top_reasons: list[Reason] = Field(default_factory=list)
+    # "ok" | "limited" | "insufficient" (no reliable estimate: the score must not be shown).
+    data_quality: str = "ok"
+    insufficient_reason: str | None = None
+    headline: str | None = None
+    analysis_depth: str = "full"
 
 
 class QuickStats(Schema):
@@ -243,6 +250,8 @@ class OpportunityDetail(Schema):
     ai_analysis: dict[str, Any] | None
     price_history: list[PricePoint]
     recommended_action: str
+    market_comparison: dict[str, Any] | None = None
+    time_online: dict[str, Any] | None = None
 
 
 class FavoriteStateIn(Schema):

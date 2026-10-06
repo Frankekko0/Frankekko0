@@ -93,6 +93,11 @@ export interface OpportunityCard {
   favorite_state: FavoriteState | null;
   previous_price: number | null;
   top_reasons: Reason[];
+  /** "insufficient": too few comparables, no reliable estimate - never show a score. */
+  data_quality: DataQuality;
+  insufficient_reason: string | null;
+  headline: string | null;
+  analysis_depth: "quick" | "full";
 }
 
 export interface QuickStats {
@@ -305,7 +310,7 @@ export interface OpportunityDetail {
   velocity: { estimated_days: number | null; bucket: string | null; score: number | null; sample_size?: number; quick_sale_days?: number; optimistic_sale_days?: number };
   scenarios: Scenario[];
   smart_buy: SmartBuy;
-  risk: { score: number; level: RiskLevel; factors: RiskFactor[] };
+  risk: { score: number; level: RiskLevel; factors: RiskFactor[]; signals: RiskSignal[] };
   score: {
     flip_score: number;
     personal_flip_score: number | null;
@@ -319,11 +324,18 @@ export interface OpportunityDetail {
     confidence_components: Record<string, number> | null;
     algorithm_version: string;
     analyzed_at: string;
+    data_quality: DataQuality;
+    insufficient_reason: string | null;
+    headline: string | null;
+    analysis_depth: "quick" | "full";
+    acquisition_mode: AcquisitionMode | null;
   };
   explanation: Reason[];
   ai_analysis: AiAnalysis | null;
   price_history: { price: number; observed_at: string }[];
   recommended_action: Action;
+  market_comparison: MarketComparison | null;
+  time_online: TimeOnline | null;
 }
 
 export interface OpportunityFilters {
@@ -680,6 +692,65 @@ export interface ItemFilters {
   sort?: "recent" | "score" | "price_asc" | "price_desc" | "profit" | "last_checked";
   page?: number;
   page_size?: number;
+}
+
+export interface PriceStats {
+  n: number;
+  min: number;
+  p25: number;
+  median: number;
+  p75: number;
+  max: number;
+}
+
+/** What the estimate is based on: comparables found and used, prices (brought to this item's condition). */
+export interface MarketComparison {
+  found: number;
+  found_sold: number;
+  found_active: number;
+  found_removed: number;
+  used: number;
+  used_sold: number;
+  used_active: number;
+  outliers_excluded: number;
+  prices: PriceStats | null;
+  sold_prices: PriceStats | null;
+  active_prices: PriceStats | null;
+  matches: { same_model: number | null; same_size: number | null; same_condition: number };
+  avg_similarity: number | null;
+  prices_adjusted_to_condition: boolean;
+  used_segment_prior: boolean;
+}
+
+export interface DaysSummary {
+  n: number;
+  mean: number;
+  median: number;
+}
+
+/** Time online of comparables; removed listings count as not sold. */
+export interface TimeOnline {
+  comparables: number;
+  sold: number;
+  active: number;
+  removed: number;
+  sold_share: number | null;
+  days_to_sell: DaysSummary | null;
+  days_online_active: DaysSummary | null;
+  days_online_removed: DaysSummary | null;
+  avg_days_online: number | null;
+}
+
+export type SignalLevel = "ok" | "info" | "low" | "medium" | "high";
+
+export interface RiskSignal {
+  code: "possible_fake" | "generic_description" | "label_photos" | "seller_reviews" | "title_photo_mismatch" | string;
+  title: string;
+  level: SignalLevel;
+  label: string;
+  evidence: string[];
+  /** False when the available data cannot tell (e.g. no image analysis): shown as "not verified". */
+  verifiable: boolean;
 }
 
 export interface BatchImportInput {

@@ -16,6 +16,7 @@ import {
   ScenariosSection,
   SellerSection,
 } from "@/components/deal/detail-sections";
+import { DataQualityBanner } from "@/components/deal/analysis-detail";
 import { ListingImage } from "@/components/deal/listing-image";
 import { RiskBadge, ScoreRing } from "@/components/deal/score";
 import { PurchaseDialog } from "@/components/forms/flip-forms";
@@ -86,7 +87,7 @@ function Summary({ d }: { d: OpportunityDetail }) {
     <Card className={cn("enter p-5", c.is_ultra_deal && "ultra-border border-transparent")}>
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-xs font-medium text-fg-3">{TIER_LABEL[c.deal_tier]}</p>
+          <p className="text-xs font-medium text-fg-3">{c.data_quality === "insufficient" ? "Insufficient data" : TIER_LABEL[c.deal_tier]}</p>
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <Badge tone="outline">Confidence {c.confidence_score}</Badge>
             <RiskBadge level={c.risk_level} score={c.risk_score} />
@@ -95,7 +96,15 @@ function Summary({ d }: { d: OpportunityDetail }) {
             )}
           </div>
         </div>
-        <ScoreRing score={c.flip_score} size={76} stroke={6} label="Flip" />
+        {c.data_quality === "insufficient" ? (
+          <span className="rounded-xl bg-warning-soft px-3 py-2 text-center text-[12px] font-semibold leading-tight text-warning">
+            No score
+            <br />
+            <span className="font-normal">too few comparables</span>
+          </span>
+        ) : (
+          <ScoreRing score={c.flip_score} size={76} stroke={6} label="Flip" />
+        )}
       </div>
 
       <div className="mt-5 grid grid-cols-2 gap-4 rounded-xl bg-surface-2 p-4">
@@ -292,6 +301,7 @@ export default function DealPage({ params }: { params: Promise<{ id: string }> }
           <div className="lg:hidden">
             <Summary d={d} />
           </div>
+          <DataQualityBanner quality={d.score.data_quality} reason={d.score.insufficient_reason} />
           <ExplanationSection d={d} />
           <OfferCard d={d} />
           <MarketSection d={d} />

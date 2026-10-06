@@ -112,3 +112,19 @@ def test_scenarios_use_all_costs() -> None:
     assert all(s.result.acquisition.total == total_cost for s in sc)
     # expected: 39 - 0.50 packaging - (18 + 0.70 + 0.90 + 3.49)
     assert sc[1].result.net_profit == D("39") - D("0.50") - D("23.09")
+
+
+def test_buyer_protection_shown_on_the_listing_wins_over_the_formula() -> None:
+    profile = CostProfile(shipping_in=D("3"), use_listing_shipping=True, packaging=D("0"))
+    formula = acquisition_cost(D("20"), profile, D("2.99"))
+    assert formula.buyer_protection == D("1.70")  # 0.70 + 5%
+    shown = acquisition_cost(D("20"), profile, D("2.99"), listing_buyer_protection=D("1.55"))
+    assert shown.buyer_protection == D("1.55") and shown.shipping == D("2.99")
+    assert shown.total == D("24.54")
+    # Margin and ROI follow the actual cost.
+    r = profit_for(D("20"), D("40"), profile, D("2.99"), D("1.55"))
+    assert r.net_profit == D("15.46") and r.roi == D("0.6300")
+    s = profit_scenarios(
+        D("20"), D("30"), D("40"), D("50"), profile, D("2.99"), listing_buyer_protection=D("1.55")
+    )
+    assert [x.result.net_profit for x in s] == [D("5.46"), D("15.46"), D("25.46")]

@@ -32,6 +32,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { InputAffix, Label } from "@/components/ui/input";
 import { Tip } from "@/components/ui/misc";
+import { MarketComparisonView, RiskChecklist, TimeOnlineView } from "./analysis-detail";
 import { ListingImage } from "./listing-image";
 import { Meter, RiskBadge, scoreColor } from "./score";
 
@@ -177,7 +178,18 @@ export function MarketSection({ d }: { d: OpportunityDetail }) {
   if (m.fair_market_value === null) {
     return (
       <Section id="market" icon={<TrendingUp />} title="Market analysis">
-        <p className="text-sm text-fg-2">{m.notes?.[0] ?? "Non ci sono abbastanza dati per stimare con affidabilità il prezzo di mercato."}</p>
+        <ul className="space-y-1">
+          {(m.notes?.length ? m.notes : ["Non ci sono abbastanza dati per stimare con affidabilità il prezzo di mercato."]).map((n) => (
+            <li key={n} className="flex items-start gap-2 text-sm text-fg-2">
+              <Info className="mt-0.5 size-3.5 shrink-0 text-fg-3" /> {n}
+            </li>
+          ))}
+        </ul>
+        {d.market_comparison && (
+          <div className="mt-5">
+            <MarketComparisonView c={d.market_comparison} />
+          </div>
+        )}
       </Section>
     );
   }
@@ -199,6 +211,12 @@ export function MarketSection({ d }: { d: OpportunityDetail }) {
         <KV label="Ask → sale ratio" value={m.ask_to_sale_ratio ? pct(m.ask_to_sale_ratio) : "—"} sub="sold vs asking prices" />
         <KV label="Avg similarity" value={m.avg_similarity ? pct(m.avg_similarity) : "—"} />
       </div>
+      {d.market_comparison && (
+        <div className="mt-5">
+          <p className="mb-2 text-[13px] font-medium text-fg-2">Comparables</p>
+          <MarketComparisonView c={d.market_comparison} />
+        </div>
+      )}
       {m.histogram && m.histogram.length > 0 && (
         <div className="mt-5">
           <p className="mb-2 text-[13px] font-medium text-fg-2">Price distribution</p>
@@ -349,7 +367,7 @@ export function DemandSection({ d }: { d: OpportunityDetail }) {
     <Section id="demand" icon={<Clock />} title="Demand & resale time">
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <KV label="Demand" value={d.demand.level ? DEMAND_LABEL[d.demand.level] : "—"} sub={d.demand.observations !== undefined ? `${d.demand.observations} comparable listings` : undefined} strong />
-        <KV label="Sell-through rate" value={pct(d.demand.sell_through_rate)} sub="sold / (sold + still listed)" strong />
+        <KV label="Sell-through rate" value={pct(d.demand.sell_through_rate)} sub="sold / (sold + on sale + removed)" strong />
         <KV label="Estimated resale time" value={v.bucket ? `${v.bucket} days` : "—"} sub={v.estimated_days !== null ? `${days(v.estimated_days)} at the expected price` : undefined} strong />
         <KV label="Velocity score" value={`${v.score ?? "—"}/100`} sub={v.sample_size !== undefined ? `${v.sample_size} observed sales` : undefined} strong />
       </div>
@@ -357,6 +375,12 @@ export function DemandSection({ d }: { d: OpportunityDetail }) {
         <p className="mt-3 text-[13px] text-fg-2">
           Quick sale (lower price): {days(v.quick_sale_days)} · Optimistic price: {days(v.optimistic_sale_days)}
         </p>
+      )}
+      {d.time_online && (
+        <div className="mt-5">
+          <p className="mb-2 text-[13px] font-medium text-fg-2">How comparable listings did</p>
+          <TimeOnlineView t={d.time_online} />
+        </div>
       )}
     </Section>
   );
@@ -369,6 +393,12 @@ const SEVERITY_TONE = { high: "text-danger", medium: "text-serious", low: "text-
 export function RiskSection({ d }: { d: OpportunityDetail }) {
   return (
     <Section id="risk" icon={<AlertTriangle />} title="Risk analysis" action={<RiskBadge level={d.risk.level} score={d.risk.score} />}>
+      {d.risk.signals?.length > 0 && (
+        <div className="mb-4">
+          <RiskChecklist signals={d.risk.signals} />
+          <p className="mb-2 mt-4 text-[13px] font-medium text-fg-2">Points added to the risk score</p>
+        </div>
+      )}
       {d.risk.factors.length === 0 ? (
         <p className="flex items-center gap-2 text-sm text-fg-2">
           <CircleCheck className="size-4 text-success" /> No risk signals detected.

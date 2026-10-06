@@ -15,18 +15,23 @@ from typing import Any
 
 from app.ai.deal_analyst import DealAnalysis, DealContext, RuleBasedDealAnalyst, ScenarioSummary
 from app.demand.analysis import DemandResult, VelocityResult, analyze_demand, analyze_velocity
+from app.demand.time_online import time_online
 from app.domain.enums import Condition, DealTier, RecommendedAction
 from app.pricing.comparables import ItemProfile, ScoredComparable, select_comparables
+from app.pricing.comparison import market_comparison
 from app.pricing.market_value import MarketEstimate, SegmentPrior, estimate_market_value
 from app.profit.calculator import CostProfile, Scenario, acquisition_cost, max_buy_price, profit_scenarios
 from app.profit.offers import OfferPlan, build_offer_plan
 from app.scoring.confidence import ConfidenceInput, ConfidenceResult, compute_confidence
-from app.scoring.explain import ExplanationContext, build_explanation
+from app.scoring.explain import DEMAND_LABELS, ExplanationContext, build_explanation
 from app.scoring.flip import FlipInput, FlipResult, compute_flip_score, deal_tier, is_ultra_deal
 from app.scoring.risk import RiskInput, RiskResult, assess_risk
 from app.scoring.seller import SellerProfile, SellerScore, seller_reliability
+from app.scoring.signals import Signal, SignalInput, build_signals, description_quality, worst_level
 
 PRICING_COMPARABLES = 60
+# Below this many direct comparables the estimate is labelled "indicative".
+LIMITED_BELOW = 8
 
 
 @dataclass(frozen=True)
@@ -52,6 +57,9 @@ class SubjectContext:
     seller_account_age_days: int | None
     is_repost: bool = False
     vision: dict[str, Any] | None = None
+    description: str = ""
+    # Buyer protection actually shown on the listing (None: the user's cost profile applies).
+    buyer_protection_fee: Decimal | None = None
 
     @property
     def suspicious_terms(self) -> list[str]:
@@ -87,6 +95,10 @@ class AnalysisResult:
     # "ok" | "limited" | "insufficient": insufficient means no reliable estimate (score hidden).
     data_quality: str = "ok"
     insufficient_reason: str | None = None
+    market_comparison: dict[str, Any] = field(default_factory=dict)
+    time_online: dict[str, Any] = field(default_factory=dict)
+    risk_signals: list[Signal] = field(default_factory=list)
+    headline: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
     def scenario(self, name: str) -> Scenario | None:
@@ -112,15 +124,18 @@ def run_analysis(
     prior: SegmentPrior | None = None,
     weights: dict[str, float] | None = None,
 ) -> AnalysisResult:
-    pool = select_comparables(subject.profile, candidates, now, max_count=10_000)
+    # Every similar listing (sold, on sale, removed); prices come only from sold and on-sale ones:
+    # a removed listing tells nothing about what the item is worth.
+    similar = select_comparables(subject.profile, candidates, now, max_count=10_000)
+    pool = [c for c in similar if c.item.status in ("sold", "active")]
     comps = pool[:PRICING_COMPARABLES]
     market = estimate_market_value(comps, subject.profile.condition, now, prior)
 
     # ---- demand & velocity (whole similar pool, not only the pricing sample) ----------------
-    sold = sum(1 for c in pool if c.item.status == "sold")
-    removed = sum(1 for c in pool if c.item.status == "removed")
-    active = sum(1 for c in pool if c.item.status == "active")
-    if not pool and prior and prior.sell_through_rate is not None:
+    sold = sum(1 for c in similar if c.item.status == "sold")
+    removed = sum(1 for c in similar if c.item.status == "removed")
+    active = sum(1 for c in similar if c.item.status == "active")
+    if not similar and prior and prior.sell_through_rate is not None:
         approx_n = min(prior.sample_size, 20)
         sold = round(prior.sell_through_rate * approx_n)
         active = approx_n - sold
@@ -149,7 +164,7 @@ def run_analysis(
 
     # ---- economics --------------------------------------------------------------------------
     price = subject.profile.price
-    acq = acquisition_cost(price, costs, subject.shipping_fee)
+    acq = acquisition_cost(price, costs, subject.shipping_fee, subject.buyer_protection_fee)
     scenarios = profit_scenarios(
         price,
         market.quick_sale_price,
@@ -158,6 +173,7 @@ def run_analysis(
         costs,
         subject.shipping_fee,
         (velocity.quick_sale_days, velocity.estimated_days, velocity.optimistic_sale_days),
+        subject.buyer_protection_fee,
     )
     fmv = market.fair_market_value
     discount = ((fmv - price) / fmv).quantize(Decimal("0.0001")) if fmv and fmv > 0 else None
@@ -172,6 +188,32 @@ def run_analysis(
     # ---- seller, risk, confidence, flip --------------------------------------------------------
     seller = seller_reliability(subject.seller, now)
     vision = subject.vision or {}
+    signals = build_signals(
+        SignalInput(
+            title=subject.profile.title,
+            description=subject.description,
+            brand_name=subject.brand_name,
+            brand_slug=subject.profile.brand,
+            brand_counterfeit_risk=subject.brand_counterfeit_risk,
+            category=subject.profile.category,
+            color=subject.profile.color,
+            photo_count=subject.photo_count,
+            price=price,
+            fair_market_value=fmv,
+            suspicious_terms=tuple(subject.suspicious_terms),
+            photos_reused_by_other_seller=bool(subject.identification.get("photos_reused_by_other_seller")),
+            seller_known=subject.seller is not None,
+            seller_rating=float(subject.seller.rating)
+            if subject.seller and subject.seller.rating is not None
+            else None,
+            seller_review_count=subject.seller.review_count if subject.seller else 0,
+            seller_anomalies=tuple(subject.seller.anomalies) if subject.seller else (),
+            vision=subject.vision,
+        )
+    )
+    by_code = {s.code: s for s in signals}
+    has_description = bool(subject.description.strip())
+    label_level = by_code["label_photos"].level
     risk = assess_risk(
         RiskInput(
             price=price,
@@ -194,6 +236,13 @@ def run_analysis(
             photos_reused_by_other_seller=bool(subject.identification.get("photos_reused_by_other_seller")),
             is_repost=subject.is_repost,
             brand_known=subject.profile.brand is not None,
+            generic_description=description_quality(subject.description).generic if has_description else None,
+            label_photo_missing=(label_level in ("low", "medium") and by_code["label_photos"].verifiable)
+            if label_level != "info"
+            else None,
+            title_photo_mismatches=tuple(by_code["title_photo_mismatch"].evidence)
+            if by_code["title_photo_mismatch"].level not in ("ok", "info")
+            else (),
         )
     )
     confidence = compute_confidence(
@@ -264,7 +313,10 @@ def run_analysis(
         risk,
     )
     analysis = RuleBasedDealAnalyst().analyze_sync(ctx)
-    return AnalysisResult(
+    comparison = market_comparison(subject.profile, similar, market)
+    online = time_online(similar, now)
+    quality, reason = assess_data_quality(market, len(similar))
+    result = AnalysisResult(
         subject=subject,
         market=market,
         comparables=comps,
@@ -284,8 +336,61 @@ def run_analysis(
         ultra=is_ultra_deal(flip.score, confidence.score, roi),
         explanation=explanation,
         analysis=analysis,
-        pool_size=len(pool),
+        pool_size=len(similar),
+        data_quality=quality,
+        insufficient_reason=reason,
+        market_comparison=comparison,
+        time_online=online,
+        risk_signals=signals,
     )
+    result.headline = build_headline(result)
+    return result
+
+
+def assess_data_quality(market: MarketEstimate, found: int) -> tuple[str, str | None]:
+    """Is the estimate reliable? Few comparables are declared, never papered over."""
+    if not market.has_value:
+        return (
+            "insufficient",
+            f"Solo {market.n_used} comparabili utilizzabili su {found} annunci simili trovati: "
+            "non abbastanza per stimare il valore. Nessun punteggio assegnato.",
+        )
+    if market.n_used < LIMITED_BELOW or market.confidence < 40:
+        return (
+            "limited",
+            f"Stima indicativa: basata su {market.n_used} comparabili "
+            f"(confidenza di mercato {market.confidence}/100).",
+        )
+    return "ok", None
+
+
+def build_headline(r: AnalysisResult) -> str:
+    """The main reason in one line (used by the browser extension and the tracking page)."""
+    if r.data_quality == "insufficient":
+        return f"Dati insufficienti: solo {r.market.n_used} comparabili"
+    parts: list[str] = []
+    if r.discount_vs_market is not None:
+        pct = round(float(r.discount_vs_market) * 100)
+        parts.append(
+            f"{pct}% sotto il mercato"
+            if pct > 0
+            else f"{-pct}% sopra il mercato"
+            if pct < 0
+            else "in linea col mercato"
+        )
+    if r.expected_profit is not None:
+        margin = r.expected_profit
+        sign = "+" if margin > 0 else "−" if margin < 0 else ""
+        roi = round(float(r.expected_roi or 0) * 100)
+        parts.append(f"margine {sign}€{abs(margin):.0f} (ROI {roi}%)")
+    parts.append(DEMAND_LABELS[r.demand.level].lower())
+    worst = worst_level(r.risk_signals)
+    if worst in ("medium", "high"):
+        flagged = next(s for s in r.risk_signals if s.level == worst)
+        parts.append(f"⚠ {flagged.title.lower()}")
+    if r.data_quality == "limited":
+        parts.append("pochi comparabili")
+    return " · ".join(parts)
 
 
 def build_deal_context(

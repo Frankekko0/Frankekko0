@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -33,6 +33,7 @@ from app.scoring.seller import SellerProfile
 
 log = get_logger(__name__)
 CANDIDATE_LIMIT = 400
+REMOVED_LIMIT = 60
 COMPARABLE_COLUMNS = (
     "listing_id",
     "comparable_listing_id",
@@ -71,12 +72,15 @@ class CandidatePool:
 
     sold: list[ItemProfile]
     active: list[ItemProfile]
+    # Removed listings: never priced, used for the sold share and time online (as not sold).
+    removed: list[ItemProfile] = field(default_factory=list)
 
     def for_subject(self, subject_id: uuid.UUID | None) -> list[ItemProfile]:
         half = CANDIDATE_LIMIT // 2
         sold = [c for c in self.sold if c.id != subject_id][:half]
         active = [c for c in self.active if c.id != subject_id][:half]
-        return [*sold, *active]
+        removed = [c for c in self.removed if c.id != subject_id][:REMOVED_LIMIT]
+        return [*sold, *active, *removed]
 
 
 @dataclass
@@ -111,6 +115,7 @@ def profile_from_row(row: Any, catalog: Catalog) -> ItemProfile:
         published_at=row.published_at,
         sold_at=row.sold_at,
         last_seen_at=row.last_seen_at,
+        removed_at=getattr(row, "removed_at", None),
         url=row.url,
         favourite_count=row.favourite_count,
     )
@@ -165,16 +170,20 @@ class AnalysisPipeline:
             Listing.published_at,
             Listing.sold_at,
             Listing.last_seen_at,
+            Listing.removed_at,
             Listing.url,
             Listing.favourite_count,
         )
 
-    async def _fetch_split(self, base: Any, now: datetime, limit: int) -> tuple[list[Any], list[Any]]:
-        """Recent SOLD and recent ACTIVE items, fetched separately.
+    async def _fetch_split(
+        self, base: Any, now: datetime, limit: int
+    ) -> tuple[list[Any], list[Any], list[Any]]:
+        """Recent SOLD, ACTIVE and REMOVED items, fetched separately.
 
-        Two bounded queries guarantee that realized prices are always represented, however many
-        active listings the segment has (ordering a single query by "last seen" would let fresh
-        active listings crowd out the sold ones).
+        Bounded queries per status guarantee that realized prices are always represented, however
+        many active listings the segment has (ordering a single query by "last seen" would let
+        fresh active listings crowd out the sold ones). Removed listings only feed the sold share
+        and time online, so a smaller quota is enough.
         """
         since = now - timedelta(days=self.settings.comparables_window_days)
         sold_states = [ListingStatus.SOLD.value]
@@ -189,9 +198,15 @@ class AnalysisPipeline:
             .order_by(Listing.published_at.desc(), Listing.id)
             .limit(limit)
         )
+        removed_stmt = (
+            base.where(Listing.status == ListingStatus.REMOVED.value, Listing.removed_at >= since)
+            .order_by(Listing.removed_at.desc(), Listing.id)
+            .limit(REMOVED_LIMIT + 1)
+        )
         sold = (await self.session.execute(sold_stmt)).all()
         active = (await self.session.execute(active_stmt)).all()
-        return sold, active
+        removed = (await self.session.execute(removed_stmt)).all()
+        return sold, active, removed
 
     async def candidate_pool(
         self, brand_id: int, category_ids: list[int] | None, catalog: Catalog, now: datetime
@@ -206,9 +221,11 @@ class AnalysisPipeline:
         )
         if category_ids:
             base = base.where(Listing.category_id.in_(category_ids))
-        sold, active = await self._fetch_split(base, now, CANDIDATE_LIMIT // 2 + 1)
+        sold, active, removed = await self._fetch_split(base, now, CANDIDATE_LIMIT // 2 + 1)
         return CandidatePool(
-            [profile_from_row(r, catalog) for r in sold], [profile_from_row(r, catalog) for r in active]
+            [profile_from_row(r, catalog) for r in sold],
+            [profile_from_row(r, catalog) for r in active],
+            [profile_from_row(r, catalog) for r in removed],
         )
 
     async def _unbranded_candidates(
@@ -225,8 +242,8 @@ class AnalysisPipeline:
         category_ids = catalog.sibling_category_ids(subject.category)
         if category_ids:
             base = base.where(Listing.category_id.in_(category_ids))
-        sold, active = await self._fetch_split(base, now, CANDIDATE_LIMIT // 2)
-        return [profile_from_row(r, catalog) for r in (*sold, *active)]
+        sold, active, removed = await self._fetch_split(base, now, CANDIDATE_LIMIT // 2)
+        return [profile_from_row(r, catalog) for r in (*sold, *active, *removed[:REMOVED_LIMIT])]
 
     async def segment_prior(
         self, brand_id: int | None, category_id: int | None, model: str | None
@@ -343,6 +360,8 @@ class AnalysisPipeline:
             else None,
             is_repost=listing.duplicate_of_id is not None,
             vision=ident.get("vision"),
+            description=listing.description or "",
+            buyer_protection_fee=listing.buyer_protection_fee,
         )
 
     # ---------------------------------------------------------------- analysis
@@ -558,6 +577,7 @@ def opportunity_values(
         "analysis_depth": analysis_depth(listing),
         "data_quality": r.data_quality,
         "insufficient_reason": r.insufficient_reason,
+        "headline": r.headline[:200],
         "is_active": listing.status == ListingStatus.ACTIVE,
         "listing_price": listing.price,
         "currency": listing.currency,
@@ -620,6 +640,10 @@ def opportunity_values(
                 "optimistic_sale_days": r.velocity.optimistic_sale_days,
             },
             "offer": {"action": r.offer.action.value, "rationale": r.offer.rationale},
+            "market_comparison": r.market_comparison,
+            "velocity_detail": r.time_online,
+            "risk_signals": [s.as_dict() for s in r.risk_signals],
+            "headline": r.headline,
         },
         "explanation": r.explanation,
         "risk_factors": r.risk.as_list(),

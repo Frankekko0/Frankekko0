@@ -29,6 +29,10 @@ class RiskInput:
     photos_reused_by_other_seller: bool = False
     is_repost: bool = False
     brand_known: bool = True
+    # Richer checks (see app.scoring.signals); None = not verifiable with the available data.
+    generic_description: bool | None = None
+    label_photo_missing: bool | None = None
+    title_photo_mismatches: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -134,8 +138,18 @@ def assess_risk(inp: RiskInput) -> RiskResult:
 
     if inp.suspicious_terms:
         add("suspicious_text", "Descrizione sospetta: " + ", ".join(inp.suspicious_terms), 30)
-    if inp.description_length < 20:
+    if inp.generic_description:
+        add("generic_description", "Descrizione generica, senza dettagli concreti", 6)
+    elif inp.generic_description is None and inp.description_length < 20:
         add("short_description", "Descrizione molto breve", 4)
+    if inp.label_photo_missing:
+        add(
+            "no_label_photo",
+            "Nessuna foto dell'etichetta",
+            12 if inp.brand_counterfeit_risk >= 0.15 else 6,
+        )
+    for mismatch in inp.title_photo_mismatches:
+        add("title_photo_mismatch", mismatch, 20 if "si legge" in mismatch else 6)
     if inp.defect_terms:
         add(
             "declared_defects",

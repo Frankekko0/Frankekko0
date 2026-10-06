@@ -233,6 +233,8 @@ class OpportunityQueries:
 
         if not params["include_inactive"]:
             stmt = stmt.where(Opportunity.is_active.is_(True))
+        if not params.get("include_insufficient"):
+            stmt = stmt.where(Opportunity.data_quality != "insufficient")
         if params["state"]:
             stmt = stmt.where(fav.state == params["state"])
         elif not params["include_ignored"]:
@@ -321,14 +323,18 @@ class OpportunityQueries:
         o, li = row.opportunity, row.listing
         costs = self.econ.costs
         scenario = (
-            profit_for(o.listing_price, o.expected_sale_price, costs, li.shipping_fee)
+            profit_for(
+                o.listing_price, o.expected_sale_price, costs, li.shipping_fee, li.buyer_protection_fee
+            )
             if o.expected_sale_price is not None
             else None
         )
         tac = (
             scenario.acquisition.total
             if scenario
-            else profit_for(o.listing_price, Decimal(0), costs, li.shipping_fee).acquisition.total
+            else profit_for(
+                o.listing_price, Decimal(0), costs, li.shipping_fee, li.buyer_protection_fee
+            ).acquisition.total
         )
         reasons = [
             Reason.model_validate(r)
@@ -380,18 +386,29 @@ class OpportunityQueries:
             favorite_state=row.favorite_state,
             previous_price=previous,
             top_reasons=reasons,
+            data_quality=o.data_quality,
+            insufficient_reason=o.insufficient_reason,
+            headline=o.headline,
+            analysis_depth=o.analysis_depth,
         )
 
     async def card_by_listing_ids(self, listing_ids: list[uuid.UUID]) -> list[OpportunityCard]:
         if not listing_ids:
             return []
-        stmt, _ = self.build(OpportunityFilters(include_inactive=True, include_ignored=True, page_size=100))
+        stmt, _ = self.build(
+            OpportunityFilters(
+                include_inactive=True, include_ignored=True, include_insufficient=True, page_size=100
+            )
+        )
         stmt = stmt.where(Listing.id.in_(listing_ids))
         return [self.card(FeedRow(*r)) for r in (await self.session.execute(stmt)).all()]
 
     # ---------------------------------------------------------------- detail
     async def detail(self, opportunity_id: uuid.UUID) -> OpportunityDetail:
-        stmt, _ = self.build(OpportunityFilters(include_inactive=True, include_ignored=True), light=False)
+        stmt, _ = self.build(
+            OpportunityFilters(include_inactive=True, include_ignored=True, include_insufficient=True),
+            light=False,
+        )
         row = (await self.session.execute(stmt.where(Opportunity.id == opportunity_id))).first()
         if row is None:
             raise NotFoundError("Opportunità non trovata o non più disponibile.")
@@ -558,7 +575,12 @@ class OpportunityQueries:
             },
             scenarios=scenarios,
             smart_buy=smart,
-            risk={"score": o.risk_score, "level": o.risk_level, "factors": o.risk_factors},
+            risk={
+                "score": o.risk_score,
+                "level": o.risk_level,
+                "factors": o.risk_factors,
+                "signals": breakdown.get("risk_signals") or [],
+            },
             score={
                 "flip_score": o.flip_score,
                 "personal_flip_score": card.personal_flip_score,
@@ -572,7 +594,14 @@ class OpportunityQueries:
                 "confidence_components": breakdown.get("confidence_components"),
                 "algorithm_version": o.algorithm_version,
                 "analyzed_at": o.analyzed_at.isoformat(),
+                "data_quality": o.data_quality,
+                "insufficient_reason": o.insufficient_reason,
+                "headline": o.headline,
+                "analysis_depth": o.analysis_depth,
+                "acquisition_mode": o.acquisition_mode,
             },
+            market_comparison=breakdown.get("market_comparison"),
+            time_online=breakdown.get("velocity_detail"),
             explanation=[Reason.model_validate(r) for r in o.explanation or []],
             ai_analysis=o.ai_analysis,
             price_history=[PricePoint(price=p, observed_at=t) for p, t in history],
@@ -594,7 +623,7 @@ class OpportunityQueries:
         ):
             if price is None:
                 continue
-            r = profit_for(o.listing_price, price, costs, listing.shipping_fee)
+            r = profit_for(o.listing_price, price, costs, listing.shipping_fee, listing.buyer_protection_fee)
             out.append(
                 ScenarioOut(
                     name=name,  # type: ignore[arg-type]

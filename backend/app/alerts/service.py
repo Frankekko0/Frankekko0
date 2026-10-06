@@ -144,6 +144,8 @@ async def evaluate_alerts(
     settings = get_settings()
     r = outcome.result
     expected = r.scenario("expected")
+    if r.data_quality == "insufficient":
+        return []  # no reliable estimate: never alert on a guess
     if expected is None and not r.ultra:
         return []
     audience = await load_audience(session)
@@ -157,7 +159,13 @@ async def evaluate_alerts(
     for a in audience:
         profit = roi = None
         if expected is not None:
-            pr = profit_for(listing.price, expected.sale_price, a.costs, listing.shipping_fee)
+            pr = profit_for(
+                listing.price,
+                expected.sale_price,
+                a.costs,
+                listing.shipping_fee,
+                listing.buyer_protection_fee,
+            )
             profit, roi = pr.net_profit, pr.roi
         cand = AlertCandidate(
             opportunity_id=outcome.opportunity_id,

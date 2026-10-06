@@ -1,6 +1,7 @@
 """Market price engine: robust statistics, comparables, FMV and resale scenarios."""
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from decimal import Decimal as D
 
 import pytest
@@ -143,12 +144,24 @@ def test_insufficient_data_returns_clear_message() -> None:
     assert any("Non ci sono abbastanza dati" in n for n in est.notes)
 
 
-def test_segment_prior_supports_thin_markets() -> None:
+def test_segment_prior_alone_never_becomes_an_estimate() -> None:
+    """With fewer than 3 direct comparables there is no estimate: the segment median is shown as
+    a reference only (declared, not used)."""
     prior = SegmentPrior(median_price=40, p25_price=34, p75_price=46, sample_size=50, sell_through_rate=0.5)
     est = estimate_market_value(select_comparables(SUBJECT, market([30], []), NOW), "very_good", NOW, prior)
-    assert est.fair_market_value is not None
-    assert est.used_prior
-    assert est.confidence <= 30
+    assert est.fair_market_value is None and est.expected_sale_price is None
+    assert not est.used_prior
+    assert any("Riferimento di segmento" in n and "€40" in n for n in est.notes)
+
+
+def test_segment_prior_supports_thin_but_real_evidence() -> None:
+    prior = SegmentPrior(median_price=40, p25_price=34, p75_price=46, sample_size=50, sell_through_rate=0.5)
+    est = estimate_market_value(
+        select_comparables(SUBJECT, market([30, 31, 29], []), NOW), "very_good", NOW, prior
+    )
+    assert est.fair_market_value is not None and est.used_prior
+    # Blended between the 3 direct comparables (~30) and the segment (40).
+    assert Decimal("30") < est.fair_market_value < Decimal("40")
 
 
 @pytest.mark.parametrize("dispersed", [False, True])

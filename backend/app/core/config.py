@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     market_stats_window_days: int = 90
     comparables_window_days: int = 120
     lifecycle_stale_hours: int = 6
-    algorithm_version: str = "2026.10-1"
+    algorithm_version: str = "2026.10-2"
 
     # --- Acquisition modes beyond the extension (all opt-in, see docs/ACQUISITION.md) --------
     # Server-side read of public Vinted item pages. Off by default: Vinted's terms forbid
