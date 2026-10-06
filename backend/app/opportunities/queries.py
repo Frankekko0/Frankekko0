@@ -15,7 +15,7 @@ from typing import Any
 
 from sqlalchemy import Select, and_, case, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased, selectinload
+from sqlalchemy.orm import aliased, defer, noload, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.api.deps import UserEconomics
@@ -166,7 +166,10 @@ class OpportunityQueries:
         expr = func.greatest(0, func.least(100, func.round(Opportunity.flip_score + adj)))
         return expr, joins
 
-    def build(self, f: OpportunityFilters) -> tuple[Select[Any], dict[str, ColumnElement[Any]]]:
+    def build(
+        self, f: OpportunityFilters, light: bool = True
+    ) -> tuple[Select[Any], dict[str, ColumnElement[Any]]]:
+        """Feed query. ``light`` (cards) skips the large JSON/text columns only the detail page uses."""
         params = f.model_dump()
         hidden_gems = False
         if f.preset:
@@ -207,7 +210,24 @@ class OpportunityQueries:
             .outerjoin(Brand, Brand.id == Listing.brand_id)
             .outerjoin(Category, Category.id == Listing.category_id)
             .outerjoin(fav, and_(fav.listing_id == Listing.id, fav.user_id == self.user_id))
+            # Brand and category are selected explicitly above: skip the model's eager joins.
+            .options(noload(Listing.brand), noload(Listing.category), noload(Listing.seller))
         )
+        if light:
+            stmt = stmt.options(
+                *(
+                    defer(col, raiseload=True)
+                    for col in (
+                        Opportunity.score_breakdown,
+                        Opportunity.risk_factors,
+                        Opportunity.market_snapshot,
+                        Opportunity.ai_analysis,
+                        Listing.description,
+                        Listing.identification,
+                        Listing.raw,
+                    )
+                )
+            )
         for alias, cond in aff_joins:
             stmt = stmt.outerjoin(alias, cond)
 
@@ -371,7 +391,7 @@ class OpportunityQueries:
 
     # ---------------------------------------------------------------- detail
     async def detail(self, opportunity_id: uuid.UUID) -> OpportunityDetail:
-        stmt, _ = self.build(OpportunityFilters(include_inactive=True, include_ignored=True))
+        stmt, _ = self.build(OpportunityFilters(include_inactive=True, include_ignored=True), light=False)
         row = (await self.session.execute(stmt.where(Opportunity.id == opportunity_id))).first()
         if row is None:
             raise NotFoundError("Opportunità non trovata o non più disponibile.")

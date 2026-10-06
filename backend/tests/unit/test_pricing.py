@@ -159,3 +159,15 @@ def test_dispersion_lowers_confidence(dispersed: bool) -> None:
         assert est.confidence_breakdown["dispersion"] < 0.6
     else:
         assert est.confidence_breakdown["dispersion"] > 0.85
+
+
+def test_fast_similarity_score_equals_breakdown_total() -> None:
+    from app.pricing.comparables import similarity_score
+
+    for cand in (
+        item(30),
+        item(30, model="Big Pony"),
+        item(30, category="knitwear"),
+        item(45, condition="good"),
+    ):
+        assert similarity_score(SUBJECT, cand) == similarity(SUBJECT, cand)[0]

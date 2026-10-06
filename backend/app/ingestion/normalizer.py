@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from functools import lru_cache
 
 from app.domain.enums import Condition
 from app.identification.taxonomy import COLORS, CONDITION_PHRASES, MATERIALS, fold
@@ -108,6 +109,7 @@ def _fmt_half(value: float) -> str:
     return str(int(value)) if value == int(value) else f"{value:.1f}"
 
 
+@lru_cache(maxsize=4096)
 def size_distance(a: str | None, b: str | None) -> int | None:
     """Ordinal distance between two canonical sizes of the same system; ``None`` if incomparable."""
     if not a or not b:
@@ -125,17 +127,37 @@ def size_distance(a: str | None, b: str | None) -> int | None:
     return None
 
 
+_WORD = re.compile(r"\w+")
+_VOCAB_PATTERNS: dict[int, list[tuple[frozenset[str], re.Pattern[str], str]]] = {}
+
+
+def _vocab_patterns(vocab: dict[str, tuple[str, ...]]) -> list[tuple[frozenset[str], re.Pattern[str], str]]:
+    """Folded, compiled vocabulary, longest word first (built once per vocabulary).
+
+    Each entry carries the word's tokens: a word bounded by non-word characters can only match
+    if all its tokens occur in the text, so a subset test skips most regex calls exactly.
+    """
+    key = id(vocab)
+    if key not in _VOCAB_PATTERNS:
+        words = [(fold(word), canonical) for canonical, ws in vocab.items() for word in ws]
+        # Stable sort: among equally long words the vocabulary order still decides.
+        words.sort(key=lambda wc: -len(wc[0]))
+        _VOCAB_PATTERNS[key] = [
+            (frozenset(_WORD.findall(w)), re.compile(rf"(?<!\w){re.escape(w)}(?!\w)"), c) for w, c in words
+        ]
+    return _VOCAB_PATTERNS[key]
+
+
 def _vocab_match(raw: str | None, vocab: dict[str, tuple[str, ...]]) -> str | None:
+    """Canonical value of the longest vocabulary word found in ``raw``."""
     if not raw:
         return None
     text = fold(raw)
-    best: tuple[int, str] | None = None
-    for canonical, words in vocab.items():
-        for word in words:
-            w = fold(word)
-            if (best is None or len(w) > best[0]) and re.search(rf"(?<!\w){re.escape(w)}(?!\w)", text):
-                best = (len(w), canonical)
-    return best[1] if best else None
+    tokens = frozenset(_WORD.findall(text))
+    for gate, pattern, canonical in _vocab_patterns(vocab):
+        if gate <= tokens and pattern.search(text):
+            return canonical
+    return None
 
 
 def normalize_color(raw: str | None) -> str | None:

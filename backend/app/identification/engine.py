@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any
 
 from app.domain.enums import Certainty
@@ -150,35 +151,63 @@ class IdentificationResult:
         }
 
 
+_WORD = re.compile(r"\w+")
+
+
+def _gate(literal: str) -> frozenset[str]:
+    """Word tokens of a keyword. A keyword regex bounded by non-word characters can only match
+    if all of these tokens occur in the text, so a cheap subset test skips most regex calls
+    without ever changing a result."""
+    return frozenset(_WORD.findall(literal))
+
+
+@lru_cache(maxsize=4096)
+def _tokens(text: str) -> frozenset[str]:
+    return frozenset(_WORD.findall(text))
+
+
 class IdentificationEngine:
     def __init__(self, taxonomy: Taxonomy = DEFAULT_TAXONOMY) -> None:
         self.tax = taxonomy
-        self._line_index: list[tuple[re.Pattern[str], BrandSpec, str, str]] = []
+        # Every keyword entry carries its word tokens ("gate"): see _gate().
+        self._line_index: list[tuple[frozenset[str], re.Pattern[str], BrandSpec, str, str]] = []
         for brand in taxonomy.all_brands:
             for line in brand.lines:
                 for kw in line.keywords:
                     self._line_index.append(
-                        (re.compile(rf"(?<!\w){re.escape(fold(kw))}(?!\w)"), brand, line.name, line.category)
+                        (
+                            _gate(fold(kw)),
+                            re.compile(rf"(?<!\w){re.escape(fold(kw))}(?!\w)"),
+                            brand,
+                            line.name,
+                            line.category,
+                        )
                     )
-        self._line_index.sort(key=lambda e: len(e[0].pattern), reverse=True)
+        self._line_index.sort(key=lambda e: len(e[1].pattern), reverse=True)
         self._distinctive = [
-            (re.compile(rf"(?<!\w){re.escape(fold(kw))}(?!\w)"), brand)
+            (_gate(fold(kw)), re.compile(rf"(?<!\w){re.escape(fold(kw))}(?!\w)"), brand)
             for brand in taxonomy.all_brands
             for line in brand.lines
             for kw in line.keywords
             if fold(kw) in DISTINCTIVE_MODEL_KEYWORDS
         ]
         self._team_patterns = [
-            (re.compile(rf"(?<!\w){re.escape(fold(a))}(?!\w)"), team)
+            (_gate(fold(a)), re.compile(rf"(?<!\w){re.escape(fold(a))}(?!\w)"), team)
             for team, aliases in FOOTBALL_TEAMS
             for a in sorted(aliases, key=len, reverse=True)
         ]
         self._suspicious = [(re.compile(p), label) for p, label in SUSPICIOUS_PATTERNS]
         self._defects = [(re.compile(p), label) for p, label in DEFECT_PATTERNS]
         self._gender = [
-            (re.compile(rf"(?<!\w){re.escape(w)}(?!\w)"), g)
+            (_gate(w), re.compile(rf"(?<!\w){re.escape(w)}(?!\w)"), g)
             for g, words in GENDER_KEYWORDS.items()
             for w in words
+        ]
+        self._brand_aliases = [
+            (_gate(alias), pattern, brand, alias) for pattern, brand, alias in taxonomy.brand_alias_patterns
+        ]
+        self._category_keywords = [
+            (_gate(kw), pattern, cat, kw) for pattern, cat, kw in taxonomy.category_keyword_patterns
         ]
 
     # ------------------------------------------------------------------ public
@@ -198,8 +227,9 @@ class IdentificationEngine:
 
     # ----------------------------------------------------------------- helpers
     def _match_brand(self, text: str) -> tuple[BrandSpec, str, tuple[int, int]] | None:
-        for pattern, brand, alias in self.tax.brand_alias_patterns:
-            if m := pattern.search(text):
+        tokens = _tokens(text)
+        for gate, pattern, brand, alias in self._brand_aliases:
+            if gate <= tokens and (m := pattern.search(text)):
                 return brand, alias, m.span()
         return None
 
@@ -279,13 +309,19 @@ class IdentificationEngine:
 
     def _brand_from_lines(self, text: str) -> BrandSpec | None:
         """Infer the brand from a distinctive model name, only when it points to a single brand."""
-        candidates = {brand.slug: brand for pattern, brand in self._distinctive if pattern.search(text)}
+        tokens = _tokens(text)
+        candidates = {
+            brand.slug: brand
+            for gate, pattern, brand in self._distinctive
+            if gate <= tokens and pattern.search(text)
+        }
         return next(iter(candidates.values())) if len(candidates) == 1 else None
 
     def _team_and_season(self, title: str, desc: str, res: IdentificationResult) -> None:
         for text, conf in ((title, 0.85), (desc, 0.6)):
-            for pattern, team in self._team_patterns:
-                if pattern.search(text):
+            tokens = _tokens(text)
+            for gate, pattern, team in self._team_patterns:
+                if gate <= tokens and pattern.search(text):
                     res.team = Attribute(
                         team, Certainty.PROBABLE, "title" if text is title else "description", conf
                     )
@@ -303,8 +339,9 @@ class IdentificationEngine:
         brand_slug = res.brand.value
         if brand_slug:
             for text, source, conf in ((title, "title", 0.85), (desc, "description", 0.65)):
-                for pattern, brand, line_name, _cat in self._line_index:
-                    if brand.slug != brand_slug:
+                tokens = _tokens(text)
+                for gate, pattern, brand, line_name, _cat in self._line_index:
+                    if brand.slug != brand_slug or not gate <= tokens:
                         continue
                     if pattern.search(text):
                         res.model = Attribute(line_name, Certainty.PROBABLE, source, conf)
@@ -372,7 +409,11 @@ class IdentificationEngine:
         """Longest-first keyword matching with span masking (so 't-shirt' doesn't count as 'shirt')."""
         scores: dict[str, float] = {}
         masked = text
-        for pattern, cat, kw in self.tax.category_keyword_patterns:
+        # Masking only removes matches, so the tokens of the unmasked text are a safe gate.
+        tokens = _tokens(text)
+        for gate, pattern, cat, kw in self._category_keywords:
+            if not gate <= tokens:
+                continue
             m = pattern.search(masked)
             if not m:
                 continue
@@ -384,7 +425,8 @@ class IdentificationEngine:
     def _gender_attr(self, title: str, desc: str, res: IdentificationResult) -> None:
         for text, source, conf in ((title, "title", 0.8), (desc, "description", 0.6)):
             text = VINTAGE_PATTERN.sub(" ", text)  # "anni 90" must not read as kids' age
-            found = {g for pattern, g in self._gender if pattern.search(text)}
+            tokens = _tokens(text)
+            found = {g for gate, pattern, g in self._gender if gate <= tokens and pattern.search(text)}
             if not found:
                 continue
             for g in ("kids", "unisex", "women", "men"):

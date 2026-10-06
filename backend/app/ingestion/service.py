@@ -259,13 +259,16 @@ class IngestionService:
 
         if new_rows:
             await self._detect_duplicates(new_rows, new_images, now, result)
-            stmt = pg_insert(Listing).on_conflict_do_nothing(index_elements=["provider", "external_id"])
+            # Core (table) inserts: no per-row ORM bookkeeping on the ingestion hot path.
+            stmt = pg_insert(Listing.__table__).on_conflict_do_nothing(
+                index_elements=["provider", "external_id"]
+            )
             # Sorted keys = same row-lock order in concurrent ingestions (no deadlocks).
             await self.session.execute(stmt, sorted(new_rows, key=lambda r: r["external_id"]))
         if new_images:
-            await self.session.execute(pg_insert(ListingImage).on_conflict_do_nothing(), new_images)
+            await self.session.execute(pg_insert(ListingImage.__table__).on_conflict_do_nothing(), new_images)
         if history_rows:
-            await self.session.execute(pg_insert(ListingPriceHistory), history_rows)
+            await self.session.execute(pg_insert(ListingPriceHistory.__table__), history_rows)
         if updates:
             await self.session.execute(update(Listing), sorted(updates, key=lambda u: str(u["id"])))
             await self._apply_status_timestamps(result, now)
@@ -299,7 +302,7 @@ class IngestionService:
                     "updated_at": now,
                 }
             )
-        stmt = pg_insert(Seller)
+        stmt = pg_insert(Seller.__table__)
         stmt = stmt.on_conflict_do_update(
             index_elements=["provider", "external_id"],
             set_={
@@ -317,7 +320,7 @@ class IngestionService:
                     "updated_at",
                 )
             },
-        ).returning(Seller.id, Seller.external_id)
+        ).returning(Seller.__table__.c.id, Seller.__table__.c.external_id)
         out: dict[str, uuid.UUID] = {}
         for chunk_start in range(0, len(rows), 500):
             res = await self.session.execute(stmt, rows[chunk_start : chunk_start + 500])
@@ -326,7 +329,7 @@ class IngestionService:
 
     async def _upsert_products(self, specs: list[dict[str, Any]]) -> dict[str, uuid.UUID]:
         await self.session.execute(
-            pg_insert(Product).on_conflict_do_nothing(index_elements=["product_key"]),
+            pg_insert(Product.__table__).on_conflict_do_nothing(index_elements=["product_key"]),
             sorted(specs, key=lambda s: s["product_key"]),
         )
         keys = [s["product_key"] for s in specs]

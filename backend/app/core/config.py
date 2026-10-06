@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     db_pool_size: int = 10
     db_max_overflow: int = 20
+    # Worker: processes (0 = one per CPU core, at most 4) and a small DB pool per process,
+    # so API + workers stay well below PostgreSQL's default 100 connections.
+    worker_processes: int = Field(default=0, ge=0, le=32)
+    worker_db_pool_size: int = 6
+    worker_db_max_overflow: int = 4
 
     # --- Security ------------------------------------------------------------------------
     jwt_secret: SecretStr = SecretStr("dev-only-change-me-dev-only-change-me")

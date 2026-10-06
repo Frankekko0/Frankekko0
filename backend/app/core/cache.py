@@ -87,6 +87,17 @@ class Cache:
         except RedisError as exc:
             log.warning("cache.set_failed", error=str(exc))
 
+    async def bump_throttled(self, namespace: str, every_seconds: int) -> bool:
+        """Bump at most once per window (background writers): readers keep hitting the cache in
+        between, while TTLs bound staleness. Returns True when this call bumped."""
+        try:
+            if await self.redis.set(f"{self.prefix}:bumpgate:{namespace}", "1", nx=True, ex=every_seconds):
+                await self.redis.incr(f"{self.prefix}:ver:{namespace}")
+                return True
+        except RedisError as exc:
+            log.warning("cache.bump_failed", namespace=namespace, error=str(exc))
+        return False
+
     async def bump(self, namespace: str) -> None:
         try:
             await self.redis.incr(f"{self.prefix}:ver:{namespace}")

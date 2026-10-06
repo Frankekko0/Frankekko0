@@ -15,11 +15,12 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from decimal import Decimal
-from functools import cached_property
+from functools import cached_property, lru_cache
 
 
+@lru_cache(maxsize=65536)
 def fold(text: str) -> str:
-    """Lowercase + strip accents + collapse whitespace (stable matching key)."""
+    """Lowercase + strip accents + collapse whitespace (stable matching key). Pure, so memoized."""
     text = unicodedata.normalize("NFKD", text)
     text = "".join(c for c in text if not unicodedata.combining(c))
     return " ".join(text.lower().replace("’", "'").split())

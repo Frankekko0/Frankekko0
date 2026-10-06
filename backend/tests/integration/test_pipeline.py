@@ -285,3 +285,49 @@ async def test_scan_lock_is_exclusive_and_released() -> None:
             assert second is False
     async with redis_lock("test-scan", 30) as again:
         assert again is True
+
+
+async def test_batch_analysis_matches_single_analysis(session, make_listing) -> None:
+    """analyze_many shares comparables pools and writes in bulk; results must not change."""
+    from app.db.session import session_scope
+
+    await build_market(session, make_listing)
+    subjects = [
+        make_listing(title="Polo Ralph Lauren Custom Slim Fit blu navy M", price=p, published_days_ago=0.05)
+        for p in (12, 18, 25)
+    ]
+    res = await IngestionService(session, "test").ingest(subjects, now=NOW)
+    await session.commit()
+    ids = res.new_ids
+
+    single = {}
+    for lid in ids:
+        async with session_scope() as s:
+            o = await AnalysisPipeline(s).analyze_listing(lid, now=NOW)
+            assert o is not None
+            single[lid] = (o.result.flip.score, o.result.confidence.score, o.result.market.fair_market_value)
+    async with session_scope() as s:
+        outcomes = await AnalysisPipeline(s).analyze_many([*ids, ids[0]], now=NOW)  # duplicates ignored
+    assert [o.listing_id for o in outcomes] == ids  # input order, once each
+    for o in outcomes:
+        assert (o.result.flip.score, o.result.confidence.score, o.result.market.fair_market_value) == single[
+            o.listing_id
+        ]
+        assert not o.is_new and o.listing is not None
+    comps = (
+        await session.execute(
+            select(MarketComparable.listing_id, func.count())
+            .where(MarketComparable.listing_id.in_(ids))
+            .group_by(MarketComparable.listing_id)
+        )
+    ).all()
+    assert len(comps) == 3 and all(n >= 20 for _, n in comps)  # bulk COPY wrote every listing's comparables
+
+
+async def test_feed_cache_bump_is_throttled() -> None:
+    from app.core.cache import cache
+
+    ns = "test-throttle"
+    first = await cache.bump_throttled(ns, 30)
+    second = await cache.bump_throttled(ns, 30)
+    assert first is True and second is False

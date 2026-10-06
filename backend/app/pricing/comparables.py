@@ -13,6 +13,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+from functools import lru_cache
 
 from rapidfuzz import fuzz
 
@@ -102,6 +103,7 @@ def _condition_rank(value: str) -> int | None:
         return None
 
 
+@lru_cache(maxsize=256)
 def _condition_score(a: str, b: str) -> float:
     if a == b:
         return 1.0
@@ -154,6 +156,60 @@ def similarity(subject: ItemProfile, cand: ItemProfile) -> tuple[float, dict[str
     return round(sum(parts.values()), 4), parts
 
 
+_W = SIMILARITY_WEIGHTS
+_SIZE_FACTOR = {0: 1.0, 1: 0.5}
+
+
+def similarity_score(subject: ItemProfile, cand: ItemProfile, subject_title: str | None = None) -> float:
+    """Same value as ``similarity(...)[0]`` without building the breakdown (hot path).
+
+    The terms are added in the same order as the breakdown dict, so results are bit-identical.
+    """
+    if subject.category and cand.category == subject.category:
+        p_category = _W["category"]
+    elif subject.parent_category and cand.parent_category == subject.parent_category:
+        p_category = _W["category"] * 0.48
+    else:
+        p_category = 0.0
+    if subject.model is None:
+        p_model = _W["model"] * 0.5
+    elif cand.model == subject.model:
+        p_model = _W["model"]
+    elif cand.model is None:
+        p_model = _W["model"] * 0.35
+    else:
+        p_model = 0.0
+    p_condition = _W["condition"] * _condition_score(subject.condition, cand.condition)
+    dist = size_distance(subject.size, cand.size)
+    p_size = _W["size"] * 0.4 if dist is None else _W["size"] * _SIZE_FACTOR.get(dist, 0.0)
+    title = subject_title if subject_title is not None else subject.title.lower()
+    p_title = _W["title"] * fuzz.token_set_ratio(title, cand.title.lower()) / 100.0
+    if subject.gender is None or cand.gender is None or "unisex" in (subject.gender, cand.gender):
+        p_gender = _W["gender"] * 0.5
+    else:
+        p_gender = _W["gender"] if subject.gender == cand.gender else 0.0
+    a, b = subject.color, cand.color
+    p_color = _W["color"] * (0.5 if a is None or b is None else (1.0 if a == b else 0.0))
+    a, b = subject.material, cand.material
+    p_material = _W["material"] * (0.5 if a is None or b is None else (1.0 if a == b else 0.0))
+    p_country = _W["country"] * (1.0 if subject.country and subject.country == cand.country else 0.5)
+    p_vintage = _W["vintage"] if subject.is_vintage == cand.is_vintage else 0.0
+    total = (
+        0
+        + p_category
+        + p_model
+        + p_condition
+        + p_size
+        + p_title
+        + p_gender
+        + p_color
+        + p_material
+        + p_country
+        + p_vintage
+    )
+    return round(total, 4)
+
+
 def adjust_for_condition(price: float, subject_condition: str, comp_condition: str) -> float:
     return (
         price
@@ -170,12 +226,13 @@ def select_comparables(
     max_count: int = MAX_COMPARABLES,
 ) -> list[ScoredComparable]:
     scored: list[ScoredComparable] = []
+    subject_title = subject.title.lower()
     for cand in candidates:
         if subject.id is not None and cand.id == subject.id:
             continue
         if subject.brand and cand.brand != subject.brand:
             continue
-        sim, parts = similarity(subject, cand)
+        sim = similarity_score(subject, cand, subject_title)
         if sim < min_similarity:
             continue
         observed = cand.observed_at() or now
@@ -189,8 +246,8 @@ def select_comparables(
                 similarity=sim,
                 weight=weight,
                 adjusted_price=adjust_for_condition(float(cand.price), subject.condition, cand.condition),
-                breakdown=parts,
             )
         )
     scored.sort(key=lambda c: (c.similarity, c.weight), reverse=True)
+    # Per-comparable breakdowns are available on demand via similarity(); none are needed here.
     return scored[:max_count]

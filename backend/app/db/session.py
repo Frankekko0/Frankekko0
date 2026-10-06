@@ -11,16 +11,26 @@ from app.core.config import get_settings
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
+_pool_limits: tuple[int, int] | None = None
+
+
+def set_pool_limits(pool_size: int, max_overflow: int) -> None:
+    """Override the pool size before the engine is created (e.g. one small pool per worker process)."""
+    global _pool_limits
+    if _engine is not None:
+        raise RuntimeError("set_pool_limits() must be called before the engine is created")
+    _pool_limits = (pool_size, max_overflow)
 
 
 def get_engine() -> AsyncEngine:
     global _engine, _sessionmaker
     if _engine is None:
         settings = get_settings()
+        pool_size, max_overflow = _pool_limits or (settings.db_pool_size, settings.db_max_overflow)
         _engine = create_async_engine(
             settings.database_url,
-            pool_size=settings.db_pool_size,
-            max_overflow=settings.db_max_overflow,
+            pool_size=pool_size,
+            max_overflow=max_overflow,
             pool_pre_ping=True,
             pool_recycle=1800,
         )

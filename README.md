@@ -217,10 +217,31 @@ repository). Un valore vuoto equivale a "non impostato". Le principali:
 
 ## Worker e job in background
 
-`python -m app.workers.main` avvia in un unico processo due worker arq:
+`python -m app.workers.main` avvia un processo per core CPU (massimo 4; `WORKER_PROCESSES` per
+cambiarlo). Ogni processo serve due code arq; solo il primo esegue anche i job schedulati:
 
 - coda **high** (`ff:queue:high`): annunci promettenti (pre-score alto), alert, analisi AI;
 - coda **default** (`ff:queue:default`): tutto il resto, così i deal migliori non aspettano lo storico.
+
+Le analisi vengono eseguite **a blocchi** (8 annunci per la coda high, 40 per la default,
+raggruppati per brand e categoria): gli annunci dello stesso segmento condividono la ricerca dei
+comparabili, e i risultati si scrivono con poche operazioni in blocco (comparabili via `COPY`).
+Ogni processo usa un piccolo pool di connessioni (`WORKER_DB_POOL_SIZE`), così API e worker
+restano ben sotto il limite di connessioni di PostgreSQL.
+
+### Prestazioni misurate
+
+Primo avvio su database vuoto (10.800 annunci simulati, 5.937 da analizzare; macchina a 4 core):
+
+| | Prima | Dopo |
+|---|---|---|
+| Prima scansione completata | 163 s | 31 s |
+| Tutti gli annunci analizzati | 357 s | **43 s** (8,3×) |
+| Analisi, a regime | ~31 annunci/s | ~490 annunci/s (16×) |
+| Importazione (normalizzazione + riconoscimento) | 6,1 ms/annuncio | 2,0 ms/annuncio |
+
+I risultati delle analisi sono identici a prima (verificato confrontando punteggi, valore di
+mercato e comparabili su 400 annunci, e il riconoscimento prodotti su 15.120).
 
 Job schedulati (UTC):
 

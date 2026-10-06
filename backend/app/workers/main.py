@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import multiprocessing
+import os
 import signal
 from typing import Any
 
@@ -20,7 +22,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.core.redis import close_redis
 from app.db.models import Brand
-from app.db.session import dispose_engine, session_scope
+from app.db.session import dispose_engine, session_scope, set_pool_limits
 from app.marketplace.registry import close_provider
 from app.workers import tasks
 from app.workers.queue import QUEUE_DEFAULT, QUEUE_HIGH, close_queue, redis_settings
@@ -31,6 +33,7 @@ log = get_logger("app.worker")
 def _functions() -> list[Any]:
     return [
         func(tasks.analyze_listing, keep_result=0, max_tries=4, timeout=120),
+        func(tasks.analyze_batch, keep_result=0, max_tries=4, timeout=300),
         func(tasks.vision_task, keep_result=0, max_tries=2, timeout=180),
         func(tasks.ai_analyze_task, keep_result=0, max_tries=2, timeout=180),
         func(tasks.deliver_alert_task, keep_result=0, max_tries=5, timeout=60),
@@ -86,42 +89,56 @@ def _startup(queue: str) -> Any:
     return on_startup
 
 
-async def run() -> None:
+def process_count() -> int:
+    configured = get_settings().worker_processes
+    return configured if configured > 0 else max(1, min(os.cpu_count() or 1, 4))
+
+
+async def run(with_cron: bool = True, index: int = 0) -> None:
+    """One worker process: both queues; only the first process also runs the scheduler."""
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_json)
     settings.validate_for_production()
+    set_pool_limits(settings.worker_db_pool_size, settings.worker_db_max_overflow)
     await _wait_for_catalog()
+    # Each job is a batch of listings, so a few concurrent jobs keep the CPU busy.
     high = Worker(
         _functions(),
         queue_name=QUEUE_HIGH,
         redis_settings=redis_settings(),
         handle_signals=False,
-        max_jobs=10,
+        max_jobs=4,
         on_startup=_startup("high"),
-        health_check_key="ff:health:high",
+        health_check_key=f"ff:health:high:{index}",
     )
     default = Worker(
         _functions(),
         queue_name=QUEUE_DEFAULT,
-        cron_jobs=_cron_jobs(),
+        cron_jobs=_cron_jobs() if with_cron else None,
         redis_settings=redis_settings(),
         handle_signals=False,
-        max_jobs=12,
+        max_jobs=4,
         on_startup=_startup("default"),
-        health_check_key="ff:health:default",
+        health_check_key=f"ff:health:default:{index}",
     )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, stop.set)
-    log.info("worker.started", queues=[QUEUE_HIGH, QUEUE_DEFAULT], provider=settings.marketplace_provider)
+    log.info(
+        "worker.started",
+        process=index,
+        scheduler=with_cron,
+        queues=[QUEUE_HIGH, QUEUE_DEFAULT],
+        provider=settings.marketplace_provider,
+    )
     runners = [asyncio.create_task(high.async_run()), asyncio.create_task(default.async_run())]
     stopper = asyncio.create_task(stop.wait())
     done, _ = await asyncio.wait([*runners, stopper], return_when=asyncio.FIRST_COMPLETED)
     for task in done:
         if task is not stopper and task.exception():
-            log.error("worker.crashed", error=repr(task.exception()))
+            log.error("worker.crashed", process=index, error=repr(task.exception()))
     for task in runners:
         task.cancel()
     for w in (high, default):
@@ -131,8 +148,28 @@ async def run() -> None:
     await close_queue()
     await close_redis()
     await dispose_engine()
-    log.info("worker.stopped")
+    log.info("worker.stopped", process=index)
+
+
+def _child(index: int) -> None:
+    asyncio.run(run(with_cron=False, index=index))
+
+
+def main() -> None:
+    """Analysis is CPU-bound Python: one process per core multiplies throughput."""
+    n = process_count()
+    ctx = multiprocessing.get_context("spawn")
+    children = [ctx.Process(target=_child, args=(i,), name=f"flipfinder-worker-{i}") for i in range(1, n)]
+    for child in children:
+        child.start()
+    try:
+        asyncio.run(run(with_cron=True, index=0))
+    finally:
+        for child in children:
+            child.terminate()  # SIGTERM: each child finishes its current jobs and exits
+        for child in children:
+            child.join(timeout=30)
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    main()

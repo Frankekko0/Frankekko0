@@ -39,6 +39,9 @@ from app.workers.queue import backoff_seconds, enqueue
 
 log = get_logger(__name__)
 VISION_MIN_FLIP = 60
+ANALYSIS_BATCH_HIGH = 8  # small: likely deals should surface within seconds
+ANALYSIS_BATCH_DEFAULT = 40
+FEED_BUMP_EVERY_SECONDS = 15
 MAX_PAGES_PER_SCAN = 200
 LIFECYCLE_BATCH = 1500
 SCAN_LOCK_TTL_SECONDS = 900  # > the scan job timeout (600 s)
@@ -72,8 +75,21 @@ async def _segment_medians() -> dict[tuple[int, int], Decimal]:
     return {(r.brand_id, r.category_id): r.median_price for r in rows if r.brand_id and r.category_id}
 
 
+def _chunks(items: list[Any], size: int) -> list[list[Any]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def _batch_job_id(ids: list[str]) -> str:
+    # Same set of listings -> same job id, so arq drops duplicate batches.
+    return f"analyze-batch:{uuid.uuid5(uuid.NAMESPACE_OID, ','.join(sorted(ids)))}"
+
+
 async def _enqueue_analyses(result: IngestResult, medians: dict[tuple[int, int], Decimal]) -> tuple[int, int]:
-    """Enqueue analyses, newest first; likely deals go to the high-priority queue."""
+    """Enqueue analyses in batches; likely deals go to the high-priority queue first.
+
+    High-priority batches are small and newest-first (latency matters); bulk batches are
+    grouped by brand and category so each batch reuses the same comparables pool.
+    """
     settings = get_settings()
     ids = result.to_analyze + [pc.listing_id for pc in result.price_changes]
     if not ids:
@@ -94,17 +110,23 @@ async def _enqueue_analyses(result: IngestResult, medians: dict[tuple[int, int],
             )
         ).all()
     dropped = {pc.listing_id for pc in result.price_changes if pc.new_price < pc.old_price}
-    high = default = 0
+    high: list[Any] = []
+    default: list[Any] = []
     for r in rows:
         if r.status != ListingStatus.ACTIVE:
             continue
         median = medians.get((r.brand_id, r.category_id))
         prescore = float(1 - r.price / median) if median and median > 0 else 0.0
         is_high = r.id in dropped or prescore >= settings.analysis_high_priority_prescore
-        if await enqueue("analyze_listing", str(r.id), high=is_high, job_id=f"analyze:{r.id}"):
-            high += is_high
-            default += not is_high
-    return high, default
+        (high if is_high else default).append(r)
+    default.sort(key=lambda r: (r.brand_id or 0, r.category_id or 0))
+    for queue_rows, size, is_high in (
+        (high, ANALYSIS_BATCH_HIGH, True),
+        (default, ANALYSIS_BATCH_DEFAULT, False),
+    ):
+        for chunk in _chunks([str(r.id) for r in queue_rows], size):
+            await enqueue("analyze_batch", chunk, high=is_high, job_id=_batch_job_id(chunk))
+    return len(high), len(default)
 
 
 async def _apply_status_changes(result: IngestResult) -> None:
@@ -197,23 +219,55 @@ async def _scan_new_listings(ctx: dict[str, Any]) -> dict[str, Any]:
 async def analyze_listing(
     ctx: dict[str, Any], listing_id: str, after_vision: bool = False
 ) -> dict[str, Any] | None:
+    """Single-listing analysis (re-analysis after vision, API triggers): a batch of one."""
+    res = await analyze_batch(ctx, [listing_id], after_vision=after_vision)
+    return res["listings"].get(listing_id)
+
+
+async def analyze_batch(
+    ctx: dict[str, Any], listing_ids: list[str], after_vision: bool = False
+) -> dict[str, Any]:
+    """Analyse a batch of listings in one transaction, then fan out alerts and follow-ups."""
     settings = get_settings()
     job_try = ctx.get("job_try", 1)
-    lid = uuid.UUID(listing_id)
+    ids = [uuid.UUID(x) for x in listing_ids]
     started = datetime.now(UTC)
     t0 = time.perf_counter()
+    pending: list[tuple[uuid.UUID, str]] = []
+    follow_ups: list[tuple[str, str]] = []
+    summary: dict[str, dict[str, int]] = {}
     try:
         async with session_scope() as s:
-            outcome = await AnalysisPipeline(s, settings).analyze_listing(lid)
-            if outcome is None:
-                return None
-            listing = await s.get(Listing, lid)
-            assert listing is not None
-            catalog = await load_catalog(s)
-            pending = await evaluate_alerts(s, outcome, listing, catalog)
-            s.add(
+            outcomes = await AnalysisPipeline(s, settings).analyze_many(ids)
+            catalog = await load_catalog(s) if outcomes else None
+            elapsed_ms = round((time.perf_counter() - t0) * 1000)
+            per_item_ms = round(elapsed_ms / max(1, len(outcomes)))
+            for outcome in outcomes:
+                listing = outcome.listing
+                assert listing is not None and catalog is not None
+                alerts = await evaluate_alerts(s, outcome, listing, catalog)
+                pending.extend(alerts)
+                r = outcome.result
+                has_remote_photos = any(i.url.startswith("https://") for i in listing.images)
+                vision_done = bool((listing.identification or {}).get("vision"))
+                if (
+                    r.flip.score >= VISION_MIN_FLIP
+                    and has_remote_photos
+                    and not vision_done
+                    and not after_vision
+                ):
+                    follow_ups.append(("vision_task", str(listing.id)))
+                if settings.ai_api_key and r.flip.score >= settings.ai_auto_analyze_min_flip_score:
+                    follow_ups.append(("ai_analyze_task", str(outcome.opportunity_id)))
+                summary[str(listing.id)] = {
+                    "flip": r.flip.score,
+                    "confidence": r.confidence.score,
+                    "risk": r.risk.score,
+                    "alerts": len(alerts),
+                }
+            s.add_all(
                 AnalysisJob(
-                    listing_id=lid,
+                    listing_id=o.listing_id,
                     job_type="analyze",
                     status=JobStatus.SUCCEEDED.value,
                     priority=ctx.get("queue", "default"),
@@ -221,18 +275,17 @@ async def analyze_listing(
                     queued_at=started,
                     started_at=started,
                     finished_at=datetime.now(UTC),
-                    duration_ms=round((time.perf_counter() - t0) * 1000),
+                    duration_ms=per_item_ms,
                 )
+                for o in outcomes
             )
-            has_remote_photos = any(i.url.startswith("https://") for i in listing.images)
-            vision_done = bool((listing.identification or {}).get("vision"))
     except (OperationalError, DBAPIError) as exc:
-        log.warning("analysis.db_error", listing_id=listing_id, attempt=job_try, error=type(exc).__name__)
+        log.warning("analysis.db_error", listings=len(ids), attempt=job_try, error=type(exc).__name__)
         raise Retry(defer=backoff_seconds(job_try)) from exc
     except Exception:
-        log.exception("analysis.failed", listing_id=listing_id)
+        log.exception("analysis.failed", listings=len(ids))
         async with session_scope() as s:
-            s.add(
+            s.add_all(
                 AnalysisJob(
                     listing_id=lid,
                     job_type="analyze",
@@ -243,25 +296,22 @@ async def analyze_listing(
                     finished_at=datetime.now(UTC),
                     error="analysis failed (see logs)",
                 )
+                for lid in ids
             )
-        return None
+        return {"analyzed": 0, "listings": {}}
 
     for alert_id, channel in pending:
         await enqueue(
             "deliver_alert_task", str(alert_id), channel, high=True, job_id=f"deliver:{alert_id}:{channel}"
         )
-    r = outcome.result
-    if r.flip.score >= VISION_MIN_FLIP and has_remote_photos and not vision_done and not after_vision:
-        await enqueue("vision_task", listing_id, job_id=f"vision:{listing_id}")
-    if settings.ai_api_key and r.flip.score >= settings.ai_auto_analyze_min_flip_score:
-        await enqueue("ai_analyze_task", str(outcome.opportunity_id), job_id=f"ai:{outcome.opportunity_id}")
-    await cache.bump(NS_FEED)
-    return {
-        "flip": r.flip.score,
-        "confidence": r.confidence.score,
-        "risk": r.risk.score,
-        "alerts": len(pending),
-    }
+    for task, arg in follow_ups:
+        prefix = "vision" if task == "vision_task" else "ai"
+        await enqueue(task, arg, job_id=f"{prefix}:{arg}")
+    if summary:
+        # Continuous analysis would otherwise empty the feed cache every few seconds; feed TTLs
+        # (20-30 s) bound staleness, user actions still invalidate immediately.
+        await cache.bump_throttled(NS_FEED, FEED_BUMP_EVERY_SECONDS)
+    return {"analyzed": len(summary), "listings": summary}
 
 
 async def vision_task(ctx: dict[str, Any], listing_id: str) -> None:

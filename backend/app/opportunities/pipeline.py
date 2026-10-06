@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -32,6 +33,18 @@ from app.scoring.seller import SellerProfile
 
 log = get_logger(__name__)
 CANDIDATE_LIMIT = 400
+COMPARABLE_COLUMNS = (
+    "listing_id",
+    "comparable_listing_id",
+    "similarity",
+    "price",
+    "adjusted_price",
+    "weight",
+    "is_sold",
+    "included",
+    "exclusion_reason",
+    "computed_at",
+)
 
 
 def default_cost_profile(settings: Settings | None = None) -> CostProfile:
@@ -53,6 +66,20 @@ def segment_key(brand_id: int | None, category_id: int | None, model: str | None
 
 
 @dataclass
+class CandidatePool:
+    """Comparable candidates shared by the subjects of one brand/category family."""
+
+    sold: list[ItemProfile]
+    active: list[ItemProfile]
+
+    def for_subject(self, subject_id: uuid.UUID | None) -> list[ItemProfile]:
+        half = CANDIDATE_LIMIT // 2
+        sold = [c for c in self.sold if c.id != subject_id][:half]
+        active = [c for c in self.active if c.id != subject_id][:half]
+        return [*sold, *active]
+
+
+@dataclass
 class AnalysisOutcome:
     opportunity_id: uuid.UUID
     listing_id: uuid.UUID
@@ -60,6 +87,7 @@ class AnalysisOutcome:
     previous_flip_score: int | None
     previous_price: Decimal | None
     result: AnalysisResult
+    listing: Listing | None = None
 
 
 def profile_from_row(row: Any, catalog: Catalog) -> ItemProfile:
@@ -110,14 +138,16 @@ class AnalysisPipeline:
     async def candidates(
         self, subject: ItemProfile, catalog: Catalog, brand_id: int | None, now: datetime
     ) -> list[ItemProfile]:
-        """Comparable candidates: recent SOLD items and recent ACTIVE items, fetched separately.
+        """Comparable candidates for one subject (see ``candidate_pool``)."""
+        if brand_id is None:
+            return await self._unbranded_candidates(subject, catalog, now)
+        pool = await self.candidate_pool(
+            brand_id, catalog.sibling_category_ids(subject.category), catalog, now
+        )
+        return pool.for_subject(subject.id)
 
-        Two bounded queries guarantee that realized prices are always represented, however many
-        active listings the segment has (ordering a single query by "last seen" would let fresh
-        active listings crowd out the sold ones).
-        """
-        since = now - timedelta(days=self.settings.comparables_window_days)
-        cols = (
+    def _candidate_columns(self) -> tuple[Any, ...]:
+        return (
             Listing.id,
             Listing.title,
             Listing.price,
@@ -138,57 +168,97 @@ class AnalysisPipeline:
             Listing.url,
             Listing.favourite_count,
         )
-        category_ids = catalog.sibling_category_ids(subject.category)
 
-        def base():  # type: ignore[no-untyped-def]
-            stmt = select(*cols).where(Listing.duplicate_of_id.is_(None))
-            if subject.id is not None:
-                stmt = stmt.where(Listing.id != subject.id)
-            if category_ids:
-                stmt = stmt.where(Listing.category_id.in_(category_ids))
-            if brand_id is not None:
-                return stmt.where(Listing.brand_id == brand_id)
-            # Unknown brand: only compare with other unidentified items with a similar title.
-            return stmt.where(
-                Listing.brand_id.is_(None), func.similarity(Listing.title, subject.title) > 0.25
-            )
+    async def _fetch_split(self, base: Any, now: datetime, limit: int) -> tuple[list[Any], list[Any]]:
+        """Recent SOLD and recent ACTIVE items, fetched separately.
 
+        Two bounded queries guarantee that realized prices are always represented, however many
+        active listings the segment has (ordering a single query by "last seen" would let fresh
+        active listings crowd out the sold ones).
+        """
+        since = now - timedelta(days=self.settings.comparables_window_days)
         sold_states = [ListingStatus.SOLD.value, ListingStatus.POSSIBLY_SOLD.value]
         event_time = func.coalesce(Listing.sold_at, Listing.status_changed_at, Listing.last_seen_at)
         sold_stmt = (
-            base()
-            .where(Listing.status.in_(sold_states), event_time >= since)
-            .order_by(event_time.desc())
-            .limit(CANDIDATE_LIMIT // 2)
+            base.where(Listing.status.in_(sold_states), event_time >= since)
+            .order_by(event_time.desc(), Listing.id)
+            .limit(limit)
         )
         active_stmt = (
-            base()
-            .where(Listing.status == ListingStatus.ACTIVE.value, Listing.published_at >= since)
-            .order_by(Listing.published_at.desc())
-            .limit(CANDIDATE_LIMIT // 2)
+            base.where(Listing.status == ListingStatus.ACTIVE.value, Listing.published_at >= since)
+            .order_by(Listing.published_at.desc(), Listing.id)
+            .limit(limit)
         )
-        rows = [
-            *(await self.session.execute(sold_stmt)).all(),
-            *(await self.session.execute(active_stmt)).all(),
-        ]
-        return [profile_from_row(r, catalog) for r in rows]
+        sold = (await self.session.execute(sold_stmt)).all()
+        active = (await self.session.execute(active_stmt)).all()
+        return sold, active
+
+    async def candidate_pool(
+        self, brand_id: int, category_ids: list[int] | None, catalog: Catalog, now: datetime
+    ) -> CandidatePool:
+        """Candidates shared by every subject of the same brand and category family.
+
+        One extra row per half lets each subject drop itself and still keep the full quota, so
+        the result is identical to a per-subject query.
+        """
+        base = select(*self._candidate_columns()).where(
+            Listing.duplicate_of_id.is_(None), Listing.brand_id == brand_id
+        )
+        if category_ids:
+            base = base.where(Listing.category_id.in_(category_ids))
+        sold, active = await self._fetch_split(base, now, CANDIDATE_LIMIT // 2 + 1)
+        return CandidatePool(
+            [profile_from_row(r, catalog) for r in sold], [profile_from_row(r, catalog) for r in active]
+        )
+
+    async def _unbranded_candidates(
+        self, subject: ItemProfile, catalog: Catalog, now: datetime
+    ) -> list[ItemProfile]:
+        # Unknown brand: only compare with other unidentified items with a similar title.
+        base = select(*self._candidate_columns()).where(
+            Listing.duplicate_of_id.is_(None),
+            Listing.brand_id.is_(None),
+            func.similarity(Listing.title, subject.title) > 0.25,
+        )
+        if subject.id is not None:
+            base = base.where(Listing.id != subject.id)
+        category_ids = catalog.sibling_category_ids(subject.category)
+        if category_ids:
+            base = base.where(Listing.category_id.in_(category_ids))
+        sold, active = await self._fetch_split(base, now, CANDIDATE_LIMIT // 2)
+        return [profile_from_row(r, catalog) for r in (*sold, *active)]
 
     async def segment_prior(
         self, brand_id: int | None, category_id: int | None, model: str | None
     ) -> SegmentPrior | None:
-        if brand_id is None or category_id is None:
-            return None
-        keys = [segment_key(brand_id, category_id, model, None)] if model else []
-        keys.append(segment_key(brand_id, category_id, None, None))
-        rows = (
-            (await self.session.execute(select(MarketStatistic).where(MarketStatistic.segment_key.in_(keys))))
-            .scalars()
-            .all()
-        )
-        by_key = {r.segment_key: r for r in rows}
-        for key in keys:
-            if (st := by_key.get(key)) is not None:
-                return SegmentPrior(
+        return (await self.segment_priors([(brand_id, category_id, model)]))[0]
+
+    async def segment_priors(
+        self, segments: list[tuple[int | None, int | None, str | None]]
+    ) -> list[SegmentPrior | None]:
+        """Market-database priors for many (brand, category, model) segments in one query."""
+        wanted: list[list[str]] = []
+        for brand_id, category_id, model in segments:
+            if brand_id is None or category_id is None:
+                wanted.append([])
+                continue
+            keys = [segment_key(brand_id, category_id, model, None)] if model else []
+            keys.append(segment_key(brand_id, category_id, None, None))
+            wanted.append(keys)
+        all_keys = {k for keys in wanted for k in keys}
+        by_key: dict[str, MarketStatistic] = {}
+        if all_keys:
+            rows = (
+                await self.session.execute(
+                    select(MarketStatistic).where(MarketStatistic.segment_key.in_(all_keys))
+                )
+            ).scalars()
+            by_key = {r.segment_key: r for r in rows}
+        out: list[SegmentPrior | None] = []
+        for keys in wanted:
+            st = next((by_key[k] for k in keys if k in by_key), None)
+            out.append(
+                SegmentPrior(
                     median_price=float(st.median_price),
                     p25_price=float(st.p25_price),
                     p75_price=float(st.p75_price),
@@ -197,36 +267,54 @@ class AnalysisPipeline:
                     sell_through_rate=float(st.sell_through_rate),
                     avg_days_to_sale=float(st.avg_days_to_sale) if st.avg_days_to_sale else None,
                 )
-        return None
+                if st is not None
+                else None
+            )
+        return out
 
     async def seller_anomalies(
         self, seller_id: uuid.UUID | None, catalog: Catalog, now: datetime
     ) -> tuple[str, ...]:
         if seller_id is None:
             return ()
+        return (await self.sellers_anomalies([seller_id], catalog, now)).get(seller_id, ())
+
+    async def sellers_anomalies(
+        self, seller_ids: list[uuid.UUID], catalog: Catalog, now: datetime
+    ) -> dict[uuid.UUID, tuple[str, ...]]:
+        """Suspicious seller patterns (many identical listings, many counterfeit-prone brands)."""
+        if not seller_ids:
+            return {}
         rows = (
             await self.session.execute(
-                select(Listing.title_fingerprint, Listing.brand_id).where(
-                    Listing.seller_id == seller_id,
+                select(Listing.seller_id, Listing.title_fingerprint, Listing.brand_id).where(
+                    Listing.seller_id.in_(set(seller_ids)),
                     Listing.status == ListingStatus.ACTIVE,
                     Listing.first_seen_at >= now - timedelta(days=30),
                 )
             )
         ).all()
-        anomalies: list[str] = []
-        fps: dict[str | None, int] = {}
+        by_seller: dict[uuid.UUID, list[Any]] = {}
         for r in rows:
-            fps[r.title_fingerprint] = fps.get(r.title_fingerprint, 0) + 1
-        if any(n >= 3 for fp, n in fps.items() if fp):
-            anomalies.append("Molti annunci identici dello stesso venditore")
-        risky = sum(
-            1
-            for r in rows
-            if r.brand_id in catalog.brands_by_id and catalog.brands_by_id[r.brand_id].counterfeit_risk >= 0.3
-        )
-        if risky >= 4:
-            anomalies.append("Molti annunci di brand spesso contraffatti in poco tempo")
-        return tuple(anomalies)
+            by_seller.setdefault(r.seller_id, []).append(r)
+        out: dict[uuid.UUID, tuple[str, ...]] = {}
+        for seller_id, items in by_seller.items():
+            anomalies: list[str] = []
+            fps: dict[str | None, int] = {}
+            for r in items:
+                fps[r.title_fingerprint] = fps.get(r.title_fingerprint, 0) + 1
+            if any(n >= 3 for fp, n in fps.items() if fp):
+                anomalies.append("Molti annunci identici dello stesso venditore")
+            risky = sum(
+                1
+                for r in items
+                if r.brand_id in catalog.brands_by_id
+                and catalog.brands_by_id[r.brand_id].counterfeit_risk >= 0.3
+            )
+            if risky >= 4:
+                anomalies.append("Molti annunci di brand spesso contraffatti in poco tempo")
+            out[seller_id] = tuple(anomalies)
+        return out
 
     def subject_context(
         self, listing: Listing, catalog: Catalog, now: datetime, anomalies: tuple[str, ...]
@@ -261,87 +349,161 @@ class AnalysisPipeline:
     async def analyze_listing(
         self, listing_id: uuid.UUID, now: datetime | None = None
     ) -> AnalysisOutcome | None:
-        now = now or datetime.now(UTC)
-        listing = (
-            await self.session.execute(
-                select(Listing).options(selectinload(Listing.images)).where(Listing.id == listing_id)
-            )
-        ).scalar_one_or_none()
-        if listing is None:
-            return None
-        if listing.status != ListingStatus.ACTIVE:
-            await self.deactivate([listing.id])
-            return None
-        catalog = await load_catalog(self.session)
-        anomalies = await self.seller_anomalies(listing.seller_id, catalog, now)
-        subject = self.subject_context(listing, catalog, now, anomalies)
-        candidates = await self.candidates(subject.profile, catalog, listing.brand_id, now)
-        prior = await self.segment_prior(listing.brand_id, listing.category_id, listing.model_name)
-        result = run_analysis(
-            subject,
-            candidates,
-            now,
-            default_cost_profile(self.settings),
-            default_targets(self.settings),
-            prior,
-        )
-        return await self.persist(listing, result, now)
+        outcomes = await self.analyze_many([listing_id], now)
+        return outcomes[0] if outcomes else None
 
-    async def persist(self, listing: Listing, result: AnalysisResult, now: datetime) -> AnalysisOutcome:
-        previous = (
-            await self.session.execute(
-                select(Opportunity.id, Opportunity.flip_score, Opportunity.listing_price).where(
-                    Opportunity.listing_id == listing.id
+    async def analyze_many(
+        self, listing_ids: Sequence[uuid.UUID], now: datetime | None = None
+    ) -> list[AnalysisOutcome]:
+        """Analyse a batch of listings with a handful of queries instead of a dozen per listing.
+
+        Listings of the same brand and category family share one comparables pool; priors,
+        seller signals and all writes are fetched or flushed once for the whole batch.
+        Inactive listings are deactivated and skipped. Outcomes follow the input order.
+        """
+        now = now or datetime.now(UTC)
+        unique_ids = list(dict.fromkeys(listing_ids))
+        if not unique_ids:
+            return []
+        loaded = (
+            (
+                await self.session.execute(
+                    select(Listing).options(selectinload(Listing.images)).where(Listing.id.in_(unique_ids))
                 )
             )
-        ).one_or_none()
-        values = opportunity_values(listing, result, self.settings.algorithm_version, now)
-        stmt = pg_insert(Opportunity).values(id=uuid.uuid4(), created_at=now, **values)
-        stmt = stmt.on_conflict_do_update(index_elements=["listing_id"], set_=values).returning(
-            Opportunity.id
+            .unique()
+            .scalars()
+            .all()
         )
-        opportunity_id = (await self.session.execute(stmt)).scalar_one()
+        by_id = {listing.id: listing for listing in loaded}
+        inactive = [lid for lid, listing in by_id.items() if listing.status != ListingStatus.ACTIVE]
+        await self.deactivate(inactive)
+        listings = [
+            by_id[lid] for lid in unique_ids if lid in by_id and by_id[lid].status == ListingStatus.ACTIVE
+        ]
+        if not listings:
+            return []
 
-        await self.session.execute(
-            pg_insert(OpportunityScore).values(
-                opportunity_id=opportunity_id,
-                algorithm_version=self.settings.algorithm_version,
-                listing_price=listing.price,
-                flip_score=result.flip.score,
-                confidence_score=result.confidence.score,
-                risk_score=result.risk.score,
-                components=result.flip.components,
-                penalties=result.flip.penalties,
-                expected_roi=result.expected_roi,
-                computed_at=now,
-            )
+        catalog = await load_catalog(self.session)
+        anomalies = await self.sellers_anomalies(
+            [x.seller_id for x in listings if x.seller_id is not None], catalog, now
         )
-        await self.session.execute(delete(MarketComparable).where(MarketComparable.listing_id == listing.id))
-        comp_rows = [
-            {
-                "listing_id": listing.id,
-                "comparable_listing_id": c.item.id,
-                "similarity": Decimal(str(round(c.similarity, 4))),
-                "price": c.item.price,
-                "adjusted_price": Decimal(str(round(c.adjusted_price, 2))),
-                "weight": Decimal(str(round(min(c.weight, 999999), 4))),
-                "is_sold": c.is_sold,
-                "included": c.included,
-                "exclusion_reason": c.exclusion_reason,
-                "computed_at": now,
-            }
+        subjects = [
+            self.subject_context(x, catalog, now, anomalies.get(x.seller_id, ()) if x.seller_id else ())
+            for x in listings
+        ]
+        priors = await self.segment_priors([(x.brand_id, x.category_id, x.model_name) for x in listings])
+
+        pools: dict[tuple[int, tuple[int, ...]], CandidatePool] = {}
+        cost, targets = default_cost_profile(self.settings), default_targets(self.settings)
+        results: list[tuple[Listing, AnalysisResult]] = []
+        for listing, subject, prior in zip(listings, subjects, priors, strict=True):
+            if listing.brand_id is None:
+                cands = await self._unbranded_candidates(subject.profile, catalog, now)
+            else:
+                cat_ids = catalog.sibling_category_ids(subject.profile.category) or []
+                key = (listing.brand_id, tuple(sorted(cat_ids)))
+                if key not in pools:
+                    pools[key] = await self.candidate_pool(listing.brand_id, cat_ids, catalog, now)
+                cands = pools[key].for_subject(listing.id)
+            results.append((listing, run_analysis(subject, cands, now, cost, targets, prior)))
+        return await self.persist_many(results, now)
+
+    async def persist(self, listing: Listing, result: AnalysisResult, now: datetime) -> AnalysisOutcome:
+        return (await self.persist_many([(listing, result)], now))[0]
+
+    async def persist_many(
+        self, items: list[tuple[Listing, AnalysisResult]], now: datetime
+    ) -> list[AnalysisOutcome]:
+        """Upsert opportunities, append score history and replace comparables, all in bulk."""
+        version = self.settings.algorithm_version
+        ids = [listing.id for listing, _ in items]
+        previous = {
+            r.listing_id: r
+            for r in (
+                await self.session.execute(
+                    select(Opportunity.listing_id, Opportunity.flip_score, Opportunity.listing_price).where(
+                        Opportunity.listing_id.in_(ids)
+                    )
+                )
+            ).all()
+        }
+        # Sorted by key: concurrent batches lock opportunity rows in the same order.
+        ordered = sorted(items, key=lambda it: str(it[0].id))
+        rows = [
+            {"id": uuid.uuid4(), "created_at": now, **opportunity_values(listing, result, version, now)}
+            for listing, result in ordered
+        ]
+        stmt = pg_insert(Opportunity).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["listing_id"],
+            set_={k: stmt.excluded[k] for k in rows[0] if k not in ("id", "created_at", "listing_id")},
+        ).returning(Opportunity.id, Opportunity.listing_id)
+        opp_ids = {r.listing_id: r.id for r in (await self.session.execute(stmt)).all()}
+
+        # Core (not ORM) executemany: no per-row ORM bookkeeping on the hot path.
+        await self.session.execute(
+            OpportunityScore.__table__.insert(),
+            [
+                {
+                    "opportunity_id": opp_ids[listing.id],
+                    "algorithm_version": version,
+                    "listing_price": listing.price,
+                    "flip_score": result.flip.score,
+                    "confidence_score": result.confidence.score,
+                    "risk_score": result.risk.score,
+                    "components": result.flip.components,
+                    "penalties": result.flip.penalties,
+                    "expected_roi": result.expected_roi,
+                    "computed_at": now,
+                }
+                for listing, result in ordered
+            ],
+        )
+        await self.session.execute(delete(MarketComparable).where(MarketComparable.listing_id.in_(ids)))
+        records = [
+            (
+                listing.id,
+                c.item.id,
+                Decimal(str(round(c.similarity, 4))),
+                c.item.price,
+                Decimal(str(round(c.adjusted_price, 2))),
+                Decimal(str(round(min(c.weight, 999999), 4))),
+                c.is_sold,
+                c.included,
+                c.exclusion_reason,
+                now,
+            )
+            for listing, result in ordered
             for c in result.comparables
             if c.item.id is not None
         ]
-        if comp_rows:
-            await self.session.execute(pg_insert(MarketComparable).on_conflict_do_nothing(), comp_rows)
-        return AnalysisOutcome(
-            opportunity_id=opportunity_id,
-            listing_id=listing.id,
-            is_new=previous is None,
-            previous_flip_score=previous.flip_score if previous else None,
-            previous_price=previous.listing_price if previous else None,
-            result=result,
+        if records:
+            await self._copy_comparables(records)
+
+        return [
+            AnalysisOutcome(
+                opportunity_id=opp_ids[listing.id],
+                listing_id=listing.id,
+                is_new=listing.id not in previous,
+                previous_flip_score=previous[listing.id].flip_score if listing.id in previous else None,
+                previous_price=previous[listing.id].listing_price if listing.id in previous else None,
+                result=result,
+                listing=listing,
+            )
+            for listing, result in items
+        ]
+
+    async def _copy_comparables(self, records: list[tuple[Any, ...]]) -> None:
+        """Bulk-load comparables with PostgreSQL COPY (much faster than INSERT for thousands of rows).
+
+        Rows for these listings were deleted in this same transaction. If a concurrent batch
+        analysed the same listing, COPY fails on the unique key and the job is retried.
+        """
+        conn = await self.session.connection()
+        raw = await conn.get_raw_connection()
+        await raw.driver_connection.copy_records_to_table(  # type: ignore[union-attr]
+            MarketComparable.__tablename__, records=records, columns=COMPARABLE_COLUMNS
         )
 
     async def deactivate(self, listing_ids: list[uuid.UUID]) -> None:
