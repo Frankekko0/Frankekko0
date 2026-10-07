@@ -103,3 +103,27 @@ async def test_price_eval_report(session, make_listing) -> None:
     text = format_report(result)
     assert "Vendite concluse nel database" in text and "Modelli con almeno 5 vendite reali: 1 -> 1" in text
     assert "solo annunci" in text and "Decisione" in text
+
+
+async def test_worker_task_runs_in_full_then_incremental_and_one_at_a_time(session, make_listing) -> None:
+    from app.core.redis import redis_lock
+    from app.market.jobs import LOCK_TTL_SECONDS, sync_price_evidence_task
+
+    await history(session, make_listing)  # ends with a full sync of the concluded sales
+    first = await sync_price_evidence_task({})
+    assert first["full"] is False  # the last full sync is recent: incremental
+    assert first["sold_sales_after"] == 52 and first["stats_rows"] > 0
+    forced = await sync_price_evidence_task({}, full=True)
+    assert forced["full"] is True and forced["sold_sales_after"] == 52
+    second = await sync_price_evidence_task({})
+    assert second["full"] is False
+    assert second["synced"] == {
+        "own_sale": 0,
+        "own_purchase": 0,
+        "vinted_sold": 0,
+        "external_sold": 0,
+        "removed": 0,
+    }
+    async with redis_lock("price-evidence-sync", LOCK_TTL_SECONDS) as held:
+        assert held
+        assert await sync_price_evidence_task({}) == {"skipped": "already running"}
