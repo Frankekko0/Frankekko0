@@ -326,7 +326,9 @@ async def _record(
     """Update the cache row of one searched model."""
     previous = row.results or {}
     errors = int(previous.get("errors", 0)) + 1 if status == "error" else 0
-    values: dict[str, Any] = {"status": status, "updated_at": now}
+    # ``updated_at`` keeps meaning "last seen by an analysis" (``record_demand``), which the status
+    # uses to estimate the monthly consumption: a search does not touch it.
+    values: dict[str, Any] = {"status": status, "updated_at": ExternalSearch.updated_at}
     if status == "skipped_budget":
         await session.execute(
             update(ExternalSearch).where(ExternalSearch.model_key == row.model_key).values(**values)
