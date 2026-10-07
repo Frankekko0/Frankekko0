@@ -379,6 +379,12 @@ function metricsOf(l) {
   const lt = p.longtasks || [];
   const ltDuring = (a, b) => (a === null || b === null ? [] : lt.filter(([t, d]) => t + d > a && t < b).map(([, d]) => d));
   const q = p.atQuick || {};
+  let tj = null; // the extension's own timing (data-ff-timing): CPU spent reading cards, requests
+  try {
+    tj = p.timingJson ? JSON.parse(p.timingJson) : null;
+  } catch {
+    tj = null;
+  }
   return {
     "page.ttfb": n.ttfb,
     "page.response_end": n.responseEnd,
@@ -391,6 +397,7 @@ function metricsOf(l) {
     "ext.start_dom": extStart,
     "ext.cards_read_ms": cardsReadEnd !== null && cardsReadStart !== null ? cardsReadEnd - cardsReadStart : null,
     "ext.cards_read_at": cardsReadEnd,
+    "ext.read_cpu_ms": tj ? (tj.read_ms || 0) + (tj.scan_ms || 0) : null,
     "ext.first_quick": Number.isFinite(firstQuick) ? firstQuick : null,
     "ext.first_quick_from_di": Number.isFinite(firstQuick) && di ? firstQuick - di : null,
     "ext.best": best,
@@ -469,6 +476,7 @@ const LABELS = {
   "ext.start_dom": "Estensione: avvio sul documento",
   "ext.cards_read_ms": "Estensione: lettura schede (durata)",
   "ext.cards_read_at": "Estensione: schede lette",
+  "ext.read_cpu_ms": "Estensione: CPU per leggere le schede",
   "ext.first_quick": "Primo verdetto rapido",
   "ext.first_quick_from_di": "Primo verdetto rapido (da DOM)",
   "ext.best": "Migliore evidenziata",

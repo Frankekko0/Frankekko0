@@ -1,0 +1,29 @@
+{
+  "_about": "Real vinted.it pages (October 2026), trimmed and anonymised: ids of people and other items replaced, seller names, e-mails and image addresses replaced. Both parsers (server and extension) must read them like this.",
+  "item_active_plugins.html": {
+    "url": "https://www.vinted.it/items/9000000101-vintage-levis-501-size-w38-l36-made-in-france",
+    "title": "Vintage Levi’s 501 - Size W38 L36 - Made in France",
+    "price": "18.00",
+    "currency": "EUR",
+    "brand": "Levi's",
+    "size": "IT 48 | W38",
+    "condition": "very_good",
+    "color": "Blu, Azzurro",
+    "status": "active",
+    "status_source": "jsonld",
+    "images": 6
+  },
+  "item_active_no_jsonld.html": {
+    "url": "https://www.vinted.it/items/9000000102-polo-t-shirt",
+    "title": "Polo t shirt",
+    "price": "10.00",
+    "currency": "EUR",
+    "brand": "Polo Ralph Lauren",
+    "size": "XS",
+    "condition": "new_without_tags",
+    "color": "Bianco, Blu marino",
+    "status": "active",
+    "status_source": "default",
+    "images": 1
+  }
+}
