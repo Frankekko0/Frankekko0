@@ -54,7 +54,7 @@
   const registered = new WeakSet();
   const pendingCards = new Map(); // vid -> payload (to send)
   const deepState = new Map(); // vid -> reading | paused | error message
-  // This page's progress (reset on navigation): what went to FlipFinder, what came back, and
+  // This page's progress (per search; what was sent is never sent again): what went to FlipFinder, what came back, and
   // the timings exposed on <html> for measurement (data-ff-* attributes, ff:* marks).
   const page = {
     firstSent: false, // the best cards went out (the first, small capture request)
