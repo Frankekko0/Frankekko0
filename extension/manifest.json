@@ -24,7 +24,8 @@
   "permissions": [
     "storage",
     "alarms",
-    "sidePanel"
+    "sidePanel",
+    "scripting"
   ],
   "optional_host_permissions": [
     "http://*/*",

@@ -4,10 +4,11 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, Date, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Index, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, Ratio, Timestamped, UUIDPk
+from app.db.base import Base, Ratio, Timestamped, UUIDPk, utcnow
 
 
 class Favorite(UUIDPk, Timestamped, Base):
@@ -121,3 +122,21 @@ class UserAffinity(Base):
     saved_count: Mapped[int] = mapped_column(default=0)
     adjustment: Mapped[Decimal] = mapped_column(Ratio, default=Decimal("0"))
     updated_at: Mapped[datetime] = mapped_column()
+
+
+class MarketplaceAction(UUIDPk, Base):
+    """What happened on Vinted for a listing, in the user's own session: favourite added or
+    removed (by a click from FlipFinder, or as seen on the item page), checkout opened, purchase
+    completed with the price paid. Append-only: the latest row of a kind is the current state."""
+
+    __tablename__ = "marketplace_actions"
+    __table_args__ = (Index("ix_marketplace_actions_lookup", "user_id", "listing_id", "kind", "created_at"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    listing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(24))  # favourite | checkout_opened | purchased
+    value: Mapped[bool | None] = mapped_column(Boolean)  # favourite on/off
+    price: Mapped[Decimal | None] = mapped_column()
+    source: Mapped[str] = mapped_column(String(16))  # click | page | checkout | manual
+    detail: Mapped[dict | None] = mapped_column(JSONB)  # type: ignore[type-arg]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)

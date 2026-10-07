@@ -6,7 +6,7 @@ from app.db.models.listing import Listing, ListingImage, ListingPriceHistory, Li
 from app.db.models.market import MarketComparable, MarketStatistic
 from app.db.models.monitoring import Alert, AlertDelivery, Watchlist
 from app.db.models.opportunity import Opportunity, OpportunityScore
-from app.db.models.portfolio import Favorite, InventoryItem, Purchase, Sale, UserAffinity
+from app.db.models.portfolio import Favorite, InventoryItem, MarketplaceAction, Purchase, Sale, UserAffinity
 from app.db.models.seller import Seller
 from app.db.models.system import AnalysisJob, SystemState
 from app.db.models.user import ApiKey, NotificationSettings, PushSubscription, User, UserPreferences
@@ -27,6 +27,7 @@ __all__ = [
     "ListingSnapshot",
     "MarketComparable",
     "MarketStatistic",
+    "MarketplaceAction",
     "NotificationSettings",
     "Opportunity",
     "OpportunityScore",

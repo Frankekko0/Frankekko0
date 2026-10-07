@@ -18,11 +18,15 @@ Tutto viene salvato in FlipFinder, con la data, la modalità di acquisizione e l
     - al massimo una ogni 30 secondi e 20 all'ora;
     - solo mentre hai una scheda di Vinted aperta;
     - al primo rifiuto di Vinted si fermano per 6 ore, senza tentativi di aggiramento.
-- **Nessuna azione sul tuo account Vinted:** niente acquisti, offerte, preferiti o messaggi. Le azioni rapide ("Traccia", "Analisi approfondita", "Apri nella pagina di tracking") partono solo su tuo clic e agiscono su FlipFinder.
+- **Sul tuo account Vinted solo ciò che chiedi tu, un clic per un'azione.**
+  - **Preferiti** (pagina Analisi di FlipFinder): un clic apre l'annuncio in una scheda in background, preme una volta il cuore di Vinted, attende la conferma e chiude la scheda. Ogni volta che apri un annuncio, lo stato del cuore visto sulla pagina riallinea FlipFinder.
+  - **Acquista** (pagina Analisi, pagina di tracking, pannello): un clic apre l'annuncio e verifica disponibilità e prezzo. Se è venduto, riservato o il prezzo è cambiato lo vedi prima. Solo un secondo clic preme "Acquista" di Vinted e apre il suo checkout: il pagamento lo confermi tu su Vinted. FlipFinder registra "checkout aperto" e, sulla pagina di conferma della stessa scheda, "acquistato" con il totale pagato.
+  - Le richieste dalla pagina di FlipFinder sono accettate solo subito dopo un tuo clic reale, e solo per queste azioni. Niente offerte, messaggi o acquisti automatici.
+  - Le azioni rapide ("Traccia", "Analisi approfondita", "Apri nella pagina di tracking") agiscono solo su FlipFinder.
 - **Nessun cookie, token o credenziale di Vinted** viene letto o inviato.
   - L'estensione si autentica a FlipFinder con una **chiave dell'estensione** (`ff_ext_…`), creata e revocabile da FlipFinder.
   - Del venditore arrivano a FlipFinder solo valutazione, numero di recensioni e un'impronta non reversibile dell'ID: mai il nome utente.
-- **Permessi minimi:** `storage`, `alarms` e `sidePanel`.
+- **Permessi minimi:** `storage`, `alarms`, `sidePanel` e `scripting` (solo per collegare i tasti Preferiti/Acquista alla pagina di FlipFinder, all'indirizzo che autorizzi tu).
   - Gira solo sui domini `www.vinted.*`.
   - L'accesso all'indirizzo di FlipFinder viene chiesto al momento dell'associazione, non all'installazione.
 
@@ -56,7 +60,7 @@ Senza associazione resta il pulsante del popup **"Apri questa pagina in FlipFind
   - **Avvisi** visivi e sonori, disattivabili.
   - **Contatori:** visti, salvati, miglior margine.
   - **Classifica per ricerca:** si azzera quando cambi ricerca; puoi **bloccarla** ed **esportarla in CSV**.
-  - **Vista dettaglio** dell'annuncio aperto: tutte le foto, comparabili, segnali di rischio, "Traccia".
+  - **Vista dettaglio** dell'annuncio aperto: tutte le foto, comparabili, segnali di rischio, "Traccia", "Acquista su Vinted" (verifica, poi "Apri il checkout").
   - **Interruttore Live** per sospendere la valutazione.
 
   È un pannello laterale e non un riquadro flottante: non copre la griglia di Vinted, resta aperto mentre navighi e Chrome ne ricorda il lato e la larghezza.
@@ -71,7 +75,8 @@ Senza associazione resta il pulsante del popup **"Apri questa pagina in FlipFind
 
 | File | Ruolo |
 |---|---|
-| `manifest.json` | Manifest V3: content script solo su `www.vinted.*`; permessi `storage`, `alarms`, `sidePanel`; FlipFinder in `optional_host_permissions`. |
+| `manifest.json` | Manifest V3: content script solo su `www.vinted.*`; permessi `storage`, `alarms`, `sidePanel`, `scripting`; FlipFinder in `optional_host_permissions`. |
+| `src/app-bridge.js` | Solo sull'indirizzo di FlipFinder autorizzato: inoltra al service worker Preferiti/Acquista, e solo subito dopo un clic reale. Non passa cookie, token o password. |
 | `src/parser-config.js` | Copia di `backend/app/acquisition/vinted_parser.json`, la configurazione del parser condivisa con il server. L'estensione scarica le versioni nuove da FlipFinder (`/extension/parser-config`), quindi una correzione si fa in un punto solo, senza ripubblicare l'estensione. |
 | `src/parse.js` | Parser puro guidato dalla configurazione: annuncio (JSON-LD, script della pagina, meta, etichette in 15 lingue), schede, prezzi e valute, stato, record da inviare entro i limiti del server. |
 | `src/core.js` | Logica pura: opzioni, coda (un record per ID Vinted, nuovi tentativi con attesa crescente), ritmo delle letture, classifica live, export CSV. |
@@ -94,6 +99,8 @@ Test end-to-end con l'estensione vera in Chromium, su pagine Vinted finte (nessu
 APP_URL=http://localhost:3000 CHROME_PATH=/percorso/chrome node extension/e2e/live.e2e.cjs /tmp/screenshots
 # velocità del verdetto rapido su una ricerca da 96 articoli (tempo dalla lettura della pagina, CPU 4x, offline, scorrimento)
 APP_URL=http://localhost:3000 CHROME_PATH=/percorso/chrome node extension/e2e/speed.e2e.cjs
+# Preferiti e Acquista dalla pagina Analisi, dal tracking e dal pannello (Vinted finto in HTTPS locale; serve openssl)
+APP_URL=http://localhost:3000 CHROME_PATH=/percorso/chrome node extension/e2e/actions.e2e.cjs /tmp/screenshots
 ```
 
 ### Verdetto rapido

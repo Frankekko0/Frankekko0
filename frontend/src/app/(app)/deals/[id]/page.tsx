@@ -18,6 +18,7 @@ import {
 } from "@/components/deal/detail-sections";
 import { DataQualityBanner } from "@/components/deal/analysis-detail";
 import { AuthenticitySection, DecisionSection, InsightDetails } from "@/components/deal/decision";
+import { VintedActions } from "@/components/deal/vinted-actions";
 import { ListingImage } from "@/components/deal/listing-image";
 import { RiskBadge, ScoreRing } from "@/components/deal/score";
 import { PurchaseDialog } from "@/components/forms/flip-forms";
@@ -161,6 +162,15 @@ function Summary({ d }: { d: OpportunityDetail }) {
           {c.is_ultra_deal ? <Flame /> : <ExternalLink />} VIEW DEAL on {d.listing.provider === "vinted" ? "Vinted" : "the marketplace"}
         </a>
       </Button>
+      {c.is_active && (
+        <VintedActions
+          className="mt-2"
+          listingId={c.listing_id}
+          vintedId={d.listing.provider === "vinted" ? d.listing.external_id : null}
+          url={c.url}
+          price={c.listing_price}
+        />
+      )}
       <div className="mt-2 grid grid-cols-2 gap-2">
         <Button variant="outline" size="sm" onClick={() => setFav.mutate({ id: c.id, state: state === "saved" ? null : "saved" })}>
           {state === "saved" ? <BookmarkCheck className="text-accent" /> : <Bookmark />} {state === "saved" ? "Saved" : "Save"}

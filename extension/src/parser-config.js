@@ -1,7 +1,7 @@
 /* Generated from backend/app/acquisition/vinted_parser.json by tools/sync-parser-config.mjs.
  * Do not edit: change the JSON (the server and the extension share it) and run the tool. */
 globalThis.FF_PARSER_CONFIG = {
-  "version": "2026.10.7-1",
+  "version": "2026.10.7-2",
   "about": "Single source of Vinted selectors, labels and patterns, shared by the FlipFinder server (Python) and the browser extension (JavaScript). Regexes use only syntax common to both languages (numbered groups, no named groups). Edit here when Vinted changes its pages; the extension downloads it from the server.",
   "domains": [
     "vinted.it",
@@ -102,6 +102,26 @@ globalThis.FF_PARSER_CONFIG = {
     },
     "email_new_items": {
       "source": "(nuov[oi] articol|new items?|nouvel(le)?s? articles?|neue artikel|nuevos? artículos?|nieuwe artikel)",
+      "flags": "i"
+    },
+    "favourite_on": {
+      "source": "rimuovi dai preferiti|remove from favou?rites|retirer des favoris|aus (den )?favoriten entfernen|eliminar de favoritos|quitar de favoritos|unfavou?rite",
+      "flags": "i"
+    },
+    "buy_text": {
+      "source": "^(acquista|compra( ora)?|buy( now)?|acheter|kaufen|comprar)$",
+      "flags": "i"
+    },
+    "page_checkout": {
+      "source": "^/(checkout|transaction/buy|transactions?/\\d+/checkout)",
+      "flags": "i"
+    },
+    "purchase_done_path": {
+      "source": "^/(checkout/(success|complete|thank)|transactions?/\\d+/(completed|success)|inbox/\\d+)",
+      "flags": "i"
+    },
+    "purchase_done_text": {
+      "source": "pagamento (completato|riuscito|effettuato)|acquisto completato|grazie per (il tuo )?acquisto|payment (successful|complete)|purchase complete|paiement (réussi|effectué)|zahlung erfolgreich",
       "flags": "i"
     }
   },
@@ -411,7 +431,11 @@ globalThis.FF_PARSER_CONFIG = {
     "card_summary_link": "a[href*=\"/items/\"][title]",
     "gallery_container": "[data-testid=\"item-photos\"], [data-testid*=\"photo-gallery\"], [class*=\"item-photos\"]",
     "avatar_images": "header img, nav img, [data-testid*=\"avatar\"] img, [class*=\"avatar\" i] img, img[class*=\"avatar\" i], a[href*=\"/member/\"] img",
-    "card_exclude": "[data-testid*=\"owner\"], [data-testid*=\"avatar\"], [class*=\"avatar\" i], a[href*=\"/member/\"]"
+    "card_exclude": "[data-testid*=\"owner\"], [data-testid*=\"avatar\"], [class*=\"avatar\" i], a[href*=\"/member/\"]",
+    "favourite_button": "[data-testid=\"item-favourite-button\"], [data-testid*=\"favourite\"] button, button[data-testid*=\"favourite\"], button[aria-label*=\"preferit\" i], button[aria-label*=\"favourite\" i], button[aria-label*=\"favorite\" i], button[aria-label*=\"favoris\" i], button[aria-label*=\"favoriten\" i]",
+    "buy_button": "[data-testid=\"item-buy-button\"], button[data-testid*=\"buy\"], a[data-testid*=\"buy\"], [data-testid=\"item-sidebar\"] button[type=\"button\"]",
+    "signed_out_marker": "[data-testid=\"header--login-button\"], [data-testid*=\"header\"] a[href*=\"/member/signup\"], header a[href*=\"/member/login\"], header a[href*=\"/member/signup\"]",
+    "action_scope_exclude": "[data-testid^=\"product-item-id-\"], header, nav, footer"
   },
   "limits": {
     "title": 300,
@@ -484,6 +508,11 @@ globalThis.FF_PARSER_CONFIG = {
     ],
     "seller_reviews": [
       "feedback_count"
+    ],
+    "favourite_by_me": [
+      "is_favourite",
+      "is_favorite",
+      "is_favourited"
     ]
   }
 };

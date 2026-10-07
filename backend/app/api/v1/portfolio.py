@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.analytics.learning import recompute_user_affinities
 from app.analytics.portfolio import portfolio_summary, sale_figures
-from app.api.deps import DB, CurrentUser, Economics
+from app.api.deps import DB, CurrentUser, Economics, UserEconomics
 from app.core.cache import NS_FEED, cache
 from app.core.errors import AppError, ConflictError, NotFoundError
 from app.db.models import Brand, Category, Favorite, InventoryItem, Listing, Opportunity, Purchase, Sale
@@ -83,7 +83,17 @@ async def list_flips(user: CurrentUser, db: DB, status: str | None = None) -> li
 
 @router.post("/purchases", response_model=FlipOut, status_code=201)
 async def create_purchase(body: PurchaseIn, user: CurrentUser, econ: Economics, db: DB) -> FlipOut:
-    """Record a purchase. Linked to an opportunity it inherits brand/category/size and expected resale."""
+    purchase = await record_purchase(db, user.id, econ, body)
+    await db.commit()
+    await db.refresh(purchase)
+    await _refresh_learning(db, user.id)
+    await db.refresh(purchase)
+    return flip_out(purchase)
+
+
+async def record_purchase(db: DB, user_id: uuid.UUID, econ: UserEconomics, body: PurchaseIn) -> Purchase:
+    """Record a purchase with its inventory item and mark the listing as purchased (no commit).
+    Linked to an opportunity it inherits brand/category/size and expected resale."""
     listing: Listing | None = None
     opp: Opportunity | None = None
     if body.opportunity_id:
@@ -122,7 +132,7 @@ async def create_purchase(body: PurchaseIn, user: CurrentUser, econ: Economics, 
     shipping = body.shipping_cost if body.shipping_cost is not None else default_acq.shipping
     total = body.purchase_price + bp + shipping + body.other_costs
     purchase = Purchase(
-        user_id=user.id,
+        user_id=user_id,
         listing_id=listing.id if listing else None,
         opportunity_id=opp.id if opp else None,
         title=body.title,
@@ -145,7 +155,7 @@ async def create_purchase(body: PurchaseIn, user: CurrentUser, econ: Economics, 
     await db.flush()
     db.add(
         InventoryItem(
-            user_id=user.id,
+            user_id=user_id,
             purchase_id=purchase.id,
             status=InventoryStatus.IN_STOCK.value,
             estimated_value=purchase.expected_sale_price,
@@ -155,7 +165,7 @@ async def create_purchase(body: PurchaseIn, user: CurrentUser, econ: Economics, 
         now = datetime.now(UTC)
         stmt = pg_insert(Favorite).values(
             id=uuid.uuid4(),
-            user_id=user.id,
+            user_id=user_id,
             listing_id=listing.id,
             opportunity_id=opp.id if opp else None,
             state=FavoriteState.PURCHASED.value,
@@ -168,11 +178,7 @@ async def create_purchase(body: PurchaseIn, user: CurrentUser, econ: Economics, 
                 set_={"state": FavoriteState.PURCHASED.value, "updated_at": now},
             )
         )
-    await db.commit()
-    await db.refresh(purchase)
-    await _refresh_learning(db, user.id)
-    await db.refresh(purchase)
-    return flip_out(purchase)
+    return purchase
 
 
 @router.patch("/purchases/{purchase_id}", response_model=FlipOut)

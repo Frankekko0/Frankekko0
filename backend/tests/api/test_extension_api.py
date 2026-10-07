@@ -194,3 +194,54 @@ async def test_market_summary_for_the_instant_verdict(auth_client: httpx.AsyncCl
     assert (await auth_client.put(f"{API}/settings/preferences", json=prefs)).status_code == 200
     again = (await auth_client.get(f"{API}/extension/market-cache", headers=headers)).json()
     assert again["costs"]["shipping_in"] == 7.5 and again["version"] != m["version"]
+
+
+async def test_vinted_favourite_and_purchase_are_recorded(
+    auth_client: httpx.AsyncClient, make_listing
+) -> None:
+    from app.db.session import session_scope
+    from app.domain.enums import AcquisitionMode
+    from app.ingestion.service import IngestionService
+    from tests.conftest import NOW
+
+    async with session_scope() as s:
+        res = await IngestionService(s, "vinted", AcquisitionMode.EXTENSION_ITEM).ingest(
+            [make_listing(price=20, external_id="5551112223")], now=NOW
+        )
+    lid = str(res.new_ids[0])
+    empty = (await auth_client.get(f"{API}/listings/{lid}/vinted")).json()
+    assert empty == {"favourite": None, "checkout_opened": None, "purchased": None}
+
+    on = (
+        await auth_client.post(f"{API}/listings/{lid}/vinted", json={"kind": "favourite", "value": True})
+    ).json()
+    assert on["favourite"]["value"] is True and on["favourite"]["source"] == "click"
+    off = (
+        await auth_client.post(f"{API}/listings/{lid}/vinted", json={"kind": "favourite", "value": False})
+    ).json()
+    assert off["favourite"]["value"] is False  # the latest state wins
+    started = (
+        await auth_client.post(f"{API}/listings/{lid}/vinted", json={"kind": "checkout_opened", "price": 20})
+    ).json()
+    assert started["checkout_opened"]["price"] == 20 and started["purchased"] is None
+
+    # The extension sees the completed checkout (user confirmed the payment on Vinted).
+    headers = await _paired(auth_client)
+    body = {
+        "vinted_id": "5551112223",
+        "kind": "purchased",
+        "price": 25.19,
+        "source": "checkout",
+        "detail": {"item_price": 20},
+    }
+    done = (await auth_client.post(f"{API}/capture/vinted-actions", json=body, headers=headers)).json()
+    assert done["purchased"]["price"] == 25.19
+    again = await auth_client.post(f"{API}/capture/vinted-actions", json=body, headers=headers)
+    assert again.status_code == 201
+    flips = (await auth_client.get(f"{API}/flips")).json()
+    assert len(flips) == 1  # recorded once, however many times the success page is seen
+    assert flips[0]["purchase_price"] == 20 and abs(flips[0]["total_cost"] - 25.19) < 0.01  # the total paid
+    unknown = await auth_client.post(
+        f"{API}/capture/vinted-actions", json={**body, "vinted_id": "999"}, headers=headers
+    )
+    assert unknown.status_code == 404

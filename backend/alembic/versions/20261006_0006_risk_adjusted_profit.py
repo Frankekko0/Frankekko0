@@ -31,5 +31,10 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_opportunities_active_rap", table_name="opportunities")
-    for col in ("authenticity_verdict", "authenticity_probability", "sale_probability", "risk_adjusted_profit"):
+    for col in (
+        "authenticity_verdict",
+        "authenticity_probability",
+        "sale_probability",
+        "risk_adjusted_profit",
+    ):
         op.drop_column("opportunities", col)

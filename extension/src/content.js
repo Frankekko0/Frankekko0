@@ -448,6 +448,7 @@
       for (const n of m.addedNodes) if (n.nodeType === 1 && n.tagName !== "FF-BADGE" && !(n.id || "").startsWith("flipfinder")) addedRoots.add(n);
     }
     if (location.href !== lastHref) onNavigate();
+    if (onCheckoutPath()) purchaseSoon(); // the confirmation may render well after load
     if (addedRoots.size) scanSoon();
     if (pageType === "item" && itemCapture.waiting) itemCapture.retrySoon();
   });
@@ -698,6 +699,9 @@
       this.sent = true;
       itemBox.render();
       send({ type: "ff:item", vid: this.vid, payload, pageUrl: location.href });
+      // Your favourite state on Vinted, as this page shows it (keeps FlipFinder aligned).
+      const fav = favouriteButton();
+      if (fav && !signedOut()) send({ type: "ff:favourite-seen", vid: this.vid, value: isFavourite(fav) });
     },
   };
 
@@ -840,6 +844,103 @@
     return payload ? { outcome: "ok", status: 200, payload } : { outcome: "error", status: 200, message: "Valuta non supportata o dati non validi." };
   }
 
+  // ------------------------------------------------------------------ actions on Vinted (your click in FlipFinder)
+  // Favourite and Buy are done here, in your Vinted session, by clicking Vinted's own buttons
+  // once - only when you asked from FlipFinder. Nothing is paid: the checkout waits for you.
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function actionButtons(selector) {
+    const S = C.selectors;
+    return [...document.querySelectorAll(selector || "")].filter((el) => !(S.action_scope_exclude && el.closest(S.action_scope_exclude)) && el.offsetParent !== null);
+  }
+
+  function favouriteButton() {
+    return actionButtons(C.selectors.favourite_button)[0] || null;
+  }
+
+  function isFavourite(btn) {
+    if (!btn) return null;
+    const pressed = btn.getAttribute("aria-pressed");
+    if (pressed === "true" || pressed === "false") return pressed === "true";
+    const label = `${btn.getAttribute("aria-label") || ""} ${btn.getAttribute("title") || ""} ${text(btn)}`;
+    return Boolean(C.patterns.favourite_on && C.patterns.favourite_on.test(label));
+  }
+
+  function buyButton() {
+    const rx = C.patterns.buy_text;
+    const all = actionButtons(C.selectors.buy_button);
+    return all.find((b) => /buy/i.test(b.getAttribute("data-testid") || "")) || all.find((b) => rx && rx.test(text(b))) || null;
+  }
+
+  const signedOut = () => Boolean(C.selectors.signed_out_marker && document.querySelector(C.selectors.signed_out_marker));
+
+  async function itemSnapshot(vid) {
+    // The page may still be rendering: wait for the item data (and the buttons) a few seconds.
+    let parsed = null;
+    for (let i = 0; i < 20; i += 1) {
+      parsed = P.parseItem(collectDocument(scriptsAreFresh()), location.href, Date.now(), C, { useScripts: scriptsAreFresh() });
+      if (parsed.complete && (favouriteButton() || buyButton() || signedOut() || parsed.status !== "active")) break;
+      await sleep(400);
+    }
+    const fav = favouriteButton();
+    return {
+      vid,
+      status: parsed ? parsed.status : "unknown",
+      price: parsed ? parsed.price : null,
+      currency: parsed ? parsed.currency : null,
+      title: parsed ? parsed.title : null,
+      signedIn: !signedOut(),
+      favourite: isFavourite(fav),
+      canFavourite: Boolean(fav),
+      canBuy: Boolean(buyButton()),
+    };
+  }
+
+  async function vintedAct(msg) {
+    if (pageType !== "item" || P.itemId(location.href, C) !== String(msg.vid)) return { ok: false, code: "wrong_page", message: "Pagina dell'annuncio non aperta." };
+    const snap = await itemSnapshot(String(msg.vid));
+    if (msg.action === "state") return { ok: true, ...snap };
+    if (!snap.signedIn) return { ok: false, code: "signed_out", message: "Non sei collegato a Vinted in questo browser: accedi su Vinted e riprova.", ...snap };
+    if (msg.action === "favourite") {
+      const btn = favouriteButton();
+      if (!btn) return { ok: false, code: "no_button", message: "Pulsante dei preferiti non trovato in questa pagina (configurazione da aggiornare).", ...snap };
+      if (snap.favourite === Boolean(msg.want)) return { ok: true, changed: false, ...snap };
+      btn.click(); // one click, as you would
+      for (let i = 0; i < 15; i += 1) {
+        await sleep(200);
+        const now = isFavourite(favouriteButton());
+        if (now === Boolean(msg.want)) return { ok: true, changed: true, ...snap, favourite: now };
+        if (signedOut()) break;
+      }
+      return { ok: false, code: signedOut() ? "signed_out" : "not_confirmed", message: signedOut() ? "Vinted chiede di accedere: accedi e riprova." : "Vinted non ha confermato il cambio: controlla la pagina.", ...snap, favourite: isFavourite(favouriteButton()) };
+    }
+    if (msg.action === "buy") {
+      if (snap.status !== "active") return { ok: false, code: snap.status, message: "L'articolo non è più acquistabile.", ...snap };
+      const btn = buyButton();
+      if (!btn) return { ok: false, code: "no_button", message: "Tasto Acquista non trovato in questa pagina (configurazione da aggiornare).", ...snap };
+      btn.click(); // opens Vinted's checkout: the payment is confirmed by you
+      return { ok: true, ...snap };
+    }
+    return { ok: false, code: "unknown", message: "Azione non supportata." };
+  }
+
+  /** The checkout you confirmed is complete: total paid, read from the page you are on. */
+  function purchaseDone() {
+    const path = location.pathname;
+    const pat = C.patterns;
+    const body = (document.body && document.body.innerText) || "";
+    const done = (pat.purchase_done_path && pat.purchase_done_path.test(path) && (!pat.purchase_done_text || pat.purchase_done_text.test(body) || /checkout|transaction/.test(path))) ||
+      (pat.page_checkout && pat.page_checkout.test(path) && pat.purchase_done_text && pat.purchase_done_text.test(body));
+    if (!done) return null;
+    let total = null;
+    for (const line of body.split("\n")) {
+      if (!/total|totale|gesamt/i.test(line)) continue;
+      const hit = P.findPrice(line, C);
+      if (hit && (!total || hit.price > total)) total = hit.price;
+    }
+    return { url: location.origin + path, total };
+  }
+
   // ------------------------------------------------------------------ navigation
   function onNavigate() {
     lastHref = location.href;
@@ -853,6 +954,7 @@
       itemCapture.waiting = false;
       itemBox.unmount();
     }
+    checkPurchase();
     addedRoots.clear();
     bestBox.closed = false;
     bestBox.vid = null;
@@ -915,6 +1017,9 @@
         sendResponse({ ok: Boolean(card) });
         return false;
       }
+      case "ff:vinted-act":
+        vintedAct(msg).then(sendResponse, () => sendResponse({ ok: false, code: "error", message: "Errore nella pagina di Vinted." }));
+        return true;
       case "flipfinder:prepare":
         prepareLink().then(sendResponse);
         return true;
@@ -987,6 +1092,36 @@
     }
   });
 
+  let purchaseReported = null;
+  function onCheckoutPath() {
+    const pat = C.patterns;
+    return Boolean((pat.purchase_done_path && pat.purchase_done_path.test(location.pathname)) || (pat.page_checkout && pat.page_checkout.test(location.pathname)));
+  }
+  const purchaseSoon = debounce(() => checkPurchase(), 500);
+
+  let purchaseWait = null;
+  function checkPurchase() {
+    if (!paired) return;
+    const done = purchaseDone();
+    if (!done || purchaseReported === done.url) return;
+    if (done.total === null) {
+      // The total paid may render a moment later: wait for it, then report what the page shows.
+      purchaseWait = purchaseWait || setTimeout(() => {
+        const last = purchaseDone();
+        if (last && purchaseReported !== last.url) reportPurchase(last);
+      }, 6000);
+      return;
+    }
+    reportPurchase(done);
+  }
+
+  function reportPurchase(done) {
+    clearTimeout(purchaseWait);
+    purchaseWait = null;
+    purchaseReported = done.url;
+    send({ type: "ff:purchase-done", ...done });
+  }
+
   const domReady = () =>
     document.readyState === "loading" ? new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true })) : Promise.resolve();
 
@@ -1011,6 +1146,7 @@
     await domReady();
     mark("dom");
     mo.observe(document.body, { childList: true, subtree: true });
+    setTimeout(checkPurchase, 600); // the confirmation text may render a moment after load
     if (pageType === "item") {
       itemBox.render();
       if (paired) itemCapture.start();

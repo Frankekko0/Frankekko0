@@ -27,7 +27,9 @@ test("the extension runs on exactly the Vinted domains of the configuration", ()
   const manifest = JSON.parse(readFileSync(join(here, "..", "manifest.json"), "utf8"));
   const hosts = manifest.content_scripts[0].matches.map((m) => new URL(m.replace("/*", "/")).hostname.replace(/^www\./, ""));
   assert.deepEqual([...hosts].sort(), [...C.domains].sort());
-  assert.deepEqual(manifest.permissions.sort(), ["alarms", "sidePanel", "storage"]);
+  // scripting: only to place the Favourite/Buy bridge on the FlipFinder address you grant at
+  // pairing time (unknown at build time); it adds no site access by itself.
+  assert.deepEqual(manifest.permissions.sort(), ["alarms", "scripting", "sidePanel", "storage"]);
   assert.equal(manifest.host_permissions, undefined); // FlipFinder's address is asked at pairing time only
 });
 

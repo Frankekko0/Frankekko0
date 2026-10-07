@@ -30,6 +30,7 @@ import { CAPTURE_LABEL, CONDITION_LABEL, MODE_LABEL, STATUS_LABEL, eur, pct, sho
 import { useItem, useRefreshItem, useTrackItem } from "@/lib/queries";
 import type { AnalysisSummary, ItemDetail, MarketComparison, Snapshot, TimeOnline } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { VintedActions } from "@/components/deal/vinted-actions";
 import { Gallery } from "./gallery";
 
 const STATUS_TONE: Record<string, BadgeTone> = {
@@ -127,6 +128,9 @@ function StatusPanel({ d }: { d: ItemDetail }) {
           >
             {t.tracked ? <EyeOff /> : <Eye />} {t.tracked ? "Stop tracking" : "Track"}
           </Button>
+          {!closed && (
+            <VintedActions listingId={d.item.id} vintedId={d.item.vinted_id} url={d.item.url} price={d.item.price} showFavourite={false} />
+          )}
         </div>
       </div>
 

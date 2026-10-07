@@ -44,11 +44,29 @@ Aggiornato a ogni passo: **fatto**, **in corso**, **ipotesi**.
   - Produzione (`docker-compose.prod.yml`, `deploy/`): Caddy con HTTPS automatico (o Tailscale), API e web app non esposte, registrazione chiusa dopo il primo account, cookie Secure, backup prima di ogni avvio e ogni giorno con rotazione + ripristino, registro errori su volume visibile in Impostazioni → Error log.
   - Verifiche sullo stack reale: HTTP→HTTPS 308, HSTS/CSP, owner 201 e secondo account 400, cookie Secure+HttpOnly, backup scritti, 16 pagine/schede senza tracce demo né errori, estensione collegata via HTTPS (sync ok, 24 annunci salvati). Trovati e corretti 3 difetti reali: segreto JWT non passato ai container, Caddy bloccato da e-mail vuota, cartella log non scrivibile.
 
+- **Obiettivi 5-6: tasti Preferiti e Acquista** (pagina Analisi; Acquista anche in tracking e nel pannello)
+  - Backend: tabella `marketplace_actions` (migrazione `0008`), `GET/POST /listings/{id}/vinted`, `POST /capture/vinted-actions` (chiave dell'estensione). "Acquistato" crea l'acquisto una sola volta con il prezzo dell'articolo e, dal totale pagato, la spedizione.
+  - Estensione: ponte solo sull'indirizzo di FlipFinder autorizzato, attivo solo dopo un clic reale. Il cuore viene premuto una volta e poi confermato. Acquista verifica stato e prezzo, e solo un secondo clic apre il checkout. L'acquisto è attribuito solo alla scheda in cui è stato avviato il checkout, e un checkout abbandonato non viene registrato.
+  - Verifica e2e (`extension/e2e/actions.e2e.cjs`, estensione vera, Vinted finto in HTTPS):
+    - richiesta senza clic rifiutata (`no_click`), azione non prevista rifiutata;
+    - aggiunta e rimozione dai preferiti allineate tra Vinted e FlipFinder;
+    - cuore cambiato su Vinted → riallineato alla visita successiva;
+    - utente non collegato a Vinted → avviso, nessun clic;
+    - checkout aperto a 20 € → pagamento confermato → registrato 25,19 € pagati, nei Flip prezzo 20 € e costo totale 25,19 €;
+    - prezzo cambiato (30 → 27 €) e articolo riservato segnalati prima del checkout;
+    - pannello: prezzo cambiato 27 → 25 €, poi checkout aperto;
+    - checkout abbandonato non registrato come acquisto.
+  - Difetti reali trovati dal test e corretti:
+    - schede dell'estensione non raggiungibili dal pannello aperto come scheda;
+    - lettura del cuore inviata prima che l'annuncio fosse registrato (404);
+    - totale pagato perso quando la conferma compare dopo il caricamento;
+    - possibile attribuzione di un acquisto all'articolo sbagliato.
+
 ## Da fare da te
 - Eliminare i dati demo dal DB di sviluppo di questa sessione: la cancellazione è stata bloccata dal controllo di sicurezza (backup già fatto). Sul tuo server la migrazione 0007 lo fa da sola all'avvio, dopo il backup automatico.
 
 ## In corso
-- Obiettivi 5-6: tasti Preferiti e Acquista.
+- Nessuno.
 
 ## Ipotesi
 - Le misure di errore sono sul mercato simulato (nel DB c'è 1 sola vendita reale): sulle tue vendite reali la calibrazione si attiva da sola dopo 30 vendite osservate; le tue rivendite pesano 5 volte.
@@ -61,3 +79,7 @@ Aggiornato a ogni passo: **fatto**, **in corso**, **ipotesi**.
 - Prezzo di listino e periodo di uscita: nessuna fonte pubblica affidabile; mostrato solo il prezzo originale dichiarato dal venditore nel testo.
 - La pagina "salvata" del test è costruita sulla struttura nota di Vinted (non ho una tua pagina reale): se ne salvi una (Ctrl+S) in `backend/tests/fixtures/vinted/real/`, va aggiunta ai test.
 - Foto di articoli suggeriti presenti una sola volta in analisi salvate con la versione vecchia non sono riconoscibili dall'URL: vengono sostituite alla prossima apertura dell'annuncio (cattura dalla galleria = autorevole).
+- Preferiti/Acquista: i selettori del cuore, del tasto "Acquista" e della pagina di pagamento completato sono costruiti sulla struttura nota di Vinted, non verificati su Vinted reale (nessun accesso da qui). Se cambiano si correggono in `vinted_parser.json`, senza ripubblicare l'estensione. In caso di dubbio l'estensione si ferma e lo dice, non clicca a caso.
+- Il test e2e dei tasti gira su un database separato e vuoto (`flipfinder_e2e`), perché il DB di sviluppo non può passare alla migrazione 0008 senza la 0007 bloccata. Il backend di sviluppo sulla porta 8000 è ancora la versione precedente.
+- Permesso `scripting` aggiunto all'estensione, e aggiornato il test che fissa l'elenco dei permessi: è l'unico modo per agganciare la pagina di FlipFinder a un indirizzo scelto da te, e non dà accesso a nuovi siti.
+- Acquisto registrato solo dalla pagina di conferma nella stessa scheda del checkout avviato da FlipFinder. Se paghi altrove usa "I bought it". Se il totale non è leggibile si registra il prezzo dell'articolo.
