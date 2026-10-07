@@ -9,7 +9,7 @@ from app.api.v1 import pricing
 from app.db.session import session_scope
 from app.market.state import set_state
 from app.pricing.evidence import GATE_KEY
-from tests.api.test_api import API
+from tests.api.test_api import API, seed_deal
 from tests.api.test_extension_api import _paired
 
 STATUS = {
@@ -137,3 +137,38 @@ async def test_refresh_reports_a_queue_outage(
     monkeypatch.setattr(pricing, "enqueue", down)
     r = await auth_client.post(f"{API}/pricing/evidence/refresh")
     assert r.status_code == 503 and r.json()["error"]["code"] == "queue_unavailable"
+
+
+async def test_analysis_detail_carries_provenance(auth_client: httpx.AsyncClient, make_listing: Any) -> None:
+    opp_id = await seed_deal(make_listing)
+    detail = (await auth_client.get(f"{API}/opportunities/{opp_id}")).json()
+    prov = detail["provenance"]
+    assert {
+        "expected_price",
+        "price_range",
+        "days_to_sell",
+        "sale_probability",
+        "real_sales",
+        "external",
+    } <= set(prov)
+    assert prov["expected_price"]["label"]
+    assert prov["expected_price"]["basis"] in ("sold", "mixed", "asking", "prior", "none")
+    # The item page (and the extension's live panel) shows it too.
+    headers = await _paired(auth_client)
+    captured = await auth_client.post(
+        f"{API}/capture/item",
+        json={
+            "item": {
+                "url": "https://www.vinted.it/items/7001-polo",
+                "title": "Polo Ralph Lauren",
+                "brand": "Ralph Lauren",
+                "size": "M",
+                "condition": "Ottime condizioni",
+                "price": 14,
+            }
+        },
+        headers=headers,
+    )
+    assert captured.status_code == 200, captured.text
+    item = (await auth_client.get(f"{API}/items/7001")).json()
+    assert item["analysis"]["provenance"]["expected_price"]["label"]
