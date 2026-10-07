@@ -17,7 +17,7 @@ from sqlalchemy import func, select, update
 
 from app.acquisition.evaluations import quick_evaluations
 from app.acquisition.identity import listing_identity
-from app.acquisition.market_cache import build_market_cache
+from app.acquisition.market_cache import build_market_cache, identify_card
 from app.acquisition.service import import_links
 from app.acquisition.vinted_parser import config_json, load_config
 from app.api.deps import DB, CaptureEconomics, CaptureUser, CurrentUser
@@ -32,6 +32,7 @@ from app.core.security import hash_api_key, new_api_key
 from app.db.models import ApiKey, Listing, Opportunity, SystemState
 from app.domain.enums import OPEN_STATUSES, AcquisitionMode, CaptureLevel, StatusEvidence
 from app.ingestion.catalog import load_catalog
+from app.market.model_stats import lookup_stats
 from app.media.archive import schedule_archive
 from app.schemas.extension import (
     ApiKeyCreated,
@@ -42,6 +43,8 @@ from app.schemas.extension import (
     CaptureItemIn,
     CaptureItemOut,
     EvaluationsIn,
+    PageStatsIn,
+    PageStatsOut,
     QuickEval,
     RefreshResultIn,
     TrackIn,
@@ -59,6 +62,7 @@ MAX_ACTIVE_KEYS = 10
 REFRESH_LEASE = timedelta(minutes=30)
 capture_limit = RateLimit("capture", per_minute=90)
 item_limit = RateLimit("capture-item", per_minute=40)
+page_stats_limit = RateLimit("page-stats", per_minute=60)
 
 
 # ------------------------------------------------------------------ pairing (web app session)
@@ -137,6 +141,32 @@ async def market_cache(
     return await cache.get_or_set(
         NS_FEED, ("market-cache", str(user.id)), 900, lambda: build_market_cache(db, catalog, econ)
     )
+
+
+@router.post(
+    "/extension/page-stats",
+    response_model=PageStatsOut,
+    dependencies=[Depends(page_stats_limit)],
+)
+async def page_stats(body: PageStatsIn, user: CaptureUser, db: DB) -> dict[str, Any]:
+    """Pre-computed price statistics for every card of a search page, in ONE query.
+
+    The server recognises brand, category and model from each card's title and brand (the same
+    engine as a capture) and answers from ``model_price_stats`` with the most specific segment
+    that has data (model + size + condition down to brand + category, concluded sales first).
+    Nothing is stored, analysed or searched: the extension refines its instant verdicts with it
+    while the full analyses are on their way."""
+    catalog = await load_catalog(db)
+    cards = {
+        i.vinted_id: identify_card(i.vinted_id, i.title, i.brand, i.size, i.condition, catalog)
+        for i in body.items
+    }
+    stats = await lookup_stats(db, [c.query for c in cards.values()])
+    for ref, st in stats.items():
+        card = cards[ref]
+        st["brand"] = st["brand"] or card.brand
+        st["category"] = st["category"] or card.category
+    return {"generated_at": datetime.now(UTC), "stats": stats}
 
 
 @router.get("/extension/parser-config", response_model=dict[str, Any])

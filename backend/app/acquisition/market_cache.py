@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -22,8 +23,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import UserEconomics
 from app.authenticity.assess import MAX_P, brand_rules, load_rules
+from app.domain.enums import Condition
+from app.identification.engine import ListingText
 from app.identification.taxonomy import SUSPICIOUS_PATTERNS, fold
 from app.ingestion.catalog import Catalog
+from app.ingestion.normalizer import normalize_condition, normalize_size
+from app.ingestion.service import get_engine
+from app.market.model_stats import StatQuery
 from app.opportunities.insights import HORIZON_DAYS, MIN_OUTCOMES
 from app.pricing.comparables import CONDITION_MULTIPLIER
 from app.pricing.market_value import SOLD_ONLY_MIN
@@ -52,6 +58,41 @@ _SEGMENTS = text(
     GROUP BY GROUPING SETS ((brand_id, category_id), (brand_id))
     """
 )
+
+
+@dataclass(frozen=True)
+class CardIdentity:
+    """What the server recognises in a search-page card (same engine as a stored capture)."""
+
+    query: StatQuery
+    brand: str | None
+    category: str | None
+
+
+def identify_card(
+    vinted_id: str, title: str, brand: str | None, size: str | None, condition: str | None, catalog: Catalog
+) -> CardIdentity:
+    """Brand, category, model, size and condition of a card, normalised exactly like
+    ``app.ingestion.service.listing_columns`` does for a captured listing, so the statistics
+    looked up for the card are the ones its analysis would use ("Ottime condizioni" ->
+    ``very_good``, "42" on sneakers -> ``EU42``)."""
+    ident = get_engine(catalog.taxonomy).identify(
+        ListingText(title=title, brand_field=brand, size_field=size, condition=condition)
+    )
+    category = ident.category.value
+    cond = normalize_condition(condition)
+    return CardIdentity(
+        query=StatQuery(
+            ref=vinted_id,
+            brand_id=catalog.brand_id(ident.brand.value),
+            category_id=catalog.category_id(category),
+            model_name=ident.model.value or None,
+            size=ident.size.value or normalize_size(size, category, ident.gender.value),
+            condition=None if cond == Condition.UNKNOWN else cond.value,
+        ),
+        brand=ident.brand.value,
+        category=category,
+    )
 
 
 def _p_sale(succ: int, fail: int) -> float | None:
