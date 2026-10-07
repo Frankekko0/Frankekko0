@@ -878,15 +878,26 @@
     return all.find((b) => b.getAttribute("data-testid") === "item-buy-button") || all.find((b) => rx && rx.test(text(b))) || null;
   }
 
+  // Vinted's buttons are in the served HTML before its scripts make them work: a click before
+  // that would be lost. Clicks wait for the page's load event (and a short settle), a few seconds at most.
+  const pageLoaded = () =>
+    Promise.race([
+      document.readyState === "complete" ? Promise.resolve() : new Promise((resolve) => addEventListener("load", resolve, { once: true })),
+      sleep(12000),
+    ]).then(() => sleep(400));
+
   const signedOut = () => Boolean(C.selectors.signed_out_marker && document.querySelector(C.selectors.signed_out_marker));
 
   async function itemSnapshot(vid) {
     // The page may still be rendering: wait for the item data (and the buttons) a few seconds.
+    // Time-bound, not count-bound: in a background tab the browser slows timers down to 1/s.
     let parsed = null;
-    for (let i = 0; i < 20; i += 1) {
+    const until = Date.now() + 10000;
+    for (;;) {
       parsed = P.parseItem(collectDocument(scriptsAreFresh()), location.href, Date.now(), C, { useScripts: scriptsAreFresh() });
       if (parsed.complete && (favouriteButton() || buyButton() || signedOut() || parsed.status !== "active")) break;
-      await sleep(400);
+      if (Date.now() > until) break;
+      await sleep(250);
     }
     const fav = favouriteButton();
     return {
@@ -910,9 +921,23 @@
   }
 
   async function vintedAct(msg) {
+    // Asked as soon as the tab answers: the document (and the settings) first, a few seconds at most.
+    await Promise.race([Promise.all([domReady(), started]), sleep(8000)]);
+    // A tab sent to a new address answers only from the new page, never from the one it is leaving.
+    if (msg.after && performance.timeOrigin + 300 < msg.after) return null;
     if (pageType !== "item" || P.itemId(location.href, C) !== String(msg.vid)) return { ok: false, code: "wrong_page", message: "Pagina dell'annuncio non aperta." };
     const snap = await itemSnapshot(String(msg.vid));
     if (msg.action === "state") return { ok: true, ...snap };
+    if (msg.action === "buy") {
+      // Checked right before the click, on the page as it is now: never a purchase of something
+      // else than what you saw in FlipFinder.
+      if (snap.status !== "active") return { ok: false, code: snap.status, message: "L'articolo non è più acquistabile.", ...snap };
+      const expect = msg.expect_price === undefined || msg.expect_price === null ? null : Number(msg.expect_price);
+      if (expect !== null) {
+        if (typeof snap.price !== "number") return { ok: false, code: "no_price", message: "Non riesco a leggere il prezzo su Vinted: nessun clic fatto.", ...snap };
+        if (Math.abs(snap.price - expect) >= 0.01) return { ok: false, code: "price_changed", message: "Il prezzo è cambiato: nessun clic fatto.", ...snap, expected: expect };
+      }
+    }
     if (!snap.signedIn) return { ok: false, code: "signed_out", message: "Non sei collegato a Vinted in questo browser: accedi su Vinted e riprova.", ...snap };
     if (msg.action === "favourite") {
       const btn = favouriteButton();
@@ -920,8 +945,10 @@
       // Never a blind click: if the current state can't be read, a click could undo it.
       if (snap.favourite === null) return { ok: false, code: "unknown_state", message: "Non riesco a leggere se l'annuncio è già nei tuoi preferiti: nessun clic fatto (configurazione da aggiornare).", ...snap };
       if (snap.favourite === Boolean(msg.want)) return { ok: true, changed: false, ...snap };
-      btn.click(); // one click, as you would
-      for (let i = 0; i < 15; i += 1) {
+      await pageLoaded();
+      if (favouriteState(favouriteButton()) === Boolean(msg.want)) return { ok: true, changed: false, ...snap, favourite: Boolean(msg.want) };
+      (favouriteButton() || btn).click(); // one click, as you would
+      for (const until = Date.now() + 4000; Date.now() < until; ) {
         await sleep(200);
         if (favouriteState(favouriteButton()) === Boolean(msg.want)) return { ok: true, changed: true, ...snap, favourite: Boolean(msg.want) };
         if (signedOut()) return { ok: false, code: "signed_out", message: "Vinted chiede di accedere: accedi e riprova.", ...snap };
@@ -930,7 +957,8 @@
       return { ok: false, code: "verify", clicked: true, ...snap };
     }
     if (msg.action === "buy") {
-      if (snap.status !== "active") return { ok: false, code: snap.status, message: "L'articolo non è più acquistabile.", ...snap };
+      if (!buyButton()) return { ok: false, code: "no_button", message: "Tasto Acquista non trovato in questa pagina (configurazione da aggiornare).", ...snap };
+      await pageLoaded();
       const btn = buyButton();
       if (!btn) return { ok: false, code: "no_button", message: "Tasto Acquista non trovato in questa pagina (configurazione da aggiornare).", ...snap };
       btn.click(); // opens Vinted's checkout: the payment is confirmed by you
@@ -1140,6 +1168,11 @@
   const domReady = () =>
     document.readyState === "loading" ? new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true })) : Promise.resolve();
 
+  let startDone = () => {};
+  const started = new Promise((resolve) => {
+    startDone = resolve;
+  });
+
   async function start() {
     mark("start");
     // Straight from storage (not through the service worker): options, pairing flag (never the
@@ -1154,6 +1187,7 @@
     useConfig(store.parserConfig);
     market = store.marketCache ? Q.compileMarket(store.marketCache) : null;
     pageType = P.pageType(location.pathname, C);
+    startDone();
     send({ type: "ff:hello", pageType, url: location.href }); // live panel bookkeeping
     if (!opts.enabled) return;
     // Injected at the start of the navigation: settings are read while the page loads, the
