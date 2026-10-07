@@ -107,6 +107,26 @@ class Settings(BaseSettings):
     def email_import_enabled(self) -> bool:
         return bool(self.imap_host and self.imap_user and self.imap_password)
 
+    # --- External price references (see docs/EXTERNAL_PRICES.md) ------------------------------
+    # Official search API (Serper.dev, Google results as JSON), never scraping. none = off. Never
+    # searched while a page is analysed: a worker job refreshes a per-model cache within the
+    # budget (queries counted per day and per month; 1 query = 1 credit = $0.001).
+    external_search_provider: Literal["none", "serper"] = "none"
+    serper_api_key: SecretStr | None = None
+    external_search_monthly_budget: int = Field(default=900, ge=0, le=1_000_000)
+    external_search_daily_max: int = Field(default=60, ge=0, le=100_000)
+    external_refresh_days: int = Field(default=30, ge=1, le=365)
+    external_search_country: str = "it"
+    external_search_language: str = "it"
+    # Optional 3rd query per model (concluded sales), only when the first two found the model.
+    external_search_sold_query: bool = True
+
+    @property
+    def external_search_enabled(self) -> bool:
+        return self.external_search_provider != "none" and bool(
+            self.serper_api_key and self.serper_api_key.get_secret_value().strip()
+        )
+
     # Opportunity/watchlist alerts only for listings published within this window
     alert_max_listing_age_hours: float = 72.0
 
