@@ -10,12 +10,27 @@ from sqlalchemy import select
 
 from app.acquisition.vinted_actions import record_action, vinted_state
 from app.api.deps import DB, CaptureEconomics, CaptureUser, CurrentUser, Economics
+from app.api.v1.portfolio import sync_own_safely
 from app.core.cache import NS_FEED, cache
 from app.core.errors import NotFoundError
-from app.db.models import Listing
+from app.db.models import Listing, Purchase
 from app.schemas.vinted import CaptureVintedActionIn, VintedActionIn
 
 router = APIRouter(tags=["vinted"])
+
+
+async def _sync_purchase(db: DB, user_id: uuid.UUID, listing_id: uuid.UUID, kind: str) -> None:
+    """A purchase recorded from Vinted joins the concluded sales right away (see portfolio)."""
+    if kind != "purchased":
+        return
+    ids = list(
+        (
+            await db.execute(
+                select(Purchase.id).where(Purchase.user_id == user_id, Purchase.listing_id == listing_id)
+            )
+        ).scalars()
+    )
+    await sync_own_safely(db, ids)
 
 
 @router.get("/listings/{listing_id}/vinted", response_model=dict[str, Any])
@@ -45,6 +60,7 @@ async def add_action(
         detail=body.detail,
     )
     await db.commit()
+    await _sync_purchase(db, user.id, listing.id, body.kind)
     await cache.bump(NS_FEED)
     return await vinted_state(db, user.id, listing_id)
 
@@ -85,5 +101,6 @@ async def capture_action(
         detail=body.detail,
     )
     await db.commit()
+    await _sync_purchase(db, user.id, listing.id, body.kind)
     await cache.bump(NS_FEED)
     return {"listing_id": str(listing.id), **(await vinted_state(db, user.id, listing.id))}

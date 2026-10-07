@@ -63,7 +63,13 @@ async def quick_stats(user: CurrentUser, econ: Economics, db: DB) -> Any:
 async def get_opportunity(
     opportunity_id: uuid.UUID, user: CurrentUser, econ: Economics, db: DB
 ) -> OpportunityDetail:
-    return await OpportunityQueries(db, user.id, econ).detail(opportunity_id)
+    detail = await OpportunityQueries(db, user.id, econ).detail(opportunity_id)
+    detail.provenance = (
+        await db.execute(
+            select(Opportunity.score_breakdown["provenance"]).where(Opportunity.id == opportunity_id)
+        )
+    ).scalar()
+    return detail
 
 
 async def _opportunity(db: DB, opportunity_id: uuid.UUID) -> Opportunity:
