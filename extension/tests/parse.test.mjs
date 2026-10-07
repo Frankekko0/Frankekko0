@@ -281,3 +281,51 @@ test("favourite and buy labels: the button's state is read in either direction",
   for (const buy of ["Acquista", "Acquista ora", "Compra ora", "Buy now"]) assert.ok(C.patterns.buy_text.test(buy), buy);
   for (const other of ["Protezione acquisti", "Fai un'offerta", "Acquista e paga dopo con..."]) assert.ok(!C.patterns.buy_text.test(other), other);
 });
+
+// ------------------------------------------------------------------ real pages (vinted.it, October 2026)
+// Trimmed and anonymised copies of real pages, shared with the server's tests (real/expected.json).
+const REAL = JSON.parse(fixture("real/expected.json"));
+
+test("real item pages (current layout with page sections, with and without JSON-LD) are read like the server", () => {
+  for (const name of ["item_active_plugins.html", "item_active_no_jsonld.html"]) {
+    const want = REAL[name];
+    const it = P.parseItem(P.collectHtml(fixture(`real/${name}`)), `${want.url}?referrer=catalog`, NOW, C);
+    const got = {
+      url: it.url,
+      title: it.title,
+      price: it.price === null ? null : it.price.toFixed(2),
+      currency: it.currency,
+      brand: it.brand,
+      size: it.size,
+      condition: it.condition,
+      color: it.color,
+      status: it.status,
+      status_source: it.status_source,
+      images: it.images.length,
+    };
+    assert.deepEqual(got, want, name);
+    assert.equal(it.complete, true, name);
+  }
+});
+
+test("real wardrobe cards (as the content script collects them) are read with their status and fees", () => {
+  const raw = JSON.parse(fixture("real/wardrobe_cards.json"));
+  const { items, unreadable } = P.parseCards(raw, "https://www.vinted.it/member/1000001", C);
+  assert.equal(items.length, 15);
+  assert.equal(unreadable, 0);
+  assert.ok(items.every((it) => it.status === "active")); // this wardrobe shows no sold item
+  const first = items[0];
+  assert.deepEqual(
+    { url: first.url, price: first.price, brand: first.brand, size: first.size, condition: first.condition, fee: first.buyer_protection_fee, fav: first.favourite_count },
+    { url: "https://www.vinted.it/items/9000000201", price: 24, brand: "Polo Ralph Lauren", size: "XL", condition: "very_good", fee: 1.9, fav: 2 },
+  );
+  // The same card with Vinted's "Venduto" badge is read as sold (as a wardrobe shows sold items).
+  const sold = { ...raw[0], testids: { ...raw[0].testids, "status": "Venduto" }, texts: ["Venduto", ...raw[0].texts] };
+  assert.equal(P.parseCards([sold], "https://www.vinted.it/member/1000001", C).items[0].status, "sold");
+});
+
+test("the real heart's label says its state even without the pressed attribute", () => {
+  const label = "Aggiungi ai preferiti. Aggiunto ai preferiti da 2 utenti"; // vinted.it, signed out
+  assert.ok(C.patterns.favourite_off.test(label));
+  assert.ok(!C.patterns.favourite_on.test(label));
+});
