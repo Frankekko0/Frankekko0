@@ -3,6 +3,31 @@
 Un computer sempre acceso (mini PC, NAS, VPS) con Docker. Risultato: FlipFinder a un indirizzo
 HTTPS fisso, accessibile solo a te, con backup automatici e registro errori.
 
+## 0. Gratis in 20 minuti (consigliato)
+
+Server **Oracle Cloud Always Free** (gratis per sempre, 4 CPU ARM e 24 GB di RAM) + sottodominio
+gratuito **DuckDNS** + HTTPS automatico. Il risultato si installa sul telefono come un'app.
+
+1. Registrati su <https://www.oracle.com/cloud/free/> (serve una carta solo per la verifica,
+   non viene addebitato nulla se resti nelle risorse "Always Free").
+2. *Compute → Instances → Create*: immagine **Ubuntu 24.04**, forma **VM.Standard.A1.Flex**
+   (es. 2 OCPU, 12 GB). Scarica la chiave SSH. Annota l'**IP pubblico**.
+3. *Networking → VCN → Security List*: aggiungi regole Ingress TCP per le porte **80** e **443**
+   da `0.0.0.0/0`.
+4. Su <https://www.duckdns.org> accedi, crea un sottodominio (es. `flip-mario`) e inserisci
+   l'IP pubblico del server.
+5. Collegati e installa:
+   ```bash
+   ssh -i chiave.key ubuntu@IP_PUBBLICO
+   git clone https://github.com/frankekko0/frankekko0.git flipfinder && cd flipfinder
+   bash deploy/install.sh flip-mario.duckdns.org
+   ```
+6. Apri `https://flip-mario.duckdns.org`, crea il tuo account (le registrazioni poi si
+   chiudono), poi dal telefono: **Condividi → Aggiungi a schermata Home** (iPhone) o
+   **⋮ → Installa app** (Android).
+
+Se il repository è privato, per il `git clone` usa un token GitHub personale come password.
+
 ## 1. Indirizzo stabile e HTTPS
 
 Scegli **una** delle due strade.
