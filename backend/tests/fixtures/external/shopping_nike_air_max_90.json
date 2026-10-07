@@ -1,0 +1,159 @@
+{
+  "searchParameters": {
+    "q": "Nike Air Max 90",
+    "gl": "it",
+    "hl": "it",
+    "num": 10,
+    "type": "shopping",
+    "engine": "google"
+  },
+  "shopping": [
+    {
+      "title": "Scarpa Nike Air Max 90 - Uomo",
+      "source": "Nike.com",
+      "link": "https://www.nike.com/it/t/scarpa-air-max-90-uomo-6n3vKB/CN8490-100",
+      "price": "149,99 €",
+      "delivery": "Consegna gratuita",
+      "imageUrl": "https://encrypted-tbn1.gstatic.com/shopping?q=tbn:ANd9GcR-air-max-90-1",
+      "rating": 4.6,
+      "ratingCount": 2311,
+      "productId": "4720219683710245312",
+      "position": 1
+    },
+    {
+      "title": "Nike Sportswear AIR MAX 90 - Sneakers basse - white/black",
+      "source": "Zalando.it",
+      "link": "https://www.zalando.it/nike-sportswear-air-max-90-sneakers-basse-whiteblack-ni112o0k3-a11.html",
+      "price": "139,95 €",
+      "delivery": "Consegna gratuita",
+      "imageUrl": "https://encrypted-tbn2.gstatic.com/shopping?q=tbn:ANd9GcR-air-max-90-2",
+      "rating": 4.5,
+      "ratingCount": 870,
+      "productId": "11293846501928374651",
+      "position": 2
+    },
+    {
+      "title": "Nike Air Max 90 Essential",
+      "source": "Foot Locker Italia",
+      "link": "https://www.footlocker.it/it/product/nike-air-max-90-essential-uomo-scarpe/314122095404.html",
+      "price": "€129.99",
+      "delivery": "Consegna a 4,99 €",
+      "imageUrl": "https://encrypted-tbn3.gstatic.com/shopping?q=tbn:ANd9GcR-air-max-90-3",
+      "productId": "5528109364451238876",
+      "position": 3
+    },
+    {
+      "title": "Nike Air Max 90 Men's",
+      "source": "JD Sports UK",
+      "link": "https://www.jdsports.co.uk/product/white-nike-air-max-90-mens/16024312/",
+      "price": "£124.99",
+      "delivery": "£4.99 delivery",
+      "imageUrl": "https://encrypted-tbn0.gstatic.com/shopping?q=tbn:ANd9GcR-air-max-90-4",
+      "rating": 4.7,
+      "ratingCount": 412,
+      "productId": "9012233847562910034",
+      "position": 4
+    },
+    {
+      "title": "Nike Air Max 90 bianche taglia 43",
+      "source": "eBay",
+      "link": "https://www.ebay.it/itm/196512340011",
+      "price": "65,00 € usato",
+      "delivery": "Consegna a 6,90 €",
+      "imageUrl": "https://encrypted-tbn1.gstatic.com/shopping?q=tbn:ANd9GcR-air-max-90-5",
+      "productId": "3398122150937746101",
+      "position": 5
+    },
+    {
+      "title": "Nike Air Max 90",
+      "source": "Vinted",
+      "link": "https://www.vinted.it/items/5123456789-nike-air-max-90",
+      "price": "40,00 €",
+      "delivery": "",
+      "imageUrl": "https://encrypted-tbn2.gstatic.com/shopping?q=tbn:ANd9GcR-air-max-90-6",
+      "productId": "7012398412000000001",
+      "position": 6
+    },
+    {
+      "title": "Nike Air Max 90 GS - Sneakers - bambini",
+      "source": "Zalando.it",
+      "link": "https://www.zalando.it/nike-sportswear-air-max-90-gs-sneakers-basse-ni114d0a1-a11.html",
+      "price": "89,95 €",
+      "delivery": "Consegna gratuita",
+      "imageUrl": "https://encrypted-tbn3.gstatic.com/shopping?q=tbn:ANd9GcR-air-max-90-7",
+      "productId": "2201938475610293847",
+      "position": 7
+    },
+    {
+      "title": "Nike Air Max 95 Essential",
+      "source": "Foot Locker Italia",
+      "link": "https://www.footlocker.it/it/product/nike-air-max-95-essential-uomo-scarpe/314112345604.html",
+      "price": "179,99 €",
+      "delivery": "Consegna a 4,99 €",
+      "imageUrl": "https://encrypted-tbn0.gstatic.com/shopping?q=tbn:ANd9GcR-air-max-95-1",
+      "productId": "1928374650192837465",
+      "position": 8
+    },
+    {
+      "title": "Nike Air Max 90 Off-White Desert Ore",
+      "source": "StockX",
+      "link": "https://stockx.com/nike-air-max-90-off-white-desert-ore",
+      "price": "$310.00",
+      "delivery": "",
+      "imageUrl": "https://encrypted-tbn1.gstatic.com/shopping?q=tbn:ANd9GcR-air-max-90-ow",
+      "productId": "6650192837465019283",
+      "position": 9
+    },
+    {
+      "title": "Scarpe da ginnastica uomo stile Air Max 90 traspiranti",
+      "source": "AliExpress",
+      "link": "https://it.aliexpress.com/item/1005006123456789.html",
+      "price": "25,99 €",
+      "delivery": "Consegna gratuita",
+      "imageUrl": "https://encrypted-tbn2.gstatic.com/shopping?q=tbn:ANd9GcR-replica",
+      "productId": "8811223344556677889",
+      "position": 10
+    },
+    {
+      "title": "Lacci di ricambio per Nike Air Max 90 - 120 cm",
+      "source": "Amazon.it",
+      "link": "https://www.amazon.it/dp/B0C1234567",
+      "price": "9,99 €",
+      "delivery": "Consegna gratuita",
+      "imageUrl": "https://encrypted-tbn3.gstatic.com/shopping?q=tbn:ANd9GcR-laces",
+      "productId": "4455667788990011223",
+      "position": 11
+    },
+    {
+      "title": "Nike Air Max 90 Infrared 2020",
+      "source": "Grailed",
+      "link": "https://www.grailed.com/listings/61234567-nike-air-max-90-infrared-2020",
+      "price": "$140.00",
+      "delivery": "",
+      "imageUrl": "https://encrypted-tbn0.gstatic.com/shopping?q=tbn:ANd9GcR-grailed",
+      "productId": "3344556677889900112",
+      "position": 12
+    },
+    {
+      "title": "Nike Air Max 90 Triple White",
+      "source": "Footpatrol AU",
+      "link": "https://www.footpatrol.com.au/product/nike-air-max-90-triple-white/12345/",
+      "price": "A$199.00",
+      "delivery": "",
+      "imageUrl": "https://encrypted-tbn1.gstatic.com/shopping?q=tbn:ANd9GcR-aud",
+      "productId": "2233445566778899001",
+      "position": 13
+    },
+    {
+      "title": "Set di 2 paia Nike Air Max 90 nere e bianche",
+      "source": "eBay",
+      "link": "https://www.ebay.it/itm/196512340099",
+      "price": "110,00 € usato",
+      "delivery": "",
+      "imageUrl": "https://encrypted-tbn2.gstatic.com/shopping?q=tbn:ANd9GcR-lot",
+      "productId": "1122334455667788990",
+      "position": 14
+    }
+  ],
+  "credits": 1
+}

@@ -1,0 +1,99 @@
+{
+  "searchParameters": {
+    "q": "Nike Air Max 90 usato prezzo (site:ebay.it OR site:ebay.com OR site:vestiairecollective.com OR site:depop.com OR site:grailed.com OR site:subito.it OR site:wallapop.com)",
+    "gl": "it",
+    "hl": "it",
+    "num": 10,
+    "type": "search",
+    "engine": "google"
+  },
+  "organic": [
+    {
+      "title": "Nike Air Max 90 Essential Bianco Taglia 44 Usate | eBay",
+      "link": "https://www.ebay.it/itm/205613245678",
+      "snippet": "Nike Air Max 90 usate poche volte, ottime condizioni, con scatola. EUR 70,00 + EUR 6,90 di spedizione.",
+      "date": "3 giorni fa",
+      "position": 1
+    },
+    {
+      "title": "Scarpe Nike Air Max 90 uomo n. 42 nere | eBay",
+      "link": "https://www.ebay.it/itm/196598765432",
+      "snippet": "Usato: Articolo usato, con segni di usura. Spedizione gratuita. EUR 55,00.",
+      "position": 2,
+      "attributes": {
+        "Prezzo": "EUR 55,00",
+        "Condizione": "Usato"
+      }
+    },
+    {
+      "title": "Nike Air Max 90 in vendita | eBay",
+      "link": "https://www.ebay.it/b/Nike-Air-Max-90/15709/bn_7116479085",
+      "snippet": "Trova una vasta selezione di Nike Air Max 90 a prezzi vantaggiosi su eBay. Scegli la consegna gratis per riparmiare di più. Da EUR 45,00.",
+      "position": 3
+    },
+    {
+      "title": "Air max 90 leather trainers Nike White size 42 EU in Leather - 45678912",
+      "link": "https://it.vestiairecollective.com/uomo-scarpe/sneakers/nike/sneakers-nike-air-max-90-in-pelle-bianco-45678912.shtml",
+      "snippet": "Sneakers Nike Air Max 90 in pelle bianche, taglia 42 EU. Ottime condizioni. € 95,00",
+      "date": "28 set 2026",
+      "position": 4
+    },
+    {
+      "title": "Nike Air Max 90 Infrared UK 9 | Depop",
+      "link": "https://www.depop.com/products/jamesuk-nike-air-max-90-infrared/",
+      "snippet": "Nike Air Max 90 infrared, worn a few times, good condition. £45.00",
+      "position": 5
+    },
+    {
+      "title": "Nike Air Max 90 'Bacon' | Grailed",
+      "link": "https://www.grailed.com/listings/59876543-nike-air-max-90-bacon",
+      "snippet": "Size US 10. Used, lightly worn, no box. Sold for $120",
+      "date": "Aug 28, 2026",
+      "position": 6
+    },
+    {
+      "title": "Nike Air Max 90 tg 41 - Abbigliamento e Accessori In vendita a Milano",
+      "link": "https://www.subito.it/abbigliamento-accessori/nike-air-max-90-tg-41-milano-512345678.htm",
+      "snippet": "Vendo Nike Air Max 90 taglia 41 usate pochissimo. Prezzo 60 €",
+      "date": "5 ott 2026",
+      "position": 7
+    },
+    {
+      "title": "Nike Air Max 90 bambino 32 - Wallapop",
+      "link": "https://it.wallapop.com/item/nike-air-max-90-bambino-987654321",
+      "snippet": "Scarpe Nike Air Max 90 per bambino, numero 32. 25 €",
+      "position": 8
+    },
+    {
+      "title": "Nike Air Max 90 replica 1:1 AAA quality | eBay",
+      "link": "https://www.ebay.it/itm/186543219876",
+      "snippet": "Nike Air Max 90 alta qualità, spedizione veloce. EUR 39,99",
+      "position": 9
+    },
+    {
+      "title": "Lotto 3 paia Nike Air Max 90 taglie miste | eBay",
+      "link": "https://www.ebay.it/itm/176543212345",
+      "snippet": "Lotto di tre paia di Air Max 90 usate, taglie 41, 42, 43. EUR 120,00",
+      "position": 10
+    },
+    {
+      "title": "Nike Air Max 90 Men's Size 10 Infrared 2020 CT1685-100 | eBay",
+      "link": "https://www.ebay.com/itm/266123456789",
+      "snippet": "Pre-owned · Nike · Size 10 · $85.00 + $15.00 shipping",
+      "position": 11
+    },
+    {
+      "title": "Nike Air Max 270 React nere 43 | eBay",
+      "link": "https://www.ebay.it/itm/196512349999",
+      "snippet": "Nike Air Max 270 React usate. EUR 50,00",
+      "position": 12
+    },
+    {
+      "title": "Nike Air Max 90 Essential 43 | eBay",
+      "link": "https://www.ebay.it/itm/196500000950",
+      "snippet": "Nike Air Max 90 Essential usate, buone condizioni. EUR 950,00",
+      "position": 13
+    }
+  ],
+  "credits": 1
+}

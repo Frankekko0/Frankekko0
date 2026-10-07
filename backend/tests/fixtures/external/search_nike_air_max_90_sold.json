@@ -1,0 +1,68 @@
+{
+  "searchParameters": {
+    "q": "Nike Air Max 90 (venduto OR sold) (site:ebay.it OR site:ebay.com OR site:vestiairecollective.com OR site:grailed.com)",
+    "gl": "it",
+    "hl": "it",
+    "num": 10,
+    "type": "search",
+    "engine": "google"
+  },
+  "organic": [
+    {
+      "title": "Nike Air Max 90 Essential bianche 43 | eBay",
+      "link": "https://www.ebay.it/itm/205600012345",
+      "snippet": "Venduto il 12 set 2026 · EUR 62,00 · Usato, buone condizioni",
+      "position": 1
+    },
+    {
+      "title": "Nike Air Max 90 OG Infrared 2020 Size 10.5 | eBay",
+      "link": "https://www.ebay.com/itm/266100054321",
+      "snippet": "Sold Sep 20, 2026 · $110.00 · Pre-owned",
+      "position": 2
+    },
+    {
+      "title": "Air max 90 trainers Nike Black size 41 EU in Leather - 34567890",
+      "link": "https://it.vestiairecollective.com/uomo-scarpe/sneakers/nike/sneakers-nike-air-max-90-nero-34567890.shtml",
+      "snippet": "Venduto · Sneakers Nike Air Max 90 nere in pelle, buone condizioni. 70 €",
+      "date": "1 set 2026",
+      "position": 3
+    },
+    {
+      "title": "Nike Air Max 90 Volt | Grailed",
+      "link": "https://www.grailed.com/listings/60123456-nike-air-max-90-volt",
+      "snippet": "Sold Aug 30, 2026 for $95 · Size US 9 · Used",
+      "position": 4
+    },
+    {
+      "title": "Nike Air Max 90 x Off-White Black | eBay",
+      "link": "https://www.ebay.it/itm/205600099999",
+      "snippet": "Venduto il 2 set 2026 · EUR 350,00",
+      "position": 5
+    },
+    {
+      "title": "Nike Air Max 90 nero tg 44 | eBay",
+      "link": "https://www.ebay.it/itm/205600077777",
+      "snippet": "Venduto da: sneakers_shop · EUR 79,00 · Nuovo",
+      "position": 6
+    },
+    {
+      "title": "Nike Air Max 90 Bambino Taglia 30 | eBay",
+      "link": "https://www.ebay.it/itm/205600055555",
+      "snippet": "Venduto il 15 set 2026 · EUR 25,00",
+      "position": 7
+    },
+    {
+      "title": "Nike Air Max 90 Men's UK 9 | eBay",
+      "link": "https://www.ebay.co.uk/itm/335512345678",
+      "snippet": "Sold 14 Sep 2026 · £48.00 · Pre-owned",
+      "position": 8
+    },
+    {
+      "title": "Nike Air Max 90 Uomo Scarpe Sneakers Originali | eBay",
+      "link": "https://www.ebay.it/itm/205600033333",
+      "snippet": "Nuovo · EUR 109,00 · Più di 10 venduti",
+      "position": 9
+    }
+  ],
+  "credits": 1
+}

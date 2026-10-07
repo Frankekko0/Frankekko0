@@ -1,0 +1,6 @@
+{
+  "401": {"message": "Unauthorized.", "statusCode": 401},
+  "402": {"message": "Not enough credits", "statusCode": 402},
+  "429": {"message": "Too many requests, slow down.", "statusCode": 429},
+  "500": {"message": "Internal server error", "statusCode": 500}
+}
