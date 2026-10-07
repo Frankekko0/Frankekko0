@@ -281,7 +281,11 @@ async def test_sold_query_needs_budget_and_can_be_turned_off(session: Any) -> No
     ("status", "words"), [(401, "Chiave Serper rifiutata"), (402, "Crediti"), (429, "Limite")]
 )
 async def test_fatal_provider_errors_stop_the_run(
-    session: Any, status: int, words: str, capsys: pytest.CaptureFixture[str]
+    session: Any,
+    status: int,
+    words: str,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     await queue(session, "nike", "Air Max 90", "sneakers", demand=5)
     await queue(session, "nike", "Dunk Low", "sneakers", demand=2)
@@ -297,9 +301,10 @@ async def test_fatal_provider_errors_stop_the_run(
     assert budget is not None and words in budget["last_error"] and budget["today_used"] == 1
     assert KEY not in json.dumps(budget)
     assert (await session.execute(select(func.count()).select_from(ExternalPrice))).scalar() == 0
-    out = capsys.readouterr()
-    assert "external.search_failed" in out.out + out.err  # logged, without the key
-    assert KEY not in out.out + out.err
+    captured = capsys.readouterr()
+    logs = captured.out + captured.err + caplog.text  # stdout or stdlib logging, per configuration
+    assert "external.search_failed" in logs  # logged, without the key
+    assert KEY not in logs
 
 
 async def test_server_errors_back_off_and_stop_after_three_models(session: Any) -> None:
