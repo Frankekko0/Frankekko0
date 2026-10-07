@@ -1,6 +1,7 @@
 // Where the numbers of an analysis come from: plain helpers over `provenance` (no React), so the
 // Analysis page, the item page and the tests read it the same way.
 
+import { ApiError, errorMessage } from "./api";
 import { CONDITION_LABEL, eur, pct, plural } from "./format";
 import type { EvidenceMetrics, ExternalReference, Provenance } from "./types";
 
@@ -229,6 +230,16 @@ export function usd(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "—";
   const digits = value !== 0 && Math.abs(value) < 0.01 ? 3 : 2;
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: digits, maximumFractionDigits: digits }).format(value);
+}
+
+/** What to tell after a failed "Refresh now" (rate limited, job queue down, anything else). */
+export function refreshErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 429) return "A refresh was requested moments ago: wait a minute and try again.";
+    if (error.code === "queue_unavailable" || error.status === 503)
+      return "The background job queue is not reachable right now: try again in a few minutes.";
+  }
+  return errorMessage(error);
 }
 
 export const REJECT_LABEL: Record<string, string> = {

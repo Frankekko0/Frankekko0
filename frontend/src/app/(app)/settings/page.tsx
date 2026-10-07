@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { DataSourcesCard } from "@/components/settings/data-sources";
 import { ErrorLogCard } from "@/components/settings/error-log";
 import { ExtensionKeysCard } from "@/components/settings/extension-keys";
+import { PriceDataCard } from "@/components/settings/price-data";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/feedback";
@@ -449,6 +450,7 @@ export default function SettingsPage() {
       {notif.data ? <NotificationsForm initial={notif.data} /> : <Skeleton className="h-96 rounded-2xl" />}
       <ExtensionKeysCard />
       <DataSourcesCard />
+      <PriceDataCard />
       <ErrorLogCard />
       <Block icon={<LogOut />} title="Account">
         <div className="flex flex-wrap items-center justify-between gap-3">

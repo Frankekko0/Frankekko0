@@ -33,6 +33,7 @@ import type {
   ParsedQuery,
   Portfolio,
   Preferences,
+  PricingEvidence,
   QuickAnalysis,
   QuickStats,
   RefreshResult,
@@ -297,6 +298,24 @@ export function useMarketDatabase(params: { brand?: string; category?: string; q
 
 export function useAccuracy() {
   return useQuery({ queryKey: ["analytics", "accuracy"], queryFn: () => api<Accuracy>("/analytics/accuracy"), staleTime: 10 * 60_000 });
+}
+
+/** Price data: concluded sales, negotiation discount, external search and measured accuracy. */
+export function usePricingEvidence() {
+  return useQuery({ queryKey: ["pricing-evidence"], queryFn: () => api<PricingEvidence>("/pricing/evidence"), refetchInterval: 60_000 });
+}
+
+/** "Refresh now": queues the evidence sync and the external refresh (rate limited server-side). */
+export function useRefreshPricingEvidence() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api<{ queued: boolean }>("/pricing/evidence/refresh", { method: "POST" }),
+    onSuccess: () => {
+      // The jobs run in the background: read the status again once they had time to finish.
+      void qc.invalidateQueries({ queryKey: ["pricing-evidence"] });
+      setTimeout(() => void qc.invalidateQueries({ queryKey: ["pricing-evidence"] }), 15_000);
+    },
+  });
 }
 
 export function useInsights() {

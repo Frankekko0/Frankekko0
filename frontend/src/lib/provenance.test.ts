@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ApiError } from "./api";
 import {
   accuracyDelta,
   conditionLabel,
@@ -9,6 +10,7 @@ import {
   monthlyCostUsd,
   readProvenance,
   realSalesHeadline,
+  refreshErrorMessage,
   rejectedList,
   safeUrl,
   salesMix,
@@ -188,5 +190,10 @@ describe("price data", () => {
       { reason: "weird_reason", label: "weird reason", n: 1 },
     ]);
     expect(rejectedList(null)).toEqual([]);
+  });
+  it("explains a refused refresh", () => {
+    expect(refreshErrorMessage(new ApiError(429, "rate_limited", "Troppe richieste"))).toMatch(/wait a minute/);
+    expect(refreshErrorMessage(new ApiError(503, "queue_unavailable", "Coda dei lavori non raggiungibile"))).toMatch(/queue is not reachable/);
+    expect(refreshErrorMessage(new ApiError(500, "http_error", "Errore del server"))).toBe("Errore del server");
   });
 });
