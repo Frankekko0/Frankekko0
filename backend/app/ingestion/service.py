@@ -486,7 +486,18 @@ class IngestionService:
                 await self.session.execute(pg_insert(ListingImage.__table__).on_conflict_do_nothing(), rows)
         if snapshot_rows:
             await self.session.execute(insert(ListingSnapshot.__table__), snapshot_rows)
+        await self._record_sales(result, new_rows)
         return result
+
+    async def _record_sales(self, result: IngestResult, new_rows: list[dict[str, Any]]) -> None:
+        """Listings seen sold (or no longer sold) go to the concluded sales right away."""
+        sold = ListingStatus.SOLD.value
+        ids = [r["id"] for r in new_rows if r["status"] == sold and r["duplicate_of_id"] is None]
+        ids += [lid for lid, old, new in result.status_changes if sold in (old, new)]
+        if ids:
+            from app.market.sold_sales import record_vinted_sold
+
+            await record_vinted_sold(self.session, ids)
 
     def _snapshot(
         self, listing_id: uuid.UUID, pl: ProviderListing, status: ListingStatus, now: datetime

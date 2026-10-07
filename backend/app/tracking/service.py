@@ -124,6 +124,16 @@ class TrackingService:
             )
         if snapshots:
             await self.session.execute(insert(ListingSnapshot.__table__), snapshots)
+        # A sale seen (or a sold listing seen on sale again) updates the concluded sales now.
+        sold_changes = [
+            r.id
+            for r in rows
+            if out[r.id].changed and ListingStatus.SOLD.value in (r.status, out[r.id].status.value)
+        ]
+        if sold_changes:
+            from app.market.sold_sales import record_vinted_sold
+
+            await record_vinted_sold(self.session, sold_changes)
         if any(u.changed and u.status != ListingStatus.ACTIVE for u in out.values()):
             closed = [lid for lid, u in out.items() if u.changed and u.status != ListingStatus.ACTIVE]
             await self.session.execute(
