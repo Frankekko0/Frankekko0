@@ -273,7 +273,8 @@
   const onScreen = (vid) => page.visible.has(vid) || (!page.visible.size && (cards.get(vid)?.order ?? 99) < 12);
 
   /** The first request: the best instant verdicts and the cards on screen, at most 12. */
-  function firstWave(vids) {
+  function firstWave(keys) {
+    const vids = [...keys]; // page order (an iterator can be walked only once)
     const byValue = [...vids].sort((a, b) => valueOf(b) - valueOf(a));
     const pick = new Set(byValue.filter((v) => valueOf(v) > 0).slice(0, 6));
     for (const v of vids) if (pick.size < 12 && onScreen(v)) pick.add(v);
