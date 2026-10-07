@@ -466,14 +466,20 @@ let diagnose = async () => {};
   // 13) First click with the service worker stopped (the browser stops it when idle): the
   // bridge still answers, the action wakes it.
   for (const p of ctx.pages()) if (p !== app) await p.close();
+  // Stopped through DevTools, as the browser does after 30 s idle: its status is followed there.
   const cdp = await ctx.newCDPSession(app);
+  let swStatus = "running";
+  cdp.on("ServiceWorker.workerVersionUpdated", (e) => {
+    for (const v of e.versions) if (v.scriptURL.startsWith(`chrome-extension://${extId}/`)) swStatus = v.runningStatus;
+  });
+  await cdp.send("ServiceWorker.enable");
   const stopWorker = async () => {
-    const closed = new Promise((res) => sw.once("close", res));
-    await cdp.send("ServiceWorker.enable");
+    ctx.waitForEvent("serviceworker", { predicate: isExt, timeout: 60000 }).then((w) => (sw = w), () => {});
     await cdp.send("ServiceWorker.stopAllWorkers");
-    await Promise.race([closed, new Promise((_, rej) => setTimeout(() => rej(new Error("service worker not stopped")), 5000))]);
-    const next = ctx.waitForEvent("serviceworker", { predicate: isExt, timeout: 60000 });
-    next.then((w) => (sw = w)).catch(() => {});
+    for (const end = Date.now() + 5000; swStatus !== "stopped"; ) {
+      if (Date.now() > end) throw new Error(`service worker not stopped (${swStatus})`);
+      await new Promise((res) => setTimeout(res, 20));
+    }
   };
   await stopWorker();
   t0 = Date.now();
