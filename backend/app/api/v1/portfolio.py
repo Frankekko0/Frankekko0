@@ -15,13 +15,16 @@ from app.analytics.portfolio import portfolio_summary, sale_figures
 from app.api.deps import DB, CurrentUser, Economics, UserEconomics
 from app.core.cache import NS_FEED, cache
 from app.core.errors import AppError, ConflictError, NotFoundError
+from app.core.logging import get_logger
 from app.db.models import Brand, Category, Favorite, InventoryItem, Listing, Opportunity, Purchase, Sale
 from app.domain.enums import FavoriteState, InventoryStatus
 from app.identification.taxonomy import fold
+from app.market.sold_sales import sync_own_records
 from app.profit.calculator import acquisition_cost
 from app.schemas.common import Message
 from app.schemas.portfolio import FlipOut, PurchaseIn, PurchaseUpdate, SaleIn, SaleOut
 
+log = get_logger(__name__)
 router = APIRouter(tags=["portfolio"])
 
 
@@ -58,6 +61,18 @@ async def _purchase(db: DB, user_id: uuid.UUID, purchase_id: uuid.UUID) -> Purch
     return p
 
 
+async def sync_own_safely(db: DB, purchase_ids: list[uuid.UUID]) -> None:
+    """Own purchases and resales are the most reliable concluded sales: the price evidence
+    (``sold_sales``) gets them right away. A failure is logged, never shown to the user: the
+    30-minute evidence sync records them anyway."""
+    try:
+        await sync_own_records(db, purchase_ids)
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        log.warning("portfolio.own_records_not_synced", error=type(exc).__name__, purchases=len(purchase_ids))
+
+
 async def _refresh_learning(db: DB, user_id: uuid.UUID) -> None:
     await recompute_user_affinities(db, user_id)
     await db.commit()
@@ -87,6 +102,7 @@ async def create_purchase(body: PurchaseIn, user: CurrentUser, econ: Economics, 
     await db.commit()
     await db.refresh(purchase)
     await _refresh_learning(db, user.id)
+    await sync_own_safely(db, [purchase.id])
     await db.refresh(purchase)
     return flip_out(purchase)
 
@@ -201,6 +217,7 @@ async def update_purchase(purchase_id: uuid.UUID, body: PurchaseUpdate, user: Cu
         if body.expected_sale_price is not None:
             inv.estimated_value = body.expected_sale_price
     await db.commit()
+    await sync_own_safely(db, [purchase_id])
     await db.refresh(p)
     return flip_out(p)
 
@@ -209,7 +226,7 @@ async def update_purchase(purchase_id: uuid.UUID, body: PurchaseUpdate, user: Cu
 async def delete_purchase(purchase_id: uuid.UUID, user: CurrentUser, db: DB) -> Message:
     p = await _purchase(db, user.id, purchase_id)
     await db.delete(p)
-    await db.commit()
+    await db.commit()  # its concluded-sale rows go with it (foreign key cascade)
     await _refresh_learning(db, user.id)
     return Message(message="Acquisto eliminato.")
 
@@ -260,6 +277,7 @@ async def create_sale(body: SaleIn, user: CurrentUser, db: DB) -> FlipOut:
             fav.state = FavoriteState.SOLD.value
     await db.commit()
     await _refresh_learning(db, user.id)
+    await sync_own_safely(db, [p.id])
     await db.refresh(p)
     return flip_out(p)
 
@@ -279,12 +297,15 @@ async def delete_sale(sale_id: uuid.UUID, user: CurrentUser, db: DB) -> Message:
     sale = await db.get(Sale, sale_id)
     if sale is None or sale.user_id != user.id:
         raise NotFoundError("Vendita non trovata.")
-    purchase = await db.get(Purchase, sale.purchase_id)
+    purchase_id = sale.purchase_id
+    purchase = await db.get(Purchase, purchase_id)
     await db.delete(sale)
     if purchase is not None and purchase.inventory_item is not None:
         purchase.inventory_item.status = InventoryStatus.IN_STOCK.value
     await db.commit()
     await _refresh_learning(db, user.id)
+    # The resale row went with the sale; the purchase counts again as a purchase.
+    await sync_own_safely(db, [purchase_id])
     return Message(message="Vendita eliminata: l'articolo torna in inventario.")
 
 

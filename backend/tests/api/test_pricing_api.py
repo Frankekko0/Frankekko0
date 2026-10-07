@@ -4,8 +4,10 @@ from typing import Any
 
 import httpx
 import pytest
+from sqlalchemy import select
 
-from app.api.v1 import pricing
+from app.api.v1 import portfolio, pricing
+from app.db.models import SoldSale
 from app.db.session import session_scope
 from app.market.state import set_state
 from app.pricing.evidence import GATE_KEY
@@ -172,3 +174,97 @@ async def test_analysis_detail_carries_provenance(auth_client: httpx.AsyncClient
     assert captured.status_code == 200, captured.text
     item = (await auth_client.get(f"{API}/items/7001")).json()
     assert item["analysis"]["provenance"]["expected_price"]["label"]
+
+
+async def _own_counts(client: httpx.AsyncClient) -> tuple[int, int]:
+    by_source = (await client.get(f"{API}/pricing/evidence")).json()["sold_sales"]["by_source"]
+    return by_source["own_purchase"], by_source["own_sale"]
+
+
+async def test_own_records_join_the_concluded_sales_right_away(
+    auth_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def none_status(session: Any) -> dict[str, Any]:
+        return {}
+
+    monkeypatch.setattr(pricing, "external_status", none_status)
+    bought = await auth_client.post(
+        f"{API}/purchases",
+        json={
+            "title": "Nike Air Max 90 bianche",
+            "brand": "nike",
+            "size": "42",
+            "condition": "very_good",
+            "purchase_price": 30,
+            "purchase_date": "2026-09-01",
+        },
+    )
+    assert bought.status_code == 201, bought.text
+    purchase_id = bought.json()["purchase_id"]
+    assert await _own_counts(auth_client) == (1, 0)
+
+    sold = await auth_client.post(
+        f"{API}/sales", json={"purchase_id": purchase_id, "sale_price": 55, "sale_date": "2026-09-20"}
+    )
+    assert sold.status_code == 201, sold.text
+    assert await _own_counts(auth_client) == (1, 1)
+    async with session_scope() as s:
+        rows = (await s.execute(select(SoldSale.source, SoldSale.price, SoldSale.model_name))).all()
+    assert {(r.source, float(r.price)) for r in rows} == {("own_purchase", 30.0), ("own_sale", 55.0)}
+    assert {r.model_name for r in rows} == {"Air Max 90"}
+
+    # Edited: the title is the record's title too.
+    edited = await auth_client.patch(f"{API}/purchases/{purchase_id}", json={"title": "Air Max 90 nike"})
+    assert edited.status_code == 200
+    async with session_scope() as s:
+        titles = set((await s.execute(select(SoldSale.title))).scalars())
+    assert titles == {"Air Max 90 nike"}
+
+    sale_id = sold.json()["sale"]["id"]
+    assert (await auth_client.delete(f"{API}/sales/{sale_id}")).status_code == 200
+    assert await _own_counts(auth_client) == (1, 0)
+    assert (await auth_client.delete(f"{API}/purchases/{purchase_id}")).status_code == 200
+    assert await _own_counts(auth_client) == (0, 0)
+
+
+async def test_own_records_sync_failure_is_never_shown(
+    auth_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken(*args: Any, **kw: Any) -> dict[str, int]:
+        raise RuntimeError("evidence store down")
+
+    monkeypatch.setattr(portfolio, "sync_own_records", broken)
+    r = await auth_client.post(
+        f"{API}/purchases",
+        json={"title": "Polo Ralph Lauren", "purchase_price": 9, "purchase_date": "2026-09-01"},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["title"] == "Polo Ralph Lauren"
+
+
+async def test_purchase_from_vinted_joins_the_concluded_sales(
+    auth_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def none_status(session: Any) -> dict[str, Any]:
+        return {}
+
+    monkeypatch.setattr(pricing, "external_status", none_status)
+    headers = await _paired(auth_client)
+    card = {
+        "url": "https://www.vinted.it/items/7002-air-max",
+        "title": "Nike Air Max 90",
+        "brand": "Nike",
+        "size": "42",
+        "condition": "Ottime condizioni",
+        "price": 35,
+    }
+    assert (
+        await auth_client.post(f"{API}/capture/item", json={"item": card}, headers=headers)
+    ).status_code == 200
+    r = await auth_client.post(
+        f"{API}/capture/vinted-actions",
+        json={"vinted_id": "7002", "kind": "purchased", "price": 39.45, "source": "checkout"},
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    assert await _own_counts(auth_client) == (1, 0)
