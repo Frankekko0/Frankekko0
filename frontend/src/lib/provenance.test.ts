@@ -142,7 +142,8 @@ describe("external references", () => {
     expect(money(null, "EUR")).toBe("—");
   });
   it("shows date-only values as calendar days", () => {
-    expect(dayDate("2026-09-20")).toBe("20 Sep 2026");
+    expect(dayDate("2026-08-20")).toBe("20 Aug 2026");
+    expect(dayDate("2026-10-01T00:00:00+00:00")).toBe("1 Oct 2026");
     expect(dayDate("")).toBe("—");
     expect(dayDate(null)).toBe("—");
   });
