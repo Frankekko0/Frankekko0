@@ -254,7 +254,9 @@ _SOLD_NOT_AFTER = re.compile(
     r"as|come|cosi|con|with|senza|without|in|e spedito|and shipped|tel|wie|como)\b"
 )
 # "più venduti", "best sold", "20 venduti", "oltre 20 venduti", "20+ sold": not this item's sale.
-_SOLD_NOT_BEFORE = re.compile(r"(\bpiu|\bmost|\bbest|\btop|\bmeist|\bmas|\d\+?|\boltre|\bover)\s*$")
+_SOLD_NOT_BEFORE = re.compile(
+    r"(\bpiu|\bmost|\bbest|\btop|\bmeist|\bmas|(?<!\d)\d{1,4}\+?|\boltre|\bover)\s*$"
+)
 _SOLD_AFTER = re.compile(r"^\s*($|[·|:\-–—!,.)\]]|(il|on|le|am|el|a|at|for|per|in data)\b|\d)")
 
 
@@ -290,6 +292,14 @@ _NEW = re.compile(
     r"\b(nuov[oaie]|brand new|new(?!\s+(?:balance|era|york|look|rock))|neuf|neuve|neu|nuev[oa]s?|"
     r"deadstock|ds)\b"
 )
+# Precise phrases in every gender/number ("mai indossate", "come nuove") beyond the listing ones.
+_PRECISE = (
+    (
+        re.compile(r"\b(mai (?:indossat|usat|mess)[oaie]|never worn|unworn|deadstock|ds)\b"),
+        "new_without_tags",
+    ),
+    (re.compile(r"\b(come nuov[oaie]|pari al nuovo|like new|as new|perfette condizioni)\b"), "very_good"),
+)
 
 
 def detect_condition(text: str | None) -> str | None:
@@ -302,6 +312,9 @@ def detect_condition(text: str | None) -> str | None:
     precise = normalize_condition(t)
     if precise != Condition.UNKNOWN:
         return precise.value
+    for pattern, value in _PRECISE:
+        if pattern.search(t):
+            return value
     used, new = bool(_USED.search(t)), bool(_NEW.search(t))
     if used and not new:
         return "used"
@@ -508,7 +521,9 @@ def parse_organic(payload: dict[str, Any], query: str, purpose: str, now: dateti
         if hit is None and (hit := item_price(snippet)):
             where = "snippet"
         full = " ".join(x for x in (title, snippet or "", attr_text) if x)
-        sold = find_sold(full, now)
+        # Each part on its own: the end of the title is not the context of the snippet's marker.
+        parts = (find_sold(x, now) for x in (title, snippet, attr_text) if x)
+        sold = next((m for m in parts if m.sold), SoldMarker(False))
         stated = parse_date(str(item.get("date") or ""), now) if item.get("date") else None
         out.append(
             Offer(
