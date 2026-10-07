@@ -34,6 +34,7 @@ from app.acquisition.identity import listing_identity
 from app.core.config import get_settings
 from app.core.redis import get_redis
 from app.db.models import Listing, Opportunity
+from app.domain.enums import ListingStatus
 from app.ingestion.catalog import Catalog
 from app.ingestion.service import IngestResult
 from app.marketplace.base import ProviderListing
@@ -110,11 +111,14 @@ class CapturePipeline(AnalysisPipeline):
 MARKET_CHANGES = ("sold", "removed")
 
 
-def changes_market(result: IngestResult, statuses: list[str]) -> bool:
-    """A capture that brings sold/removed listings (or turns one sold/removed) changes the pools."""
-    return any(s in MARKET_CHANGES for s in statuses) or any(
-        new in MARKET_CHANGES for _, _, new in result.status_changes
-    )
+def changes_market(result: IngestResult, listings: list[ProviderListing]) -> bool:
+    """A capture that brings new sold/removed listings, or turns known ones sold/removed, changes
+    the pools (sold items seen again, e.g. on a closet page, do not)."""
+    new = set(result.new_ids)
+    return any(
+        ListingStatus(pl.status).value in MARKET_CHANGES and result.ids_by_external.get(pl.external_id) in new
+        for pl in listings
+    ) or any(status in MARKET_CHANGES for _, _, status in result.status_changes)
 
 
 # What an analysis reads from the listing itself: unchanged values -> same analysis inputs.

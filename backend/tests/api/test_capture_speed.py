@@ -107,10 +107,16 @@ async def test_pools_shared_between_requests(
     # A sold item changes the market: every process drops its copies.
     await _post(auth_client, headers, [_card(8503, 25, status="sold"), _card(8504, 16)])
     assert len(loads) == 2
+    # The same sold item seen again (a closet page reloaded) changes nothing.
+    await _post(auth_client, headers, [_card(8503, 25, status="sold"), _card(8506, 15)])
+    assert len(loads) == 2
+    # An active item turning sold does.
+    await _post(auth_client, headers, [_card(8500, 12, status="sold"), _card(8507, 15)])
+    assert len(loads) == 3
     # Expired copies are reloaded.
     monkeypatch.setattr(capture_pipeline, "POOL_TTL_SECONDS", 0.0)
     await _post(auth_client, headers, [_card(8505, 17)])
-    assert len(loads) == 3
+    assert len(loads) == 4
 
 
 async def test_shared_pool_gives_the_same_analysis(session: Any, make_listing: Any) -> None:

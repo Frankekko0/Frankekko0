@@ -261,9 +261,7 @@ async def persist_observations(
         merged.status_updates |= res.status_updates
         merged.ids_by_external |= res.ids_by_external
     if reuse_recent:
-        shared = await sync_pools(
-            drop=changes_market(merged, [ListingStatus(pl.status).value for pl in listings])
-        )
+        shared = await sync_pools(drop=changes_market(merged, listings))
         ids = await analysis_needed(db, merged, before)
         pipeline: AnalysisPipeline = CapturePipeline(db, share_pools=shared)
     else:
