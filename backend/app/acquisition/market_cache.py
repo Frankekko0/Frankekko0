@@ -7,7 +7,8 @@ share sold within 30 days, the user's costs (same formulas as the server) and th
 rules. The full server analysis arrives a moment later and replaces the quick estimate.
 
 Nothing in it is invented: a segment with fewer than ``MIN_SOLD`` sales is left out and the
-card is shown as "dati insufficienti".
+card is shown as "dati insufficienti". ``models`` carries the per-model statistics of concluded
+sales (all sources) so the instant verdict can already price a recognised model.
 """
 
 from __future__ import annotations
@@ -18,11 +19,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import UserEconomics
 from app.authenticity.assess import MAX_P, brand_rules, load_rules
+from app.db.models import ModelPriceStat
 from app.domain.enums import Condition
 from app.identification.engine import ListingText
 from app.identification.taxonomy import SUSPICIOUS_PATTERNS, fold
@@ -95,6 +97,45 @@ def identify_card(
     )
 
 
+async def _model_segments(session: AsyncSession, catalog: Catalog) -> dict[str, list[Any]]:
+    """Per-model statistics of concluded sales (``model_price_stats``, model level, any size and
+    condition), only for models with at least ``MIN_SOLD`` sales:
+    ``"<brand slug>|<model folded>": [median, low, high, n_sales, days, sell_through]``."""
+    rows = (
+        await session.execute(
+            select(
+                ModelPriceStat.brand_id,
+                ModelPriceStat.model_name,
+                ModelPriceStat.median_price,
+                ModelPriceStat.low_price,
+                ModelPriceStat.high_price,
+                ModelPriceStat.n_sales,
+                func.coalesce(ModelPriceStat.median_days_to_sell, ModelPriceStat.avg_days_to_sell),
+                ModelPriceStat.sell_through,
+            ).where(
+                ModelPriceStat.model_name.is_not(None),
+                ModelPriceStat.size_normalized.is_(None),
+                ModelPriceStat.condition.is_(None),
+                ModelPriceStat.price_basis == "sold",
+                ModelPriceStat.n_sales >= MIN_SOLD,
+            )
+        )
+    ).all()
+    out: dict[str, list[Any]] = {}
+    for brand_id, model, median, low, high, n_sales, days, sell_through in rows:
+        brand = catalog.brand_slug(brand_id)
+        if brand and model:
+            out[f"{brand}|{fold(model)}"] = [
+                round(float(median), 2),
+                round(float(low), 2),
+                round(float(high), 2),
+                int(n_sales),
+                round(float(days), 1) if days is not None else None,
+                round(float(sell_through), 3) if sell_through is not None else None,
+            ]
+    return out
+
+
 def _p_sale(succ: int, fail: int) -> float | None:
     n = succ + fail
     return round((succ + 1) / (n + 2), 3) if n >= MIN_OUTCOMES else None
@@ -124,6 +165,8 @@ async def build_market_cache(session: AsyncSession, catalog: Catalog, econ: User
             _p_sale(int(r.sold_in_time or 0), int(r.not_in_time or 0)),
             round(float(r.days), 1) if r.days is not None else None,
         ]
+
+    models = await _model_segments(session, catalog)
 
     tax = catalog.taxonomy
     brands = []
@@ -166,6 +209,7 @@ async def build_market_cache(session: AsyncSession, catalog: Catalog, econ: User
         "categories": categories,
         "lines": lines,
         "segments": segments,
+        "models": models,
         "auth": {
             "lr": {
                 k: rules["likelihood_ratios"][k]

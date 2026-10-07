@@ -83,8 +83,22 @@ async def _seed_stats() -> None:
                     n_sales=40,
                     median_new_price=None,
                 ),
+                # Two more models: one with enough concluded sales, one without.
+                _stat(stat_key(nike, None, "Air Force 1", None, None), nike, None, "Air Force 1", n_sales=6),
+                _stat(stat_key(nike, None, "Dunk", None, None), nike, None, "Dunk", n_sales=4),
             ]
         )
+
+
+async def test_market_cache_carries_model_sales(auth_client: httpx.AsyncClient) -> None:
+    """The instant verdict gets per-model sold statistics, only for models with >= 5 sales
+    (any size and condition; models priced on asks are left out)."""
+    await _seed_stats()
+    headers = await _paired(auth_client)
+    r = await auth_client.get(f"{API}/extension/market-cache", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["models"] == {"nike|air force 1": [45.0, 38.0, 52.0, 6, 9.5, 0.42]}
+    assert "analysis;dur=" in r.headers["server-timing"]
 
 
 async def test_page_stats_one_query_for_the_page(auth_client: httpx.AsyncClient) -> None:
