@@ -170,7 +170,7 @@ _KIDS_Y = re.compile(r"\b\d{1,2}(?:[.,]5)?\s?y\b|\by\s?o\b|\b\d{1,2}(?:[.,]5)?c\
 _KIDS_SHOE_MARKS = re.compile(r"\b(gs|ps|td)\b")
 _SHOE_SIZE = re.compile(
     r"\b(?:eu|eur|taglia|tg|size|numero|misura|n|nr|gr|talla|pointure)\s*:?\s*(\d{2}(?:[.,]5)?)\b(?!\s*(?:uk|us|cm))"
-    r"|\b(\d{2}(?:[.,]5)?)\s*(?:eu|eur)\b"
+    r"|\b(\d{2}(?:[.,]5)?)(?=\s*(?:eu|eur)\b)"
 )
 _CLOTHING_AGE_SIZE = re.compile(r"\b(?:taglia|tg)\s*:?\s*(\d{1,2})\b(?!\s*(?:uk|us|it|eu|fr|de|w|l))")
 
