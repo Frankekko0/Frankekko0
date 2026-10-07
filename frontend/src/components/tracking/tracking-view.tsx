@@ -19,6 +19,7 @@ import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { toast } from "sonner";
 import { SnapshotChart } from "@/components/charts/snapshot-chart";
 import { DataQualityBanner, MarketComparisonView, RiskChecklist, TimeOnlineView } from "@/components/deal/analysis-detail";
+import { ProvenanceView } from "@/components/deal/provenance";
 import { ScoreRing } from "@/components/deal/score";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ import { ErrorState, Skeleton } from "@/components/ui/feedback";
 import { Tip } from "@/components/ui/misc";
 import { errorMessage } from "@/lib/api";
 import { CAPTURE_LABEL, CONDITION_LABEL, MODE_LABEL, STATUS_LABEL, eur, pct, shortDate, timeAgo } from "@/lib/format";
+import { readProvenance } from "@/lib/provenance";
 import { useItem, useRefreshItem, useTrackItem } from "@/lib/queries";
 import type { AnalysisSummary, ItemDetail, MarketComparison, Snapshot, TimeOnline } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -174,6 +176,7 @@ function AnalysisPanel({ a }: { a: AnalysisSummary }) {
   const insufficient = a.data_quality === "insufficient";
   const comparison = a.market.found !== undefined ? (a.market as unknown as MarketComparison) : null;
   const online = a.velocity.comparables !== undefined ? (a.velocity as unknown as TimeOnline) : null;
+  const provenance = readProvenance(a.provenance);
   return (
     <Section
       title="Analysis"
@@ -211,6 +214,12 @@ function AnalysisPanel({ a }: { a: AnalysisSummary }) {
             <Mini label="ROI" value={pct(e.roi)} />
             <Mini label="Max price to pay" value={eur(e.max_buy_price)} sub="for your targets" />
           </dl>
+        )}
+        {provenance && (
+          <div>
+            <p className="mb-2 text-[13px] font-medium text-fg-2">Where the numbers come from</p>
+            <ProvenanceView p={provenance} compact />
+          </div>
         )}
         {comparison && (
           <div>

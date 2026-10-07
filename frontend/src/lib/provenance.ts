@@ -168,6 +168,14 @@ export function money(value: number | null | undefined, currency: string | null 
   }
 }
 
+/** "20 Sep 2026" from a date-only "2026-09-20" (read as a calendar day, not UTC midnight). */
+export function dayDate(value: string | null | undefined): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value ?? "");
+  if (!m) return "—";
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
 /** Condition of an external price, in the app's words ("condition not stated" when unknown). */
 export function conditionLabel(c: string | null | undefined): string {
   const v = (c ?? "").trim().toLowerCase();

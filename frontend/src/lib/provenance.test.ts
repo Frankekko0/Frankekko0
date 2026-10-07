@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   accuracyDelta,
   conditionLabel,
+  dayDate,
   describeDelta,
   lastPriceNote,
   money,
@@ -139,6 +140,11 @@ describe("external references", () => {
     expect(money(40, "GBP")).toBe("£40");
     expect(money(45.5, "usd")).toBe("US$45.50");
     expect(money(null, "EUR")).toBe("—");
+  });
+  it("shows date-only values as calendar days", () => {
+    expect(dayDate("2026-09-20")).toBe("20 Sep 2026");
+    expect(dayDate("")).toBe("—");
+    expect(dayDate(null)).toBe("—");
   });
   it("labels conditions", () => {
     expect(conditionLabel("very_good")).toBe("Very good");

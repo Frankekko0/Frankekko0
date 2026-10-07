@@ -2,8 +2,9 @@
 
 import { Check, CircleHelp, CircleMinus, CirclePlus, Copy, Fingerprint, Gauge, Lightbulb, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { eur, pct } from "@/lib/format";
-import type { AuthEvidence, AuthVerdict, DealInsights, OpportunityDetail } from "@/lib/types";
+import { eur, pct, plural } from "@/lib/format";
+import { DAYS_BASIS_SHORT, shortBasis } from "@/lib/provenance";
+import type { AuthEvidence, AuthVerdict, DealInsights, OpportunityDetail, Provenance } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,11 +54,23 @@ function Figure({ label, value, conf, sub, tone }: { label: string; value: strin
 
 const INSUFFICIENT = "insufficient data";
 
-export function DecisionSection({ d }: { d: OpportunityDetail }) {
+/** A short "where it comes from" next to a figure, linking to the Sources section. */
+function SourceHint({ children }: { children: ReactNode }) {
+  return (
+    <a href="#sources" className="underline decoration-line-strong underline-offset-2 transition-colors hover:text-fg hover:decoration-current">
+      {children}
+    </a>
+  );
+}
+
+export function DecisionSection({ d, provenance }: { d: OpportunityDetail; provenance?: Provenance | null }) {
   const i = d.insights;
   if (!i) return null;
   const r = i.resale;
   const rap = i.risk_adjusted_profit;
+  const basis = provenance ? shortBasis(provenance) : null;
+  const daysBasis = provenance ? DAYS_BASIS_SHORT[provenance.days_to_sell.basis] : undefined;
+  const daysN = provenance?.days_to_sell.n ?? 0;
   return (
     <Section
       id="decision"
@@ -94,7 +107,7 @@ export function DecisionSection({ d }: { d: OpportunityDetail }) {
 
       <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
         <Figure label="Resale min" value={eur(r.low)} conf={r.confidence} sub={r.calibrated ? "calibrated on real sales" : undefined} />
-        <Figure label="Resale probable" value={eur(r.probable)} conf={r.confidence} />
+        <Figure label="Resale probable" value={eur(r.probable)} conf={r.confidence} sub={basis ? <SourceHint>from {basis}</SourceHint> : undefined} />
         <Figure label="Resale max" value={eur(r.high)} conf={r.confidence} />
         <Figure
           label="Net margin"
@@ -103,7 +116,12 @@ export function DecisionSection({ d }: { d: OpportunityDetail }) {
           tone={i.net_margin === null ? undefined : i.net_margin > 0 ? "success" : "danger"}
           sub="after buyer protection and shipping"
         />
-        <Figure label="Time to sell" value={i.days_to_sell !== null ? `~${Math.round(i.days_to_sell)} days` : INSUFFICIENT} conf={i.days_confidence} />
+        <Figure
+          label="Time to sell"
+          value={i.days_to_sell !== null ? `~${Math.round(i.days_to_sell)} days` : INSUFFICIENT}
+          conf={i.days_confidence}
+          sub={daysBasis ? <SourceHint>{daysBasis === DAYS_BASIS_SHORT.sold && daysN ? plural(daysN, "similar item") + " sold" : daysBasis}</SourceHint> : undefined}
+        />
         <Figure
           label="Sold within 30 days"
           value={i.p_sale.p !== null ? pct(i.p_sale.p) : INSUFFICIENT}

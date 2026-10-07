@@ -18,6 +18,7 @@ import {
 } from "@/components/deal/detail-sections";
 import { DataQualityBanner } from "@/components/deal/analysis-detail";
 import { AuthenticitySection, DecisionSection, InsightDetails } from "@/components/deal/decision";
+import { ProvenanceSection } from "@/components/deal/provenance";
 import { VintedActions } from "@/components/deal/vinted-actions";
 import { ListingImage } from "@/components/deal/listing-image";
 import { RiskBadge, ScoreRing } from "@/components/deal/score";
@@ -29,12 +30,16 @@ import { AnimatedNumber } from "@/components/ui/motion";
 import { ErrorState, Skeleton } from "@/components/ui/feedback";
 import { errorMessage } from "@/lib/api";
 import { CONDITION_LABEL, DEMAND_LABEL, TIER_LABEL, days, eur, pct, timeAgo } from "@/lib/format";
+import { readProvenance, shortBasis } from "@/lib/provenance";
 import { useOpportunity, useSetFavorite } from "@/lib/queries";
 import type { OpportunityDetail } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const NAV = [
+type NavItem = readonly [id: string, label: string];
+
+const NAV: readonly NavItem[] = [
   ["decision", "Decision"],
+  ["sources", "Sources"],
   ["authenticity", "Authenticity"],
   ["why", "Why"],
   ["offer", "Action"],
@@ -46,7 +51,9 @@ const NAV = [
   ["seller", "Seller"],
   ["identification", "Product"],
   ["ai", "AI analysis"],
-] as const;
+];
+// Analyses made before the provenance was recorded have no "Sources" section.
+const NAV_WITHOUT_SOURCES = NAV.filter(([id]) => id !== "sources");
 
 function Gallery({ d }: { d: OpportunityDetail }) {
   const images = d.listing.images.length ? d.listing.images : [{ url: d.card.image_url ?? "", position: 0 }];
@@ -84,6 +91,8 @@ function Gallery({ d }: { d: OpportunityDetail }) {
 
 function Summary({ d }: { d: OpportunityDetail }) {
   const c = d.card;
+  const provenance = readProvenance(d.provenance);
+  const basis = provenance ? shortBasis(provenance) : null;
   const setFav = useSetFavorite();
   const state = c.favorite_state;
   const positive = (c.expected_profit ?? 0) > 0;
@@ -125,6 +134,11 @@ function Summary({ d }: { d: OpportunityDetail }) {
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-fg-3">Sell</p>
           <p className="text-[26px] font-semibold leading-tight tracking-tight tnum">{eur(c.expected_sale_price)}</p>
           <p className="text-xs text-fg-3">market value {eur(c.fair_market_value)}</p>
+          {basis && (
+            <a href="#sources" className="text-xs font-medium text-accent underline-offset-2 hover:underline">
+              from {basis}
+            </a>
+          )}
         </div>
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-fg-3">Net profit</p>
@@ -201,8 +215,8 @@ function Summary({ d }: { d: OpportunityDetail }) {
 }
 
 /** Section links that follow the reader: the section in view is highlighted. */
-function SectionNav() {
-  const [current, setCurrent] = useState<string>(NAV[0][0]);
+function SectionNav({ items }: { items: readonly NavItem[] }) {
+  const [current, setCurrent] = useState<string>(items[0]?.[0] ?? "");
   const navRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const visible = new Map<string, number>();
@@ -214,12 +228,12 @@ function SectionNav() {
       },
       { rootMargin: "-120px 0px -55% 0px" },
     );
-    NAV.forEach(([id]) => {
+    items.forEach(([id]) => {
       const el = document.getElementById(id);
       if (el) io.observe(el);
     });
     return () => io.disconnect();
-  }, []);
+  }, [items]);
   useEffect(() => {
     // Keep the highlighted link visible in the horizontally scrolling bar. Scroll only the bar:
     // scrollIntoView would also move the page.
@@ -235,7 +249,7 @@ function SectionNav() {
       className="scrollbar-none sticky top-14 z-30 -mx-4 flex gap-1 overflow-x-auto border-b border-line bg-bg/80 px-4 py-2 backdrop-blur-xl backdrop-saturate-150 sm:mx-0 sm:rounded-xl sm:border sm:px-2"
       aria-label="Sections"
     >
-      {NAV.map(([href, label]) => (
+      {items.map(([href, label]) => (
         <a
           key={href}
           href={`#${href}`}
@@ -271,6 +285,7 @@ export default function DealPage({ params }: { params: Promise<{ id: string }> }
   if (q.isError || !q.data) return <ErrorState message={errorMessage(q.error)} onRetry={() => q.refetch()} />;
   const d = q.data;
   const c = d.card;
+  const provenance = readProvenance(d.provenance);
   return (
     <div className="pb-20 lg:pb-0">
       <Link href="/deals" className="group inline-flex items-center gap-1.5 text-[13px] font-medium text-fg-3 transition-colors hover:text-fg">
@@ -314,13 +329,14 @@ export default function DealPage({ params }: { params: Promise<{ id: string }> }
             </div>
           </header>
 
-          <SectionNav />
+          <SectionNav items={provenance ? NAV : NAV_WITHOUT_SOURCES} />
 
           <div className="lg:hidden">
             <Summary d={d} />
           </div>
           <DataQualityBanner quality={d.score.data_quality} reason={d.score.insufficient_reason} />
-          <DecisionSection d={d} />
+          <DecisionSection d={d} provenance={provenance} />
+          {provenance && <ProvenanceSection p={provenance} />}
           <AuthenticitySection d={d} />
           {d.insights && <InsightDetails i={d.insights} />}
           <ExplanationSection d={d} />
