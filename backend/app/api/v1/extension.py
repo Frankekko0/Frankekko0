@@ -12,7 +12,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response
 from sqlalchemy import func, select, update
 
 from app.acquisition.evaluations import quick_evaluations
@@ -50,6 +50,7 @@ from app.tracking.actions import set_tracked
 from app.tracking.service import Attempt, TrackingService, record_attempts
 from app.tracking.status import Observation
 from app.tracking.summary import analysis_summary
+from app.workers.vision_queue import queue_vision_safely, vision_order
 
 log = get_logger(__name__)
 router = APIRouter(tags=["extension"])
@@ -158,6 +159,12 @@ async def _touch_sync(db: DB, version: str | None, kind: str, count: int) -> Non
         state.value = value
 
 
+async def _after_capture(archive_ids: list[uuid.UUID], vision_ids: list[str]) -> None:
+    """Photo checks (best first) and photo copies, queued once the response is on its way."""
+    await queue_vision_safely(vision_ids)
+    await schedule_archive(archive_ids)
+
+
 def _vinted_only(items: list[Any]) -> list[Any]:
     return [i for i in items if listing_identity(str(i.url))[0] == "vinted"]
 
@@ -168,25 +175,29 @@ def _vinted_only(items: list[Any]) -> list[Any]:
     dependencies=[Depends(capture_limit)],
 )
 async def capture_cards(
-    body: CaptureCardsIn, user: CaptureUser, econ: CaptureEconomics, db: DB
+    body: CaptureCardsIn, user: CaptureUser, econ: CaptureEconomics, db: DB, background: BackgroundTasks
 ) -> CaptureCardsOut:
     """Cards the user scrolled past on a search, closet or favourites page ("visto in
     scorrimento"). Each is stored (a snapshot per sighting, status updated when seen again),
-    quickly analysed from the card data, and evaluated with the user's costs."""
+    quickly analysed from the card data, and evaluated with the user's costs.
+
+    Cards seen again unchanged keep their recent analysis; photo copies and photo checks (best
+    candidates first) are queued after the response is sent."""
     items = _vinted_only(body.items)
     by_id = {
         pl.external_id: pl
         for pl in (manual_to_provider(i, "extension_card", CaptureLevel.CARD) for i in items)
     }
-    result, _outcomes = await persist_observations(
-        db, list(by_id.values()), AcquisitionMode.EXTENSION_CARD, track=False
+    result, outcomes = await persist_observations(
+        db, list(by_id.values()), AcquisitionMode.EXTENSION_CARD, track=False, reuse_recent=True
     )
+    vision = vision_order(outcomes)
     await _touch_sync(db, body.extension_version, "cards", len(by_id))
     await db.commit()
     await cache.bump(NS_FEED)
-    await schedule_archive(list(result.enriched_ids or result.new_ids))
     ids = [result.ids_by_external[vid] for vid in by_id if vid in result.ids_by_external]
     evaluations = await quick_evaluations(db, user.id, econ, ids)
+    background.add_task(_after_capture, list(result.enriched_ids or result.new_ids), vision)
     return CaptureCardsOut(received=len(body.items), stored=len(ids), evaluations=evaluations)
 
 
@@ -196,7 +207,7 @@ async def capture_cards(
     dependencies=[Depends(item_limit)],
 )
 async def capture_item(
-    body: CaptureItemIn, user: CaptureUser, econ: CaptureEconomics, db: DB
+    body: CaptureItemIn, user: CaptureUser, econ: CaptureEconomics, db: DB, background: BackgroundTasks
 ) -> CaptureItemOut:
     """A whole item page ("analizzato a fondo"): every field and image, full analysis."""
     if listing_identity(str(body.item.url))[0] != "vinted":
@@ -208,7 +219,7 @@ async def capture_item(
     await db.commit()
     await cache.bump(NS_FEED)
     listing_id = result.ids_by_external[pl.external_id]
-    await schedule_archive([listing_id])
+    background.add_task(_after_capture, [listing_id], vision_order(outcomes))
     evaluation = (await quick_evaluations(db, user.id, econ, [listing_id]) or [None])[0]
     outcome = next((o for o in outcomes if o.listing_id == listing_id), None)
     analysis = None

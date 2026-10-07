@@ -47,9 +47,9 @@ from app.opportunities.pipeline import AnalysisPipeline
 from app.tracking.service import Attempt, TrackingService, record_attempts
 from app.tracking.status import Observation
 from app.workers.queue import backoff_seconds, enqueue
+from app.workers.vision_queue import queue_vision, vision_order
 
 log = get_logger(__name__)
-VISION_MIN_FLIP = 60
 ANALYSIS_BATCH_HIGH = 8  # small: likely deals should surface within seconds
 ANALYSIS_BATCH_DEFAULT = 40
 FEED_BUMP_EVERY_SECONDS = 15
@@ -261,11 +261,6 @@ async def analyze_batch(
                 alerts = await evaluate_alerts(s, outcome, listing, catalog)
                 pending.extend(alerts)
                 r = outcome.result
-                has_remote_photos = any(i.url.startswith("https://") for i in listing.images)
-                vision_done = bool((listing.identification or {}).get("vision"))
-                worth_checking = r.flip.score >= VISION_MIN_FLIP or (r.risk_adjusted_profit or 0) > 0
-                if worth_checking and has_remote_photos and not vision_done and not after_vision:
-                    follow_ups.append(("vision_task", str(listing.id)))
                 if settings.ai_api_key and r.flip.score >= settings.ai_auto_analyze_min_flip_score:
                     follow_ups.append(("ai_analyze_task", str(outcome.opportunity_id)))
                 summary[str(listing.id)] = {
@@ -288,6 +283,7 @@ async def analyze_batch(
                 )
                 for o in outcomes
             )
+            vision = vision_order(outcomes, after_vision)
     except (OperationalError, DBAPIError) as exc:
         log.warning("analysis.db_error", listings=len(ids), attempt=job_try, error=type(exc).__name__)
         raise Retry(defer=backoff_seconds(job_try)) from exc
@@ -313,9 +309,10 @@ async def analyze_batch(
         await enqueue(
             "deliver_alert_task", str(alert_id), channel, high=True, job_id=f"deliver:{alert_id}:{channel}"
         )
+    # Photo checks best first (risk-adjusted profit, then flip): the top few on the high queue.
+    await queue_vision(vision)
     for task, arg in follow_ups:
-        prefix = "vision" if task == "vision_task" else "ai"
-        await enqueue(task, arg, job_id=f"{prefix}:{arg}")
+        await enqueue(task, arg, job_id=f"ai:{arg}")
     if summary:
         # Continuous analysis would otherwise empty the feed cache every few seconds; feed TTLs
         # (20-30 s) bound staleness, user actions still invalidate immediately.
