@@ -66,6 +66,17 @@
     timing: { read_ms: 0, scan_ms: 0, cards: 0, requests: [] },
   };
   const html = document.documentElement;
+  /** What identifies a list of results: the path and the search text and filters (not paging tokens). */
+  function searchOf(href) {
+    try {
+      const u = new URL(href);
+      const keep = [...u.searchParams].filter(([k]) => !/^(time|search_id|search_session_id|referrer)$/.test(k)).sort();
+      return `${u.pathname}?${new URLSearchParams(keep)}`;
+    } catch {
+      return href;
+    }
+  }
+  page.search = searchOf(location.href);
   const markOnce = (name) => {
     if (html.hasAttribute(`data-ff-${name}-ms`)) return;
     mark(name);
@@ -614,8 +625,16 @@
     quickPass();
     lookupSoon(fresh);
   }
+  // Called from the mutation observer, i.e. between two chunks of the parser: a timer would wait
+  // behind the parser's own tasks (100-200 ms on Vinted). At most one look every 25 ms.
+  let streamAt = 0;
   const streamSoon = () => {
-    if (!streamTimer) streamTimer = setTimeout(scanStream, 30);
+    const now = performance.now();
+    if (now - streamAt >= 25) {
+      streamAt = now;
+      clearTimeout(streamTimer);
+      scanStream();
+    } else if (!streamTimer) streamTimer = setTimeout(scanStream, 30);
   };
   let lookupWaiting = [];
   const lookupLater = debounce(() => {
@@ -1175,9 +1194,13 @@
   function onNavigate() {
     lastHref = location.href;
     pageType = P.pageType(location.pathname, C);
-    // Another page of results: its own first request, statistics and timings.
-    Object.assign(page, { firstSent: false, sent: new Set(), statsAsked: new Set(), stats: new Map(), order: 0, finalPass: true });
-    page.timing = { read_ms: 0, scan_ms: 0, cards: 0, requests: [] };
+    // Another search (not just the address rewritten by the page): its own first request and
+    // timings. What was sent or asked in this document is never sent again.
+    const search = searchOf(location.href);
+    if (search !== page.search) {
+      Object.assign(page, { search, firstSent: false, order: 0, finalPass: true });
+      page.timing = { read_ms: 0, scan_ms: 0, cards: 0, requests: [] };
+    }
     send({ type: "ff:hello", pageType, url: location.href });
     if (pageType === "item") {
       itemBox.closedFor = null;
