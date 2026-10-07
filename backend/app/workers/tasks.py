@@ -40,6 +40,7 @@ from app.db.session import session_scope
 from app.domain.enums import AcquisitionMode, JobStatus, ListingStatus, StatusEvidence
 from app.ingestion.catalog import load_catalog
 from app.ingestion.service import IngestionService, IngestResult
+from app.market.jobs import sync_price_evidence_task
 from app.marketplace.base import SearchQuery
 from app.marketplace.registry import get_provider
 from app.media.cleanup import clean_foreign_data
@@ -500,6 +501,12 @@ async def fit_price_calibration_task(ctx: dict[str, Any]) -> dict[str, Any]:
         await enqueue("analyze_batch", chunk, high=False, job_id=_batch_job_id(chunk))
     await cache.bump(NS_FEED)
     return {k: metrics.get(k) for k in ("test_sales", "before", "after")}
+
+
+async def sync_price_evidence_full_task(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Nightly full sync of the price evidence: every source re-read, statistics rebuilt (the
+    30-minute runs are incremental)."""
+    return await sync_price_evidence_task(ctx, full=True)
 
 
 async def recompute_learning(ctx: dict[str, Any]) -> int:
