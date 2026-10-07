@@ -419,6 +419,8 @@ export interface OpportunityDetail {
   recommended_action: Action;
   market_comparison: MarketComparison | null;
   time_online: TimeOnline | null;
+  /** Where the numbers come from; null for analyses made before it was recorded. */
+  provenance?: Provenance | null;
 }
 
 export interface OpportunityFilters {
@@ -979,6 +981,8 @@ export interface AnalysisSummary {
   risk_signals: RiskSignal[];
   reasons: Reason[];
   listing_status: ListingStatus;
+  /** Where the numbers come from; null for analyses made before it was recorded. */
+  provenance?: Provenance | null;
 }
 
 export interface ItemDetail {
@@ -1090,4 +1094,108 @@ export interface Accuracy {
     after_by_confidence: Record<"low" | "mid" | "high", ErrorStats>;
     own: ErrorStats;
   } | null;
+}
+
+/* --------------------------------------------------------------- price evidence */
+/** Where an estimate's comparables come from, most reliable first. */
+export type EvidenceSource = "own_sale" | "own_purchase" | "vinted_sold" | "external_sold" | "vinted_asking" | "external_asking";
+
+/** A price found on another market by the external search, as considered for one analysis. */
+export interface ExternalReference {
+  kind: "new" | "asking" | "sold";
+  /** Source domain, e.g. "ebay.it". */
+  source: string;
+  price: number;
+  currency: string;
+  price_eur: number;
+  /** ISO date (YYYY-MM-DD): when the price is known to be true. */
+  date: string;
+  condition: string;
+  url: string;
+  title: string;
+  used_in_estimate: boolean;
+}
+
+/** Where every number of an analysis comes from. Labels are short sentences shown as-is. */
+export interface Provenance {
+  expected_price: {
+    value: number | null;
+    basis: "sold" | "mixed" | "asking" | "prior" | "none";
+    n: number;
+    by_source: Partial<Record<EvidenceSource, number>>;
+    /** Applied to Vinted sold prices (last price seen → price paid); null when not measured. */
+    negotiation_discount: number | null;
+    calibrated: boolean;
+    prior: { used: boolean; level: string | null; n: number };
+    label: string;
+  };
+  price_range: { low: number | null; high: number | null; basis: "calibration" | "percentiles"; label: string };
+  days_to_sell: { value: number | null; n: number; basis: "sold" | "segment" | "category_baseline"; label: string };
+  sale_probability: { value: number | null; n: number; basis: "similar" | "segment" | "insufficient"; label: string };
+  new_price: {
+    value: number;
+    n: number;
+    sources: { source: string; price: number; currency: string; date: string; url: string }[];
+    label: string;
+  } | null;
+  real_sales: { total: number; own: number; vinted_sold: number; external_sold: number };
+  external: ExternalReference[];
+}
+
+/** Backtest error metrics (``evidence_gate``); ratios are 0..1. */
+export interface EvidenceMetrics {
+  subjects: number;
+  estimated: number;
+  mae_eur: number | null;
+  mape: number | null;
+  median_ape: number | null;
+  bias: number | null;
+  in_range: number | null;
+  over_mae_eur?: number | null;
+}
+
+/** External price search status (fields are null when the status cannot be read). */
+export interface ExternalSearchStatus {
+  provider: "serper" | "none" | null;
+  enabled: boolean;
+  key_configured: boolean | null;
+  cost_per_query_usd: number | null;
+  free_queries: number | null;
+  month_used: number | null;
+  month_budget: number | null;
+  today_used: number | null;
+  daily_max: number | null;
+  refresh_days: number | null;
+  models_cached: number | null;
+  models_due: number | null;
+  models_pending: number | null;
+  prices: { new: number; asking: number; sold: number } | null;
+  rejected: Record<string, number> | null;
+  last_run: string | null;
+  last_error: string | null;
+  expected_monthly_queries: number | null;
+}
+
+export type SoldSaleSource = "own_sale" | "own_purchase" | "vinted_sold" | "external_sold";
+
+/** GET /pricing/evidence: the data behind resale estimates and their measured accuracy. */
+export interface PricingEvidence {
+  sold_sales: {
+    total: number;
+    by_source: Partial<Record<SoldSaleSource, number>>;
+    models_with_5_sales: number;
+    models_total: number;
+    last_sync: string | null;
+    outliers: number;
+  };
+  negotiation: { discount: number | null; n: number; note: string; measured_at: string | null };
+  external: ExternalSearchStatus;
+  accuracy: {
+    measured_at: string | null;
+    without_external: EvidenceMetrics | null;
+    with_external: EvidenceMetrics | null;
+    external_in_use: boolean;
+    own_purchases_in_use: boolean;
+    note: string;
+  };
 }
