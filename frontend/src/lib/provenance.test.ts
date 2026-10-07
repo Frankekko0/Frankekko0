@@ -7,6 +7,7 @@ import {
   describeDelta,
   lastPriceNote,
   money,
+  freeQueriesMonths,
   monthlyCostUsd,
   readProvenance,
   realSalesHeadline,
@@ -182,6 +183,9 @@ describe("price data", () => {
     expect(usedShare(null, 900)).toBe(0);
     expect(monthlyCostUsd(120, 0.001)).toBe(0.12);
     expect(monthlyCostUsd(null, 0.001)).toBeNull();
+    expect(freeQueriesMonths(138, 2500)).toBe(18);
+    expect(freeQueriesMonths(0, 2500)).toBeNull();
+    expect(freeQueriesMonths(null, 2500)).toBeNull();
   });
   it("lists rejection reasons with a count, largest first", () => {
     expect(rejectedList({ kids: 3, replica: 0, other_model: 7, weird_reason: 1 })).toEqual([

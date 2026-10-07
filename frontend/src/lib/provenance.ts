@@ -226,6 +226,12 @@ export function monthlyCostUsd(queries: number | null | undefined, costPerQuery:
   return Math.round(queries * costPerQuery * 100) / 100;
 }
 
+/** How many months the free queries last at the expected use (null when it cannot be told). */
+export function freeQueriesMonths(queries: number | null | undefined, freeQueries: number | null | undefined): number | null {
+  if (typeof queries !== "number" || typeof freeQueries !== "number" || queries <= 0 || freeQueries <= 0) return null;
+  return Math.floor(freeQueries / queries);
+}
+
 export function usd(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "—";
   const digits = value !== 0 && Math.abs(value) < 0.01 ? 3 : 2;

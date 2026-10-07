@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ErrorState, Skeleton } from "@/components/ui/feedback";
 import { errorMessage } from "@/lib/api";
 import { eur, num, pct, plural, timeAgo } from "@/lib/format";
-import { accuracyDelta, describeDelta, monthlyCostUsd, refreshErrorMessage, rejectedList, usd, usedShare } from "@/lib/provenance";
+import { accuracyDelta, describeDelta, freeQueriesMonths, refreshErrorMessage, rejectedList, usd, usedShare } from "@/lib/provenance";
 import { usePricingEvidence, useRefreshPricingEvidence } from "@/lib/queries";
 import type { EvidenceMetrics, ExternalSearchStatus, PricingEvidence, SoldSaleSource } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -105,7 +105,7 @@ function Budget({ label, used, max }: { label: string; used: number | null; max:
 function ExternalSearch({ e }: { e: ExternalSearchStatus }) {
   const unreadable = e.provider === null;
   const on = e.enabled && e.provider === "serper";
-  const cost = monthlyCostUsd(e.expected_monthly_queries, e.cost_per_query_usd);
+  const freeMonths = freeQueriesMonths(e.expected_monthly_queries, e.free_queries);
   const rejected = rejectedList(e.rejected);
   const prices = e.prices;
   return (
@@ -150,7 +150,11 @@ function ExternalSearch({ e }: { e: ExternalSearchStatus }) {
             <Line
               k="Expected use"
               v={e.expected_monthly_queries !== null ? `~${num(e.expected_monthly_queries)} queries / month` : "—"}
-              sub={cost !== null ? `≈ ${usd(cost)} / month after the free queries` : undefined}
+              sub={
+                freeMonths !== null
+                  ? `free queries last ~${freeMonths} months; then the smallest pack is $50 for 50,000 queries, valid 6 months`
+                  : undefined
+              }
             />
             <Line
               k="Models"
