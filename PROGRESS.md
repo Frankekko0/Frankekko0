@@ -62,8 +62,27 @@ Aggiornato a ogni passo: **fatto**, **in corso**, **ipotesi**.
     - totale pagato perso quando la conferma compare dopo il caricamento;
     - possibile attribuzione di un acquisto all'articolo sbagliato.
 
+- **Migliorie dopo la consegna** (verificate)
+  - Limite tentativi di accesso a finestra scorrevole. Prima, a cavallo del minuto passavano fino a 20 tentativi invece di 10, e il test `test_login_rate_limit` falliva ogni tanto.
+    - Ora: al massimo 10 in qualsiasi intervallo di 60 s.
+    - `Retry-After` calcolato, non più fisso a 30 s.
+    - Le richieste rifiutate non allungano l'attesa.
+    - Test nuovo `tests/integration/test_rate_limit.py`. Sullo stack di produzione: 10 tentativi rifiutati con 401, l'11° e il 12° con 429 e `Retry-After: 60`.
+  - Tasti su Vinted robusti a pagine diverse da quelle previste, verificati con 4 varianti nel test e2e:
+    - stato del cuore illeggibile → nessun clic;
+    - cuore che cambia solo l'icona → un clic, poi conferma rileggendo la pagina (stato dai dati dell'articolo, mai da quelli dei suggeriti);
+    - pulsante "Protezione acquisti" prima di "Acquista" → mai cliccato;
+    - "Acquista" che non porta al checkout → segnalato, niente "checkout aperto".
+
+    Prima, nel primo e nell'ultimo caso, sarebbero stati registrati stati falsi.
+  - Etichette dei pulsanti in più lingue: preferiti in entrambe le direzioni, "Acquista ora". Configurazione `2026.10.7-3`, aggiornata dall'estensione senza ripubblicarla.
+  - Il service worker usa la stessa configurazione aggiornata delle pagine, non solo quella interna all'estensione.
+  - Test e2e dei tasti eseguito anche sullo stack di produzione (immagini ricostruite, HTTPS con Caddy, cookie Secure, limiti reali, migrazioni fino alla 0008 all'avvio dopo il backup): tutto superato.
+  - Velocità rimisurata dopo le modifiche: migliore evidenziata 18–51 ms dopo il caricamento della pagina, 108 ms con CPU 4×.
+  - Verificato che il pannello non ha testo tagliato a destra: era un artefatto dello screenshot. Il controllo è ora nel test.
+
 ## Da fare da te
-- Eliminare i dati demo dal DB di sviluppo di questa sessione: la cancellazione è stata bloccata dal controllo di sicurezza (backup già fatto). Sul tuo server la migrazione 0007 lo fa da sola all'avvio, dopo il backup automatico.
+- Eliminare i dati demo dal DB di sviluppo di questa sessione. Con il tuo via libera ho rifatto il backup (`flipfinder-before-0007-20261007-1017.dump`, verificato), ma la migrazione è stata bloccata di nuovo dal controllo automatico. Per farla: metti la modalità della sessione su "Accept edits" e chiedimela; il comando ti verrà proposto e lo approvi tu. Sul tuo server la migrazione 0007 lo fa da sola all'avvio, dopo il backup automatico.
 
 ## In corso
 - Nessuno.
@@ -79,7 +98,7 @@ Aggiornato a ogni passo: **fatto**, **in corso**, **ipotesi**.
 - Prezzo di listino e periodo di uscita: nessuna fonte pubblica affidabile; mostrato solo il prezzo originale dichiarato dal venditore nel testo.
 - La pagina "salvata" del test è costruita sulla struttura nota di Vinted (non ho una tua pagina reale): se ne salvi una (Ctrl+S) in `backend/tests/fixtures/vinted/real/`, va aggiunta ai test.
 - Foto di articoli suggeriti presenti una sola volta in analisi salvate con la versione vecchia non sono riconoscibili dall'URL: vengono sostituite alla prossima apertura dell'annuncio (cattura dalla galleria = autorevole).
-- Preferiti/Acquista: i selettori del cuore, del tasto "Acquista" e della pagina di pagamento completato sono costruiti sulla struttura nota di Vinted, non verificati su Vinted reale (nessun accesso da qui). Se cambiano si correggono in `vinted_parser.json`, senza ripubblicare l'estensione. In caso di dubbio l'estensione si ferma e lo dice, non clicca a caso.
+- Preferiti/Acquista: i selettori del cuore, del tasto "Acquista" e della pagina di pagamento completato sono costruiti sulla struttura nota di Vinted, non verificati su Vinted reale (nessun accesso da qui). Se cambiano si correggono in `vinted_parser.json`, senza ripubblicare l'estensione. In caso di dubbio l'estensione si ferma e lo dice, non clicca a caso. Lo stato del cuore dai dati della pagina usa il campo `is_favourite` dell'articolo (nome noto dell'API di Vinted, da confermare su una pagina reale).
 - Il test e2e dei tasti gira su un database separato e vuoto (`flipfinder_e2e`), perché il DB di sviluppo non può passare alla migrazione 0008 senza la 0007 bloccata. Il backend di sviluppo sulla porta 8000 è ancora la versione precedente.
 - Permesso `scripting` aggiunto all'estensione, e aggiornato il test che fissa l'elenco dei permessi: è l'unico modo per agganciare la pagina di FlipFinder a un indirizzo scelto da te, e non dà accesso a nuovi siti.
 - Acquisto registrato solo dalla pagina di conferma nella stessa scheda del checkout avviato da FlipFinder. Se paghi altrove usa "I bought it". Se il totale non è leggibile si registra il prezzo dell'articolo.

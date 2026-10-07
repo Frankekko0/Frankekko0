@@ -624,6 +624,21 @@ async function updateParserConfig() {
   }
 }
 
+// The parser configuration in use: FlipFinder's latest copy, else the one shipped with the extension.
+let compiledConf = null;
+async function parserConf() {
+  const { parserConfig } = await local.get("parserConfig");
+  const raw = parserConfig && parserConfig.version ? parserConfig : globalThis.FF_PARSER_CONFIG;
+  if (!compiledConf || compiledConf.version !== raw.version) {
+    try {
+      compiledConf = { version: raw.version, C: P.compileConfig(raw) };
+    } catch {
+      compiledConf = { version: raw.version, C: P.compileConfig(globalThis.FF_PARSER_CONFIG) };
+    }
+  }
+  return compiledConf.C;
+}
+
 // ------------------------------------------------------------------ actions on Vinted (favourite, buy)
 // Only on your click in FlipFinder (or in the panel): the item page opens in your browser, in your
 // Vinted session, and the content script clicks Vinted's own button once. Nothing is paid here:
@@ -648,10 +663,11 @@ async function trustedSender(sender) {
   return Boolean(origin) && origin === (await appOrigin());
 }
 
-function itemUrlOf(url, vid) {
+async function itemUrlOf(url, vid) {
+  const C = await parserConf();
   try {
     const u = new URL(String(url));
-    if (!P.isVintedUrl(u.href, P.compileConfig(globalThis.FF_PARSER_CONFIG)) || P.itemId(u.pathname, P.compileConfig(globalThis.FF_PARSER_CONFIG)) !== String(vid)) return null;
+    if (!P.isVintedUrl(u.href, C) || P.itemId(u.pathname, C) !== String(vid)) return null;
     return u.origin + u.pathname;
   } catch {
     return null;
@@ -669,6 +685,42 @@ function tabLoaded(tabId, timeoutMs = 20000) {
     const timer = setTimeout(() => done(false), timeoutMs);
     chrome.tabs.onUpdated.addListener(listener);
     chrome.tabs.get(tabId).then((t) => t.status === "complete" && done(true), () => done(false));
+  });
+}
+
+/** Reloads a tab and waits for the new page to finish loading. */
+function reloadTab(tabId, timeoutMs = 20000) {
+  return new Promise((resolve) => {
+    let started = false;
+    const done = (ok) => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const listener = (id, info) => {
+      if (id !== tabId) return;
+      if (info.status === "loading") started = true;
+      else if (info.status === "complete" && started) done(true);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.reload(tabId, { bypassCache: true }).catch(() => done(false));
+  });
+}
+
+// Checkouts being opened: tab id -> resolve(true when the tab shows Vinted's checkout).
+const checkoutWaits = new Map();
+function waitForCheckout(tabId, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      checkoutWaits.delete(tabId);
+      resolve(false);
+    }, timeoutMs);
+    checkoutWaits.set(tabId, () => {
+      clearTimeout(timer);
+      checkoutWaits.delete(tabId);
+      resolve(true);
+    });
   });
 }
 
@@ -698,13 +750,24 @@ async function recordVinted(vid, body) {
 const favouriteTabs = new Set();
 
 async function vintedFavourite(msg) {
-  const url = itemUrlOf(msg.url, msg.vid);
+  const url = await itemUrlOf(msg.url, msg.vid);
   if (!url) return { ok: false, code: "bad_url", message: "Annuncio non valido." };
   const tab = await chrome.tabs.create({ url, active: false });
   favouriteTabs.add(tab.id);
   try {
     await tabLoaded(tab.id);
-    const r = await askTab(tab.id, { type: "ff:vinted-act", action: "favourite", vid: String(msg.vid), want: Boolean(msg.want) });
+    const want = Boolean(msg.want);
+    let r = await askTab(tab.id, { type: "ff:vinted-act", action: "favourite", vid: String(msg.vid), want });
+    if (r.code === "verify" && r.clicked) {
+      // Clicked once; the page didn't show the result: give Vinted a moment, then read it again.
+      await sleep(1500);
+      const s = (await reloadTab(tab.id)) ? await askTab(tab.id, { type: "ff:vinted-act", action: "state", vid: String(msg.vid) }) : { ok: false };
+      if (s.ok && s.favourite === want) r = { ...s, ok: true, changed: true };
+      else {
+        if (s.ok && typeof s.favourite === "boolean") await recordVinted(msg.vid, { kind: "favourite", value: s.favourite, source: "page" });
+        return { ok: false, code: "not_confirmed", message: "Vinted non ha confermato il cambio: controlla l'annuncio su Vinted.", favourite: s.ok ? s.favourite : null };
+      }
+    }
     if (r.ok) await recordVinted(msg.vid, { kind: "favourite", value: Boolean(r.favourite), source: "click" });
     return r;
   } finally {
@@ -714,7 +777,7 @@ async function vintedFavourite(msg) {
 }
 
 async function vintedBuyCheck(msg) {
-  const url = itemUrlOf(msg.url, msg.vid);
+  const url = await itemUrlOf(msg.url, msg.vid);
   if (!url) return { ok: false, code: "bad_url", message: "Annuncio non valido." };
   // In front: if you go ahead, the checkout continues in this tab.
   const tab = await chrome.tabs.create({ url, active: true });
@@ -732,14 +795,19 @@ async function vintedBuyOpen(msg) {
     if (!check.ok) return check;
     tabId = buyTabs.get(vid);
   }
+  const opened = waitForCheckout(tabId); // listening before the click
   const r = await askTab(tabId, { type: "ff:vinted-act", action: "buy", vid });
-  if (r.ok) {
-    const { pendingBuys = {} } = await local.get("pendingBuys");
-    pendingBuys[vid] = { at: Date.now(), price: r.price, tabId };
-    await local.set({ pendingBuys });
-    await chrome.tabs.update(tabId, { active: true }).catch(() => {});
-    await recordVinted(vid, { kind: "checkout_opened", price: r.price, source: "click" });
+  if (!r.ok) {
+    if (checkoutWaits.has(tabId)) checkoutWaits.delete(tabId);
+    return r;
   }
+  // A purchase completed later in this tab belongs to this listing.
+  const { pendingBuys = {} } = await local.get("pendingBuys");
+  pendingBuys[vid] = { at: Date.now(), price: r.price, tabId };
+  await local.set({ pendingBuys });
+  await chrome.tabs.update(tabId, { active: true }).catch(() => {});
+  if (!(await opened)) return { ok: false, code: "checkout_not_seen", message: "Ho premuto Acquista su Vinted ma il checkout non si è aperto: controlla la scheda di Vinted.", price: r.price };
+  await recordVinted(vid, { kind: "checkout_opened", price: r.price, source: "click" });
   return r;
 }
 
@@ -748,7 +816,7 @@ async function forgetBuyIfLeft(tabId, url) {
   const { pendingBuys = {} } = await local.get("pendingBuys");
   let vid = null;
   try {
-    vid = P.itemId(new URL(String(url)).pathname, P.compileConfig(globalThis.FF_PARSER_CONFIG));
+    vid = P.itemId(new URL(String(url)).pathname, await parserConf());
   } catch {
     return;
   }
@@ -852,6 +920,16 @@ const HANDLERS = {
   async "ff:hello"(msg, sender) {
     const tabId = sender.tab && sender.tab.id;
     if (typeof tabId === "number" && msg.pageType === "item") forgetBuyIfLeft(tabId, msg.url);
+    if (typeof tabId === "number" && checkoutWaits.has(tabId)) {
+      const C = await parserConf();
+      let path = "";
+      try {
+        path = new URL(String(msg.url)).pathname;
+      } catch {
+        /* not a URL */
+      }
+      if (C.patterns.page_checkout && C.patterns.page_checkout.test(path)) checkoutWaits.get(tabId)();
+    }
     if (typeof tabId === "number") {
       // Bookkeeping for the live panel, without making the page wait for it.
       exclusive(async () => {

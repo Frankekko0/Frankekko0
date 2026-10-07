@@ -257,3 +257,27 @@ test("embedded reader: escaping levels and objects of other items", () => {
   }
   assert.equal(P.findItem([level0], "7", keys), null);
 });
+
+// ------------------------------------------------------------------ favourite state for the Favourite button
+test("your favourite state is read from the item's own data, never from suggested items", () => {
+  const page = (flags) => {
+    const similar = { id: 77, title: "Simile", is_favourite: true };
+    const own = { id: 55, title: "Felpa nuova", price: { amount: "40.0", currency_code: "EUR" }, ...flags };
+    const flight = JSON.stringify(JSON.stringify({ items: [similar], item: own }));
+    return `<!doctype html><html><head><title>Felpa nuova | Vinted</title></head><body><h1>Felpa nuova</h1><p>40,00 €</p><script>self.__next_f.push([1,${flight}])</script></body></html>`;
+  };
+  const read = (html) => P.parseItem(P.collectHtml(html), "https://www.vinted.it/items/55-felpa", NOW, C).favourite_by_me;
+  assert.equal(read(page({ is_favourite: false })), false);
+  assert.equal(read(page({ is_favourite: true })), true);
+  assert.equal(read(page({})), null); // not stated: unknown, never assumed
+});
+
+test("favourite and buy labels: the button's state is read in either direction", () => {
+  for (const on of ["Rimuovi dai preferiti", "Remove from favourites", "Retirer des favoris"]) assert.ok(C.patterns.favourite_on.test(on), on);
+  for (const off of ["Aggiungi ai preferiti", "Add to favorites", "Ajouter aux favoris"]) {
+    assert.ok(C.patterns.favourite_off.test(off), off);
+    assert.ok(!C.patterns.favourite_on.test(off), off);
+  }
+  for (const buy of ["Acquista", "Acquista ora", "Compra ora", "Buy now"]) assert.ok(C.patterns.buy_text.test(buy), buy);
+  for (const other of ["Protezione acquisti", "Fai un'offerta", "Acquista e paga dopo con..."]) assert.ok(!C.patterns.buy_text.test(other), other);
+});

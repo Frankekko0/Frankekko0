@@ -759,6 +759,9 @@
     else if (closed === "false" || availability.includes("InStock")) set("active", closed ? "embedded" : "jsonld");
     else if (C.patterns.status_sold.test(topText)) set("sold", "text");
     else if (C.patterns.status_reserved.test(topText)) set("reserved", "text");
+    // Whether you (signed in) have the item in your favourites, as the page was served.
+    const mine = emb("favourite_by_me");
+    item.favourite_by_me = mine === "true" ? true : mine === "false" ? false : null;
 
     // Photos: only the item's gallery, in its order. The item's structured data first; then the
     // product's JSON-LD, the page's gallery container, its preview image. Profile photos found

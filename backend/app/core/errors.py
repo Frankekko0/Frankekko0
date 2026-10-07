@@ -65,6 +65,10 @@ class RateLimitedError(AppError):
     code = "rate_limited"
     message = "Troppe richieste in poco tempo. Riprova tra qualche secondo."
 
+    def __init__(self, message: str | None = None, *, retry_after: int = 30) -> None:
+        super().__init__(message)
+        self.retry_after = max(1, retry_after)
+
 
 class InsufficientDataError(AppError):
     status_code = 422
@@ -105,7 +109,7 @@ _VALIDATION_MESSAGES = {
 def install_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _app_error(request: Request, exc: AppError) -> JSONResponse:
-        headers = {"Retry-After": "30"} if isinstance(exc, RateLimitedError) else None
+        headers = {"Retry-After": str(exc.retry_after)} if isinstance(exc, RateLimitedError) else None
         return JSONResponse(
             status_code=exc.status_code,
             content=_payload(exc.code, exc.message, exc.details, _request_id(request)),

@@ -701,7 +701,8 @@
       send({ type: "ff:item", vid: this.vid, payload, pageUrl: location.href });
       // Your favourite state on Vinted, as this page shows it (keeps FlipFinder aligned).
       const fav = favouriteButton();
-      if (fav && !signedOut()) send({ type: "ff:favourite-seen", vid: this.vid, value: isFavourite(fav) });
+      const value = fav && !signedOut() ? favouriteNow(fav, scriptsAreFresh() ? parsed : null) : null;
+      if (value !== null) send({ type: "ff:favourite-seen", vid: this.vid, value });
     },
   };
 
@@ -858,18 +859,23 @@
     return actionButtons(C.selectors.favourite_button)[0] || null;
   }
 
-  function isFavourite(btn) {
+  /** true / false when the button says it (pressed state or label), null when it can't be read. */
+  function favouriteState(btn) {
     if (!btn) return null;
     const pressed = btn.getAttribute("aria-pressed");
     if (pressed === "true" || pressed === "false") return pressed === "true";
     const label = `${btn.getAttribute("aria-label") || ""} ${btn.getAttribute("title") || ""} ${text(btn)}`;
-    return Boolean(C.patterns.favourite_on && C.patterns.favourite_on.test(label));
+    if (C.patterns.favourite_on && C.patterns.favourite_on.test(label)) return true;
+    if (C.patterns.favourite_off && C.patterns.favourite_off.test(label)) return false;
+    return null;
   }
 
+  // Vinted's own Buy button: its exact test id, otherwise a button whose whole text is "Acquista"
+  // (never a look-alike such as "Protezione acquisti" or "Fai un'offerta").
   function buyButton() {
     const rx = C.patterns.buy_text;
     const all = actionButtons(C.selectors.buy_button);
-    return all.find((b) => /buy/i.test(b.getAttribute("data-testid") || "")) || all.find((b) => rx && rx.test(text(b))) || null;
+    return all.find((b) => b.getAttribute("data-testid") === "item-buy-button") || all.find((b) => rx && rx.test(text(b))) || null;
   }
 
   const signedOut = () => Boolean(C.selectors.signed_out_marker && document.querySelector(C.selectors.signed_out_marker));
@@ -890,10 +896,17 @@
       currency: parsed ? parsed.currency : null,
       title: parsed ? parsed.title : null,
       signedIn: !signedOut(),
-      favourite: isFavourite(fav),
+      favourite: favouriteNow(fav, parsed),
       canFavourite: Boolean(fav),
       canBuy: Boolean(buyButton()),
     };
+  }
+
+  // The button first; otherwise the item's own data as the page was served (null if neither).
+  function favouriteNow(btn, parsed) {
+    const shown = favouriteState(btn);
+    if (shown !== null) return shown;
+    return parsed && typeof parsed.favourite_by_me === "boolean" ? parsed.favourite_by_me : null;
   }
 
   async function vintedAct(msg) {
@@ -904,15 +917,17 @@
     if (msg.action === "favourite") {
       const btn = favouriteButton();
       if (!btn) return { ok: false, code: "no_button", message: "Pulsante dei preferiti non trovato in questa pagina (configurazione da aggiornare).", ...snap };
+      // Never a blind click: if the current state can't be read, a click could undo it.
+      if (snap.favourite === null) return { ok: false, code: "unknown_state", message: "Non riesco a leggere se l'annuncio è già nei tuoi preferiti: nessun clic fatto (configurazione da aggiornare).", ...snap };
       if (snap.favourite === Boolean(msg.want)) return { ok: true, changed: false, ...snap };
       btn.click(); // one click, as you would
       for (let i = 0; i < 15; i += 1) {
         await sleep(200);
-        const now = isFavourite(favouriteButton());
-        if (now === Boolean(msg.want)) return { ok: true, changed: true, ...snap, favourite: now };
-        if (signedOut()) break;
+        if (favouriteState(favouriteButton()) === Boolean(msg.want)) return { ok: true, changed: true, ...snap, favourite: Boolean(msg.want) };
+        if (signedOut()) return { ok: false, code: "signed_out", message: "Vinted chiede di accedere: accedi e riprova.", ...snap };
       }
-      return { ok: false, code: signedOut() ? "signed_out" : "not_confirmed", message: signedOut() ? "Vinted chiede di accedere: accedi e riprova." : "Vinted non ha confermato il cambio: controlla la pagina.", ...snap, favourite: isFavourite(favouriteButton()) };
+      // Clicked once, but the button doesn't show the new state: the page is reloaded and read again.
+      return { ok: false, code: "verify", clicked: true, ...snap };
     }
     if (msg.action === "buy") {
       if (snap.status !== "active") return { ok: false, code: snap.status, message: "L'articolo non è più acquistabile.", ...snap };

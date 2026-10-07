@@ -1,7 +1,7 @@
 /* Generated from backend/app/acquisition/vinted_parser.json by tools/sync-parser-config.mjs.
  * Do not edit: change the JSON (the server and the extension share it) and run the tool. */
 globalThis.FF_PARSER_CONFIG = {
-  "version": "2026.10.7-2",
+  "version": "2026.10.7-3",
   "about": "Single source of Vinted selectors, labels and patterns, shared by the FlipFinder server (Python) and the browser extension (JavaScript). Regexes use only syntax common to both languages (numbered groups, no named groups). Edit here when Vinted changes its pages; the extension downloads it from the server.",
   "domains": [
     "vinted.it",
@@ -105,11 +105,15 @@ globalThis.FF_PARSER_CONFIG = {
       "flags": "i"
     },
     "favourite_on": {
-      "source": "rimuovi dai preferiti|remove from favou?rites|retirer des favoris|aus (den )?favoriten entfernen|eliminar de favoritos|quitar de favoritos|unfavou?rite",
+      "source": "rimuovi dai preferiti|remove from favou?rites|retirer des favoris|aus (den )?favoriten entfernen|eliminar de favoritos|quitar de favoritos|remover dos favoritos|usuń z ulubionych|unfavou?rite",
+      "flags": "i"
+    },
+    "favourite_off": {
+      "source": "aggiungi (ai|tra i) preferiti|add to favou?rites|ajouter aux favoris|zu (den )?favoriten hinzufügen|añadir a favoritos|agregar a favoritos|adicionar aos favoritos|dodaj do ulubionych",
       "flags": "i"
     },
     "buy_text": {
-      "source": "^(acquista|compra( ora)?|buy( now)?|acheter|kaufen|comprar)$",
+      "source": "^(acquista( ora)?|compra( ora)?|buy( now)?|acheter|kaufen|comprar)$",
       "flags": "i"
     },
     "page_checkout": {

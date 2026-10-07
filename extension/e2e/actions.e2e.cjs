@@ -21,13 +21,17 @@ const ID0 = 881000100 + (Date.now() % 100000) * 10; // fresh Vinted ids on every
 const A = ID0 + 1; // bought end to end
 const B = ID0 + 2; // its price changes
 const C = ID0 + 3; // reserved for someone else
+const D = ID0 + 4; // a page that differs from the expected one
+// favMode: "aria" (pressed state), "icon" (only the icon changes; state in the page data),
+// "blind" (state nowhere). buyMode: "normal", "decoy" (a look-alike button first), "dead".
 const ITEMS = {
   [A]: { title: "Polo Ralph Lauren Custom Slim Fit blu", price: 20, reserved: false },
   [B]: { title: "Felpa Polo Ralph Lauren grigia zip", price: 30, reserved: false },
   [C]: { title: "Maglione Polo Bear Ralph Lauren", price: 45, reserved: false },
+  [D]: { title: "Camicia Ralph Lauren Oxford azzurra", price: 35, reserved: false },
 };
 // What Vinted's servers know: your session, your favourites, the pages served.
-const vinted = { signedIn: true, fav: new Map(), favPosts: [], checkouts: [], successes: [] };
+const vinted = { signedIn: true, fav: new Map(), favPosts: [], checkouts: [], successes: [], decoys: 0 };
 
 const euro = (v) => v.toFixed(2).replace(".", ",");
 function itemHtml(id) {
@@ -45,22 +49,30 @@ function itemHtml(id) {
 <div data-testid="item-attributes-upload_date"><div>Caricato</div><div>2 giorni fa</div></div>
 <div itemprop="description">${ld.description}</div><a href="/member/4242-venditore"><span>venditore_x</span></a><div data-testid="seller-rating"><span aria-label="Valutazione 4,8 su 5">★★★★★</span><span>52 recensioni</span></div>
 <div data-testid="item-sidebar">
-  <button type="button" data-testid="item-favourite-button" aria-pressed="${fav}" aria-label="${fav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}">♡ 21</button>
-  ${it.reserved ? '<p data-testid="item-status--reserved">Riservato</p>' : '<button type="button" data-testid="item-buy-button">Acquista</button>'}
+  ${favButton(it.favMode || "aria", fav)}
+  ${it.buyMode === "decoy" ? '<button type="button" data-testid="item-buyer-protection-button" onclick="fetch(\'/api/decoy\', { method: \'POST\' })">Protezione acquisti</button>' : ""}
+  ${it.reserved ? '<p data-testid="item-status--reserved">Riservato</p>' : `<button type="button" data-testid="${it.buyMode === "decoy" ? "item-buy-btn" : "item-buy-button"}">Acquista</button>`}
 </div>
 </main>
 <script>
 const fb = document.querySelector('[data-testid="item-favourite-button"]');
 fb.addEventListener("click", async () => {
   const r = await fetch("/api/v2/items/${id}/favourite", { method: "POST" }).then((x) => x.json());
-  fb.setAttribute("aria-pressed", String(r.on));
-  fb.setAttribute("aria-label", r.on ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti");
+  if (fb.hasAttribute("aria-pressed")) {
+    fb.setAttribute("aria-pressed", String(r.on));
+    fb.setAttribute("aria-label", r.on ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti");
+  } else fb.querySelector("path").setAttribute("d", r.on ? "M1 1h8v8H1z" : "M1 1h8");
 });
-const bb = document.querySelector('[data-testid="item-buy-button"]');
-if (bb) bb.addEventListener("click", () => { location.href = "/checkout?transaction_id=9${id}"; });
+const bb = document.querySelector('[data-testid^="item-buy-b"]');
+if (bb && ${it.buyMode !== "dead"}) bb.addEventListener("click", () => { location.href = "/checkout?transaction_id=9${id}"; });
 </script>
-<script>self.__next_f.push([1,"{\\"item\\":{\\"id\\":${id},\\"favourite_count\\":21,\\"view_count\\":310,\\"is_reserved\\":${it.reserved},\\"is_closed\\":false,\\"user\\":{\\"feedback_reputation\\":0.96,\\"feedback_count\\":52}}}"])</script></body></html>`;
+<script>self.__next_f.push([1,"{\\"item\\":{\\"id\\":${id},\\"favourite_count\\":21,\\"view_count\\":310,${it.favMode === "blind" ? "" : `\\"is_favourite\\":${fav},`}\\"is_reserved\\":${it.reserved},\\"is_closed\\":false,\\"user\\":{\\"feedback_reputation\\":0.96,\\"feedback_count\\":52}}}"])</script></body></html>`;
 }
+// The favourite button: with a pressed state and label, or only an icon that changes.
+const favButton = (mode, fav) =>
+  mode === "aria"
+    ? `<button type="button" data-testid="item-favourite-button" aria-pressed="${fav}" aria-label="${fav ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}">♡ 21</button>`
+    : `<button type="button" data-testid="item-favourite-button" aria-label="Preferiti"><svg width="16" height="16"><path d="${fav ? "M1 1h8v8H1z" : "M1 1h8"}"/></svg></button>`;
 const checkoutHtml = (id) => {
   const p = ITEMS[id].price;
   return `<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Checkout | Vinted</title></head><body style="font-family:sans-serif">
@@ -86,13 +98,14 @@ let diagnose = async () => {};
   fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(manifest));
 
   // A fresh FlipFinder account and a pairing key, as Settings → Browser extension creates.
-  const api = await request.newContext({ baseURL: APP });
+  // ignoreHTTPSErrors: a production stack tested at https://localhost has Caddy's local certificate.
+  const api = await request.newContext({ baseURL: APP, ignoreHTTPSErrors: true });
   const reg = await api.post("/api/v1/auth/register", { data: { email: `e2e-actions-${Date.now()}@example.com`, password: "E2e-test-pass-2026!" } });
   if (!reg.ok()) throw new Error("register: " + (await reg.text()));
   const session = await reg.json();
   const created = await api.post("/api/v1/extension/keys", { data: { name: "e2e" }, headers: { "X-CSRF-Token": session.csrf_token } });
   const { key } = await created.json();
-  const capture = await request.newContext({ baseURL: APP, extraHTTPHeaders: { Authorization: `Bearer ${key}` } });
+  const capture = await request.newContext({ baseURL: APP, ignoreHTTPSErrors: true, extraHTTPHeaders: { Authorization: `Bearer ${key}` } });
 
   // Fake Vinted (and its image host) over HTTPS with a throwaway self-signed certificate.
   const certDir = fs.mkdtempSync(path.join(os.tmpdir(), "ffcert-"));
@@ -109,6 +122,7 @@ let diagnose = async () => {};
       vinted.favPosts.push(id);
       return send(JSON.stringify({ on: vinted.fav.get(id) }), "application/json");
     }
+    if (u.pathname === "/api/decoy") return (vinted.decoys += 1), send("{}", "application/json");
     const tx = Number((u.searchParams.get("transaction_id") || "").slice(1));
     if (u.pathname === "/checkout") return vinted.checkouts.push(tx), send(checkoutHtml(tx));
     if (u.pathname === "/checkout/success") return vinted.successes.push(tx), send(successHtml(tx));
@@ -128,10 +142,13 @@ let diagnose = async () => {};
       "--ignore-certificate-errors", "--no-proxy-server",
     ],
     viewport: { width: 1280, height: 900 },
+    ignoreHTTPSErrors: true,
   });
   await ctx.addCookies((await api.storageState()).cookies); // signed in to FlipFinder in this browser
-  let [sw] = ctx.serviceWorkers();
-  if (!sw) sw = await ctx.waitForEvent("serviceworker");
+  // The extension's service worker (not a web page's own, such as the app's PWA worker).
+  const isExt = (w) => w.url().startsWith("chrome-extension://");
+  let sw = ctx.serviceWorkers().find(isExt);
+  if (!sw) sw = await ctx.waitForEvent("serviceworker", { predicate: isExt });
   if (process.env.E2E_DEBUG) {
     sw.on("console", (m) => console.log("  [sw]", m.text()));
     ctx.on("page", (p) => p.on("console", (m) => console.log(`  [${p.url().slice(0, 50)}]`, m.text())));
@@ -145,7 +162,7 @@ let diagnose = async () => {};
       const v = await fn();
       if (v) return v;
       if (Date.now() > end) throw new Error(`timeout: ${what}`);
-      await new Promise((res) => setTimeout(res, 300));
+      await new Promise((res) => setTimeout(res, 500)); // gentle with the API's rate limits
     }
   };
 
@@ -157,7 +174,7 @@ let diagnose = async () => {};
   // 1) You browse the three listings on Vinted: the extension records them in FlipFinder.
   const vintedTab = await ctx.newPage();
   const ids = {};
-  for (const id of [A, B, C]) {
+  for (const id of [A, B, C, D]) {
     await vintedTab.goto(`https://www.vinted.it/items/${id}-x`);
     ids[id] = await until(`capture ${id}`, async () => {
       const r = await capture.post("/api/v1/capture/evaluations", { data: { vinted_ids: [String(id)] } });
@@ -295,6 +312,40 @@ let diagnose = async () => {};
   await app.getByRole("button", { name: "Cancel" }).click();
   log("tracking page → Buy check works");
 
+  // 10a) Vinted's page differs from the expected one: never a blind or wrong click.
+  ITEMS[D].favMode = "icon"; // the heart only changes its icon: checked by reading the page again
+  await app.goto(`${APP}/deals/${ids[D].opp}`);
+  await app.getByRole("button", { name: "Add to Vinted favourites" }).click();
+  await app.getByText("Added to your Vinted favourites.").waitFor({ timeout: 45000 });
+  assert.deepEqual(vinted.favPosts.filter((v) => v === D), [D], "one click on Vinted");
+  assert.equal(vinted.fav.get(D), true);
+  s = await until("favourite D recorded", async () => ((await state(ids[D].lid)).favourite?.value === true ? state(ids[D].lid) : null));
+  log("heart without a readable state → confirmed by reading the page again:", s.favourite.value, `(${s.favourite.source})`);
+  ITEMS[D].favMode = "blind"; // state nowhere on the page: no click at all
+  await app.getByRole("button", { name: "In Vinted favourites" }).click();
+  await app.getByText(/can't read whether the listing is already in your Vinted favourites/).waitFor({ timeout: 45000 });
+  assert.equal(vinted.favPosts.filter((v) => v === D).length, 1, "no blind click");
+  assert.equal(vinted.fav.get(D), true);
+  log("heart state unreadable → refused, no click");
+  ITEMS[D].buyMode = "decoy"; // "Protezione acquisti" before the real "Acquista"
+  await app.getByRole("button", { name: "Buy on Vinted" }).click();
+  await app.getByText(/Available at/).waitFor({ timeout: 30000 });
+  await app.getByRole("button", { name: /^Open checkout/ }).click();
+  await app.getByText(/Vinted checkout open/).waitFor({ timeout: 30000 });
+  assert.equal(vinted.decoys, 0, "the look-alike button is never clicked");
+  assert.ok(vinted.checkouts.includes(D));
+  const opened = (await state(ids[D].lid)).checkout_opened;
+  assert.ok(opened);
+  log("look-alike button next to Acquista → ignored, checkout opened");
+  for (const p of ctx.pages()) if (p.url().includes(`transaction_id=9${D}`)) await p.close();
+  ITEMS[D].buyMode = "dead"; // Acquista doesn't lead to the checkout
+  await app.getByRole("button", { name: "Buy on Vinted" }).click();
+  await app.getByText(/Available at/).waitFor({ timeout: 30000 });
+  await app.getByRole("button", { name: /^Open checkout/ }).click();
+  await app.getByText(/the checkout did not open/).waitFor({ timeout: 45000 });
+  assert.equal((await state(ids[D].lid)).checkout_opened.at, opened.at, "not recorded as opened");
+  log("Acquista without a checkout → reported, nothing recorded");
+
   // 10) Extension panel, on the listing you are looking at: check, warning, open the checkout.
   for (const p of ctx.pages()) if (p !== app && p !== vintedTab) await p.close();
   await vintedTab.goto(`https://www.vinted.it/items/${B}-x`);
@@ -316,6 +367,12 @@ let diagnose = async () => {};
   log("panel note:", (await note.textContent()).trim());
   await panel.getByRole("button", { name: /Apri il checkout/ }).waitFor({ timeout: 5000 });
   log("panel:", (await note.textContent()).trim());
+  const widths = await panel.evaluate(() => {
+    const cw = document.documentElement.clientWidth;
+    const wide = [...document.querySelectorAll("body *")].filter((e) => e.getBoundingClientRect().right > cw + 0.5).slice(0, 5);
+    return { scroll: document.documentElement.scrollWidth, client: cw, wide: wide.map((e) => `${e.tagName}.${e.className}:${Math.round(e.getBoundingClientRect().right)}`) };
+  });
+  assert.deepEqual(widths.wide, [], `nothing wider than the panel: ${JSON.stringify(widths)}`);
   assert.match(await note.textContent(), /prezzo cambiato da 27,00.* a 25,00/);
   await panel.screenshot({ path: `${OUT}/actions-panel.png`, fullPage: true });
   await panel.getByRole("button", { name: /Apri il checkout/ }).click();

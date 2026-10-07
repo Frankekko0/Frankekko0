@@ -20,7 +20,11 @@ Tutto viene salvato in FlipFinder, con la data, la modalità di acquisizione e l
     - al primo rifiuto di Vinted si fermano per 6 ore, senza tentativi di aggiramento.
 - **Sul tuo account Vinted solo ciò che chiedi tu, un clic per un'azione.**
   - **Preferiti** (pagina Analisi di FlipFinder): un clic apre l'annuncio in una scheda in background, preme una volta il cuore di Vinted, attende la conferma e chiude la scheda. Ogni volta che apri un annuncio, lo stato del cuore visto sulla pagina riallinea FlipFinder.
+    - Se non riesce a leggere se l'annuncio è già nei preferiti (né dal pulsante né dai dati della pagina), non clicca: un clic alla cieca potrebbe toglierlo.
+    - Se dopo il clic il pulsante non mostra il nuovo stato, ricarica la pagina e legge lo stato vero. Non clicca mai una seconda volta.
   - **Acquista** (pagina Analisi, pagina di tracking, pannello): un clic apre l'annuncio e verifica disponibilità e prezzo. Se è venduto, riservato o il prezzo è cambiato lo vedi prima. Solo un secondo clic preme "Acquista" di Vinted e apre il suo checkout: il pagamento lo confermi tu su Vinted. FlipFinder registra "checkout aperto" e, sulla pagina di conferma della stessa scheda, "acquistato" con il totale pagato.
+    - Preme solo il vero "Acquista" (il suo identificativo, o un pulsante il cui testo è esattamente "Acquista"), mai pulsanti simili come "Protezione acquisti" o "Fai un'offerta".
+    - "Checkout aperto" viene registrato solo quando la pagina del checkout compare davvero; altrimenti te lo dice.
   - Le richieste dalla pagina di FlipFinder sono accettate solo subito dopo un tuo clic reale, e solo per queste azioni. Niente offerte, messaggi o acquisti automatici.
   - Le azioni rapide ("Traccia", "Analisi approfondita", "Apri nella pagina di tracking") agiscono solo su FlipFinder.
 - **Nessun cookie, token o credenziale di Vinted** viene letto o inviato.

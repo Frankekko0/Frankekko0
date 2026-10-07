@@ -86,7 +86,9 @@ export const BRIDGE_HELP: Record<Exclude<BridgeStatus, "ready" | "checking">, st
 const CODE_MESSAGE: Record<string, string> = {
   signed_out: "You are not signed in to Vinted in this browser: sign in on Vinted and try again.",
   no_button: "Vinted's button was not found on the listing page: the extension's page settings need an update.",
-  not_confirmed: "Vinted did not confirm the change: check the listing page.",
+  not_confirmed: "Vinted did not confirm the change: check the listing on Vinted.",
+  unknown_state: "The extension can't read whether the listing is already in your Vinted favourites, so it did not click (its page settings need an update).",
+  checkout_not_seen: "Buy was pressed on Vinted but the checkout did not open: check the Vinted tab.",
   wrong_page: "The listing page did not open: try again.",
   no_page: "The Vinted page is not responding: try again.",
   bad_url: "This is not a valid Vinted listing.",
