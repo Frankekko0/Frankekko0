@@ -17,14 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analytics.backtest import (
-    Case,
-    baseline_estimator,
-    load_rows,
-    production_estimator,
-    run_backtest,
-    time_split,
-)
+from app.analytics.backtest import Case, load_rows, time_split
 from app.analytics.calibration import (
     STATE_KEY,
     Calibration,
@@ -32,6 +25,7 @@ from app.analytics.calibration import (
     confidence_bucket,
     describe_errors,
 )
+from app.analytics.evidence import decide_gate, load_evidence_pool, run_evidence_backtest, store_gate
 from app.core.logging import get_logger
 from app.db.models import Opportunity, Purchase, Sale, SystemState
 from app.ingestion.catalog import Catalog, load_catalog
@@ -40,6 +34,11 @@ log = get_logger(__name__)
 OWN_WEIGHT = 5.0  # the user's own resales count as five market sales
 MAX_SUBJECTS = 1200
 SHIFT_MIN_GAIN = 0.01  # a shift must cut the error by at least 1% to be applied
+
+
+def aware(split: datetime) -> datetime:
+    """``time_split`` gives a naive ``datetime.max`` when nothing sold: comparable with sale dates."""
+    return split if split.tzinfo is not None else split.replace(tzinfo=UTC)
 
 
 def _cal_cases(cases: list[Case]) -> list[CalibrationCase]:
@@ -154,13 +153,22 @@ def evaluate(
 
 
 async def fit_price_calibration(session: AsyncSession, max_subjects: int = MAX_SUBJECTS) -> dict[str, Any]:
+    """Backtest of every evidence variant -> evidence gate -> calibration of the variant production
+    now uses (the extra evidence decides the estimate the ranges are calibrated on)."""
     catalog = await load_catalog(session)
     rows = await load_rows(session, catalog)
-    split = time_split(rows, 0.5)
-    before = run_backtest(rows, catalog, baseline_estimator, max_subjects=max_subjects)
-    now_cases = run_backtest(rows, catalog, production_estimator, max_subjects=max_subjects)
+    split = aware(time_split(rows, 0.5))
+    pool = await load_evidence_pool(session, catalog)
+    bt = run_evidence_backtest(rows, catalog, pool, split, max_subjects=max_subjects)
+    gate = decide_gate(bt)
+    await store_gate(session, gate)
+    before = [c for c in bt.cases["baseline"] if c.kind == "vinted"]
+    now_cases = [c for c in bt.cases[gate["variant"]] if c.kind == "vinted"]
     own = await own_outcomes(session, catalog)
     cal, metrics = evaluate(before, now_cases, own, split)
+    metrics["evidence"] = {
+        k: gate[k] for k in ("variant", "use_external", "use_own_purchases", "use_new_cap", "affected")
+    }
     stmt = pg_insert(SystemState).values(key=STATE_KEY, value=cal.to_state())
     await session.execute(
         stmt.on_conflict_do_update(
