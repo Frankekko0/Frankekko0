@@ -401,6 +401,8 @@ async def test_cli_dry_run_stores_nothing_but_counts_queries(session: Any) -> No
     assert len(report["rejected_rows"]) == 15
     assert {"reason": "kids", "detail": "bambini"}.items() <= report["rejected_rows"][1].items()
     assert "prova: nulla salvato" in text and "bambini" in text and "venduto" in text
+    assert text.startswith("Nike Air Max 90 - 3 query")
+    assert [r["price_eur"] for r in report["kept_rows"] if r["outlier"]] == ["950.00"]
     assert (await session.execute(select(func.count()).select_from(ExternalPrice))).scalar() == 0
     assert (await session.execute(select(func.count()).select_from(ExternalSearch))).scalar() == 0
     budget = await get_state(session, BUDGET_KEY)

@@ -36,6 +36,7 @@ from app.external.service import (
 )
 from app.identification.taxonomy import Taxonomy, fold
 from app.ingestion.catalog import load_catalog
+from app.market.cleaning import outlier_ids
 
 KIND_LABELS = {"new": "nuovo", "asking": "in vendita", "sold": "venduto"}
 REASON_LABELS = {
@@ -73,7 +74,7 @@ def resolve_model(taxonomy: Taxonomy, slug: str, value: str) -> tuple[str, str |
     return " ".join(value.split()), None
 
 
-def _row(c: Any) -> dict[str, Any]:
+def _row(c: Any, outlier: bool) -> dict[str, Any]:
     o = c.offer
     return {
         "kind": c.kind,
@@ -87,18 +88,24 @@ def _row(c: Any) -> dict[str, Any]:
         "title": o.title,
         "url": o.url,
         "score": c.score,
+        "outlier": outlier,
     }
 
 
 def search_report(search: ModelSearch | None, summary: dict[str, Any]) -> dict[str, Any]:
+    # Implausible prices among those found now (the stored ones are also checked against the
+    # prices already in the database).
+    kept = search.kept if search else []
+    flagged = outlier_ids((i, c.kind, c.price_eur, c.condition) for i, c in enumerate(kept))
     return {
         **summary,
         "model": search.spec.model_name if search else None,
         "brand": search.spec.brand_slug if search else None,
+        "brand_name": search.spec.brand_name if search else None,
         "queries": [{"endpoint": q.endpoint, "purpose": q.purpose, "q": q.q} for q in search.queries]
         if search
         else [],
-        "kept_rows": [_row(c) for c in search.kept] if search else [],
+        "kept_rows": [_row(c, i in flagged) for i, c in enumerate(kept)],
         "rejected_rows": [
             {"reason": reason, "detail": detail, "title": o.title, "source": o.source, "url": o.url}
             for o, reason, detail in search.rejected
@@ -109,7 +116,7 @@ def search_report(search: ModelSearch | None, summary: dict[str, Any]) -> dict[s
 
 
 def format_search(report: dict[str, Any], settings: Settings, dry_run: bool) -> str:
-    title = f"{report['brand'] or ''} {report['model'] or ''}".strip() or "Ricerca"
+    title = f"{report['brand_name'] or ''} {report['model'] or ''}".strip() or "Ricerca"
     lines = [
         f"{title} - {report['queries_used']} query "
         f"(oggi {report['today_used']}/{settings.external_search_daily_max}, "
@@ -128,6 +135,7 @@ def format_search(report: dict[str, Any], settings: Settings, dry_run: bool) -> 
         lines.append(
             f"  {KIND_LABELS[r['kind']]:<10} {r['source'][:22]:<22} {r['price']:>9} {r['currency']} = "
             f"{r['price_eur']:>8} EUR  {r['date'] or '-':<10}  {r['condition']:<16} {r['title'][:60]}"
+            + ("  [prezzo anomalo: escluso]" if r["outlier"] else "")
         )
     lines.append(f"Scartati: {len(report['rejected_rows'])}")
     for r in report["rejected_rows"]:
