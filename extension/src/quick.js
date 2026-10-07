@@ -6,7 +6,10 @@
  * opportunity on the page is known as soon as the cards are read. Same formulas as the server
  * (costs, condition, risk-adjusted profit = margin x P(sale) x P(authentic)); the full server
  * analysis arrives later and replaces it. A segment without enough sales gives no estimate
- * ("dati insufficienti"), never a guessed number. No browser APIs: unit-tested in Node.
+ * ("dati insufficienti"), never a guessed number. The most specific data first: concluded sales
+ * of the recognised model (market summary "models"), then brand + category, then brand; the
+ * page statistics FlipFinder sends for the page (one request) refine it further.
+ * No browser APIs: unit-tested in Node.
  */
 (function (root, factory) {
   const api = factory();
@@ -52,7 +55,26 @@
         /* a pattern JS cannot read is skipped */
       }
     }
-    return { raw: m, version: m.version, brands, brandAliases, keywords, lines, suspicious };
+    // Models with enough concluded sales, per brand, longest name first ("air max 90" before "air max").
+    const models = {};
+    for (const [key, row] of Object.entries(m.models || {})) {
+      const cut = key.indexOf("|");
+      const brand = key.slice(0, cut);
+      const name = key.slice(cut + 1);
+      if (!brand || name.length < 2 || !Array.isArray(row)) continue;
+      (models[brand] = models[brand] || []).push([name, wordRx(name), row]);
+    }
+    for (const list of Object.values(models)) list.sort((a, b) => b[0].length - a[0].length);
+    return { raw: m, version: m.version, brands, brandAliases, keywords, lines, suspicious, models };
+  }
+
+  /** The recognised model of a card, among the models with concluded sales: [name, stats row]. */
+  function findModel(title, brand, M) {
+    const list = M.models && M.models[brand];
+    if (!list) return null;
+    const folded = fold(title);
+    for (const [name, rx, row] of list) if (rx.test(folded)) return [name, row];
+    return null;
   }
 
   function findBrand(card, M) {
@@ -131,17 +153,70 @@
     const brand = findBrand(card, M);
     if (!brand) return { ...out, insufficient: "brand non riconosciuto" };
     const category = findCategory(card.title, brand, M);
-    const seg = (category && M.raw.segments[`${brand}|${category}`]) || M.raw.segments[`${brand}|*`];
+    const catSeg = (category && M.raw.segments[`${brand}|${category}`]) || null;
+    const seg = catSeg || M.raw.segments[`${brand}|*`];
+    const model = findModel(card.title, brand, M);
+    if (model) {
+      // Concluded sales of this very model: [median, low, high, n_sales, days, sell_through].
+      const [median, low, high, nSales, days, sellThrough] = model[1];
+      const pSale = seg ? seg[4] : null;
+      return verdictFrom(card, M, out, price, brand, category, {
+        median, low, high, n: nSales, pSale: pSale ?? sellThrough ?? null, days: days ?? (seg ? seg[5] : null),
+        level: "model", model: model[0], conditioned: false, label: "venduti del modello",
+      });
+    }
     if (!seg) return { ...out, brand, category, insufficient: "troppe poche vendite di articoli simili" };
     const [median, p10, p90, nSold, pSale, days] = seg;
-    const mult = M.raw.condition_mult[card.condition || "unknown"] ?? M.raw.condition_mult.unknown ?? 0.95;
+    return verdictFrom(card, M, out, price, brand, category, {
+      median, low: p10, high: p90, n: nSold, pSale, days, level: catSeg ? "category" : "brand", model: null, conditioned: false, label: "venduti simili",
+    });
+  }
+
+  /**
+   * The same verdict from the statistics FlipFinder computed for this card (page statistics:
+   * the most specific segment with data, concluded sales first). Asking prices are used only
+   * when no sale is known, as the server does; a segment already per condition needs no
+   * condition adjustment. Returns null when the statistics add nothing usable.
+   */
+  function refineWithStats(card, stat, M) {
+    if (!M || !stat || !(stat.median > 0)) return null;
+    const price = Number(card.price);
+    if (!(price > 0)) return null;
+    const out = { vinted_id: card.vinted_id, source: "local", status: card.status || "active" };
+    const brand = (stat.brand && M.brands[stat.brand] ? stat.brand : null) || findBrand(card, M);
+    if (!brand) return null;
+    const category = stat.category || findCategory(card.title, brand, M);
+    const seg = (category && M.raw.segments[`${brand}|${category}`]) || M.raw.segments[`${brand}|*`];
+    const sold = stat.basis === "sold";
+    const n = sold ? stat.n_sales : stat.n_asking;
+    if (!(n > 0)) return null;
+    const pSale = seg && seg[4] !== null && seg[4] !== undefined ? seg[4] : stat.sell_through ?? null;
+    const v = verdictFrom(card, M, out, price, brand, category, {
+      median: stat.median, low: stat.low, high: stat.high, n, pSale, days: stat.days ?? (seg ? seg[5] : null),
+      level: stat.level, model: stat.model || null, conditioned: /condition/.test(stat.level || ""),
+      label: sold ? (stat.model ? "venduti del modello" : "venduti simili") : "prezzi chiesti",
+    });
+    v.refined = true;
+    v.basis = stat.basis;
+    if (!sold) v.confidence = Math.round(v.confidence * 0.6); // asks are not sales
+    return v;
+  }
+
+  function verdictFrom(card, M, out, price, brand, category, d) {
+    const mult = d.conditioned ? 1 : M.raw.condition_mult[card.condition || "unknown"] ?? M.raw.condition_mult.unknown ?? 0.95;
+    const median = d.median;
+    const p10 = d.low;
+    const p90 = d.high;
+    const nSold = d.n;
+    const pSale = d.pSale;
+    const days = d.days;
     const resale = round2(median * mult);
     const { net, acquisition } = netMargin(price, resale, card.buyer_protection_fee ?? null, M.raw.costs);
     const auth = authenticity(card, price, resale, brand, M);
     const rap = net <= 0 ? net : pSale === null || pSale === undefined ? null : round2(net * pSale * auth.p);
     const discount = resale > 0 ? 1 - price / resale : 0;
     const parts = [
-      discount > 0 ? `${pct(discount)} sotto i venduti simili (${eur(resale)})` : `sopra i venduti simili (${eur(resale)})`,
+      discount > 0 ? `${pct(discount)} sotto i ${d.label} (${eur(resale)})` : `sopra i ${d.label} (${eur(resale)})`,
       `margine ${eur(net, true)}`,
     ];
     if (pSale !== null && pSale !== undefined) parts.push(`${pct(pSale)} venduti in 30 gg`);
@@ -150,7 +225,8 @@
       ...out,
       brand,
       category: category || null,
-      segment: category && M.raw.segments[`${brand}|${category}`] ? "category" : "brand",
+      segment: d.level,
+      model: d.model,
       price,
       total_cost: acquisition,
       resale_expected: resale,
@@ -161,7 +237,7 @@
       risk_adjusted_profit: rap,
       days_to_sell: days,
       comparables: nSold,
-      confidence: Math.round(100 * (1 - Math.exp(-nSold / 20)) * (category ? 1 : 0.7)),
+      confidence: Math.round(100 * (1 - Math.exp(-nSold / 20)) * (category || d.model ? 1 : 0.7)),
       reason: parts.join(" · "),
     };
   }
@@ -178,5 +254,5 @@
     return best;
   }
 
-  return { fold, compileMarket, quickEstimate, bestOf, findBrand, findCategory, netMargin };
+  return { fold, compileMarket, quickEstimate, refineWithStats, bestOf, findBrand, findCategory, findModel, netMargin };
 });

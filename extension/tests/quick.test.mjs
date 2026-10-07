@@ -83,3 +83,36 @@ test("no sales data -> no number, and the best card is the highest positive risk
   assert.equal(Q.bestOf(list).vinted_id, "c");
   assert.equal(Q.bestOf([list[0]]), null); // nothing worth buying: no highlight
 });
+
+test("a recognised model with concluded sales is priced before its brand and category", () => {
+  const MM = Q.compileMarket({ ...MARKET, models: { "ralph-lauren|custom slim fit": [32, 26, 40, 9, 4.5, 0.7], "ralph-lauren|slim": [99, 90, 110, 5, 3, 0.5] } });
+  assert.deepEqual(Q.findModel("Polo Ralph Lauren Custom Slim Fit blu", "ralph-lauren", MM)[0], "custom slim fit"); // longest name first
+  const e = Q.quickEstimate(card({ title: "Polo Ralph Lauren Custom Slim Fit blu", price: 12 }), MM);
+  assert.equal(e.segment, "model");
+  assert.equal(e.model, "custom slim fit");
+  assert.equal(e.resale_expected, 32); // model median x 1 (very good)
+  assert.equal(e.comparables, 9);
+  assert.equal(e.sale_probability, 0.655); // share sold in 30 days of its category
+  assert.match(e.reason, /venduti del modello/);
+  // No model in the title: brand + category, as before.
+  assert.equal(Q.quickEstimate(card({ title: "Polo Ralph Lauren blu", price: 12 }), MM).segment, "category");
+  assert.equal(Q.quickEstimate(card({ title: "Polo Ralph Lauren blu", price: 12 }), M).segment, "category"); // summary without models
+});
+
+test("page statistics refine the quick verdict: sales first, asks discounted in confidence", () => {
+  const c = card({ title: "Felpa con cappuccio Ralph Lauren", price: 20, condition: "good" });
+  const sold = { level: "model_condition", basis: "sold", median: 50, low: 44, high: 58, n_sales: 7, n_asking: 3, days: 4, sell_through: 0.5, model: "Hoodie Big Pony", brand: "ralph-lauren", category: "hoodies" };
+  const r = Q.refineWithStats(c, sold, M);
+  assert.equal(r.refined, true);
+  assert.equal(r.resale_expected, 50); // already per condition: no adjustment
+  assert.equal(r.comparables, 7);
+  assert.equal(r.sale_probability, 0.651);
+  assert.match(r.reason, /venduti del modello/);
+  const asking = Q.refineWithStats(c, { ...sold, level: "brand_category", basis: "asking", model: null, n_sales: 0, n_asking: 7 }, M);
+  assert.equal(asking.resale_expected, 44); // 50 x 0.88
+  assert.equal(asking.basis, "asking");
+  assert.ok(asking.confidence < r.confidence);
+  assert.match(asking.reason, /prezzi chiesti/);
+  assert.equal(Q.refineWithStats(c, { ...sold, n_sales: 0 }, M), null); // sold basis without sales: nothing usable
+  assert.equal(Q.refineWithStats(c, null, M), null);
+});
