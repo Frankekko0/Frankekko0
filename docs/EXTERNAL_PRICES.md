@@ -65,7 +65,7 @@ dichiara più crediti (`"credits"`), il budget conta quelli reali.
 Ogni modello costa 2 query, 3 quando si cercano anche le vendite concluse, una volta ogni
 `EXTERNAL_REFRESH_DAYS` giorni e solo se il modello è stato visto di nuovo.
 
-| Modelli visti in un mese | Query al mese (≈ 2,5 per modello, ciclo 30 giorni) | Costo (Starter) | Durata dei 2.500 crediti gratuiti |
+| Modelli visti in un mese | Query al mese (≈ 2,5 per modello, ciclo 30 giorni) | Valore a $0,001/query | Durata dei 2.500 crediti gratuiti |
 |------|------|------|------|
 | 50 | ~125 | ~$0,13 | ~20 mesi |
 | 150 | ~375 | ~$0,38 | ~6-7 mesi |
@@ -74,10 +74,16 @@ Ogni modello costa 2 query, 3 quando si cercano anche le vendite concluse, una v
 
 La durata dei crediti gratuiti non è indicata sul sito; quelli acquistati valgono 6 mesi.
 
+**Costo reale dopo i crediti gratuiti.** Serper non vende query singole: il pacchetto più piccolo è
+Starter, $50 per 50.000 query, valido 6 mesi. Con i consumi della tabella (al massimo 900 query al
+mese, cioè 5.400 in 6 mesi) se ne usa una piccola parte, quindi la spesa effettiva è il pacchetto:
+**$50 ogni 6 mesi (circa $8,30 al mese)**, finché resti sotto le 50.000 query. Il costo per query
+($0,001) conta solo se un giorno i consumi salissero molto.
+
 Il numero esatto per la tua installazione è nella web app, **Settings → Price data**
 (`expected_monthly_queries` di `GET /api/v1/pricing/evidence`): modelli visti negli ultimi 30 giorni
 × query medie per modello misurate × (30 / `EXTERNAL_REFRESH_DAYS`). Con i valori di default il
-consumo massimo è **900 query al mese = $0,90**.
+consumo massimo è **900 query al mese** (valore $0,90; vedi sopra il costo reale del pacchetto).
 
 ## Budget e impostazioni
 

@@ -506,6 +506,24 @@ scoring sono comuni a tutte le sorgenti.
 
 Dettagli e formule complete: [`docs/ARCHITECTURE.md` §8–9](docs/ARCHITECTURE.md#8-logica-flip-score).
 
+**Vendite concluse prima di tutto.** La tabella `sold_sales` raccoglie le vendite concluse da quattro
+fonti, in ordine di affidabilità: le tue vendite (prezzo incassato), i tuoi acquisti (prezzo
+pagato), gli articoli Vinted visti passare a "venduto" (ultimo prezzo rilevato, scontato della
+trattativa media misurata sui tuoi acquisti) e le vendite pubblicate da altri mercati. Le stime di
+rivendita usano le vendite concluse; i prezzi richiesti solo quando le vendite mancano. Ogni analisi
+dice quante vendite reali ha dietro e da dove arriva ogni numero (`provenance`, pagina Analisi →
+"Where the numbers come from"). Statistiche pre-calcolate per brand, modello, taglia e condizione in
+`model_price_stats`, lette con una sola query per pagina. Ogni giorno un controllo stima di nuovo le
+vendite passate con e senza ciascuna fonte e tiene accese solo quelle che non peggiorano l'errore
+(`python -m app.tools.price_eval`, Impostazioni → Price data).
+
+**Prezzi da altri mercati (facoltativo).** Con una chiave Serper.dev (API ufficiale dei risultati
+Google; 2.500 ricerche gratuite) FlipFinder cerca per ogni modello visto il prezzo da nuovo, i
+prezzi dell'usato e le vendite concluse pubblicate, con abbinamento rigoroso al modello esatto
+(scarta altri modelli, taglie bambino, repliche, lotti). Cache per modello, aggiornata ogni 30
+giorni in background: mai una ricerca durante l'analisi. Dettagli, costi e consumo:
+[`docs/EXTERNAL_PRICES.md`](docs/EXTERNAL_PRICES.md).
+
 **Fair Market Value.** Comparabili dallo stesso brand e categoria (200 venduti + 200 attivi più
 recenti), similarità pesata (categoria, modello, condizione, taglia, titolo, genere, colore,
 materiale, paese, vintage), peso per recency e bonus ai **venduti** (prezzo realizzato), prezzi
