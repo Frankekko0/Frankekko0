@@ -103,9 +103,9 @@ def _noon(d: date) -> datetime:
     return datetime.combine(d, time(12, 0), tzinfo=UTC)
 
 
-def _upsert(rows_stmt: Any) -> Any:
-    """ON CONFLICT (dedupe_key): update only when something changed; RETURNING inserted?"""
-    stmt = rows_stmt
+def _upsert(stmt: Any) -> Any:
+    """ON CONFLICT (dedupe_key) update only when something changed. RETURNING yields one row per
+    row actually written (``inserted`` tells a new row from an update), so callers count writes."""
     changed = or_(*(getattr(SoldSale, c).is_distinct_from(getattr(stmt.excluded, c)) for c in _UPDATABLE))
     return stmt.on_conflict_do_update(
         index_elements=["dedupe_key"],

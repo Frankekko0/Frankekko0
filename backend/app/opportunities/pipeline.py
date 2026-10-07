@@ -458,12 +458,29 @@ class AnalysisPipeline:
                 )
             ).all()
             refs = [external_ref(r, catalog) for r in ext_rows]
-        return [
-            evidence_for_subject(
-                s, own, refs, negotiation_discount=discount, gate=gate, parent_of=catalog.parent_slug
-            )
-            for s in subjects
-        ]
+        own_by: dict[tuple[str | None, str], list[OwnRecord]] = {}
+        for rec in own:
+            own_by.setdefault((rec.brand_slug, fold(rec.model_name or "")), []).append(rec)
+        refs_by: dict[tuple[str | None, str], list[ExternalRef]] = {}
+        for ref in refs:
+            refs_by.setdefault((ref.brand_slug, fold(ref.model_name or "")), []).append(ref)
+        # Subjects of the same model and category share the same evidence (read-only).
+        out: list[PriceEvidence] = []
+        shared: dict[tuple[Any, ...], PriceEvidence] = {}
+        for s in subjects:
+            key = (s.brand, fold(s.model or ""))
+            cache_key = (*key, s.category, s.parent_category)
+            if cache_key not in shared:
+                shared[cache_key] = evidence_for_subject(
+                    s,
+                    own_by.get(key, []),
+                    refs_by.get(key, []),
+                    negotiation_discount=discount,
+                    gate=gate,
+                    parent_of=catalog.parent_slug,
+                )
+            out.append(shared[cache_key])
+        return out
 
     async def record_demand(self, listings: list[Listing], catalog: Catalog) -> None:
         """Models seen while analysing join the refresh queue of the external search

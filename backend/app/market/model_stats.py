@@ -58,7 +58,11 @@ LEVELS = ("model_size_condition", "model_condition", "model_size", "model", "bra
 
 @dataclass(frozen=True)
 class StatQuery:
-    """What a page item asks for; the most specific segment with enough data answers."""
+    """What a page item asks for; the most specific segment with enough data answers.
+
+    ``model_name`` as identified (taxonomy line, any case), ``size`` normalized like
+    ``Listing.size_normalized`` ("M", "EU42", "W32"), ``condition`` a ``Condition`` value
+    ("unknown" or None skips the condition levels)."""
 
     ref: str  # caller's id (e.g. the Vinted id)
     brand_id: int | None
