@@ -62,7 +62,7 @@
       const brand = key.slice(0, cut);
       const name = key.slice(cut + 1);
       if (!brand || name.length < 2 || !Array.isArray(row)) continue;
-      (models[brand] = models[brand] || []).push([name, wordRx(name), row]);
+      (models[brand] = models[brand] || []).push([name, null, row]); // regex built on first use
     }
     for (const list of Object.values(models)) list.sort((a, b) => b[0].length - a[0].length);
     return { raw: m, version: m.version, brands, brandAliases, keywords, lines, suspicious, models };
@@ -73,7 +73,10 @@
     const list = M.models && M.models[brand];
     if (!list) return null;
     const folded = fold(title);
-    for (const [name, rx, row] of list) if (rx.test(folded)) return [name, row];
+    for (const entry of list) {
+      if (!entry[1]) entry[1] = wordRx(entry[0]);
+      if (entry[1].test(folded)) return [entry[0], entry[2]];
+    }
     return null;
   }
 

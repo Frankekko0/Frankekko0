@@ -111,11 +111,26 @@ class ApiError extends Error {
   }
 }
 
-async function api(path, { method = "GET", body, appUrl, key } = {}) {
+/** "db;dur=12.3, analysis;dur=40, total;dur=55" -> { db: 12, analysis: 40, total: 55 }. */
+function parseServerTiming(header) {
+  const out = {};
+  for (const part of String(header || "").split(",")) {
+    const m = /^\s*([\w-]+)\s*;.*?\bdur=([\d.]+)/.exec(part);
+    if (m) out[m[1]] = Math.round(Number(m[2]));
+  }
+  return out;
+}
+
+/**
+ * A request to FlipFinder. `timing` (optional object) receives the request's duration as seen
+ * here (ms, network + server) and the server's own Server-Timing (db, analysis, total).
+ */
+async function api(path, { method = "GET", body, appUrl, key, timing } = {}) {
   const opts = await getOptions();
   const base = appUrl || opts.appUrl;
   const token = key || (await getKey());
   if (!token) throw new ApiError(0, "unpaired", "Estensione non associata a FlipFinder.");
+  const t0 = performance.now();
   let res;
   try {
     res = await fetch(`${base}/api/v1${path}`, {
@@ -128,7 +143,11 @@ async function api(path, { method = "GET", body, appUrl, key } = {}) {
   } catch {
     throw new ApiError(0, "offline", "FlipFinder non raggiungibile: controlla che sia avviato e l'indirizzo nelle opzioni.");
   }
-  if (res.ok) return res.status === 204 ? null : res.json();
+  if (res.ok) {
+    const data = res.status === 204 ? null : await res.json();
+    if (timing) Object.assign(timing, { ms: Math.round(performance.now() - t0) }, parseServerTiming(res.headers.get("server-timing")));
+    return data;
+  }
   let err = {};
   try {
     err = (await res.json()).error || {};
@@ -297,7 +316,7 @@ async function addToSession(tabId, evals, fresh) {
 // Favourite states read on a listing page before FlipFinder had recorded that listing.
 const favouriteSeenLater = new Map();
 
-async function onEvaluations(evals, { tabIds = [], fresh = true, deep = null } = {}) {
+async function onEvaluations(evals, { tabIds = [], fresh = true, deep = null, timing = null } = {}) {
   await cacheEvaluations(evals);
   for (const ev of evals) {
     if (!favouriteSeenLater.has(ev.vinted_id)) continue;
@@ -307,7 +326,7 @@ async function onEvaluations(evals, { tabIds = [], fresh = true, deep = null } =
   }
   const opts = await getOptions();
   for (const tabId of new Set(tabIds.filter((t) => typeof t === "number"))) {
-    await sendToTab(tabId, { type: "ff:evals", evals, deep });
+    await sendToTab(tabId, { type: "ff:evals", evals, deep, timing });
     const hot = await addToSession(tabId, evals, fresh);
     sendToPanel({ type: "ff:session-update", tabId });
     if (hot.length) {
@@ -340,19 +359,28 @@ async function enqueue(kind, entries, delayMs) {
 }
 
 async function sendBatch(kind, batch) {
+  const timing = { ep: kind === "items" ? "item" : "cards", n: batch.entries.length };
   if (kind === "items") {
     const e = batch.entries[0];
     const res = await api("/capture/item", {
       method: "POST",
       body: { item: e.payload, mode: e.mode || "extension_item", track: e.track ?? null, extension_version: VERSION },
+      timing,
     });
-    return { evaluations: res.evaluation ? [res.evaluation] : [], analysis: res.analysis };
+    return { evaluations: res.evaluation ? [res.evaluation] : [], analysis: res.analysis, timing };
   }
-  return api("/capture/cards", {
+  const res = await api("/capture/cards", {
     method: "POST",
     body: { page_type: batch.pageType.split("#")[0], page_url: batch.entries[0].pageUrl || "", items: batch.entries.map((e) => e.payload), extension_version: VERSION },
+    timing,
   });
+  return { ...res, timing };
 }
+
+// Cards of a page go best first (the page sends them ordered by its instant verdict, visible
+// ones first): a small first request so the first full verdicts show at once, then larger ones.
+const FIRST_CHUNK = 12;
+const NEXT_CHUNK = 48;
 
 let flushing = false;
 let flushAgain = false;
@@ -385,8 +413,9 @@ async function flushOnce() {
     K.queuePrune(q, Date.now());
     const items = K.queueTake(q, "items", Date.now(), 1);
     const kind = items ? "items" : "cards";
-    const batch = items || K.queueTake(q, "cards", Date.now(), 40);
+    const batch = items || K.queueTake(q, "cards", Date.now(), NEXT_CHUNK);
     if (!batch) break;
+    if (kind === "cards" && batch.entries[0].first) batch.entries = batch.entries.filter((e) => e.first).slice(0, FIRST_CHUNK);
     try {
       const res = await sendBatch(kind, batch);
       await exclusive(async () => {
@@ -400,6 +429,7 @@ async function flushOnce() {
       await onEvaluations(res.evaluations || [], {
         tabIds: batch.entries.map((x) => x.tabId),
         deep: kind === "items" ? { vid: e.vid, mode: e.mode || "extension_item", analysis: res.analysis || null } : null,
+        timing: res.timing || null,
       });
     } catch (err) {
       const status = err.status || 0;
@@ -908,6 +938,7 @@ async function registerAppBridge() {
 // ------------------------------------------------------------------ messages
 const OPENABLE = [/^\/items\/[\w-]+$/, /^\/deals\/[\w-]+$/, /^\/analyze(#import=[\w-]+)?$/, /^\/import(#batch=[\w-]+)?$/, /^\/settings(#[\w-]+)?$/, /^\/items$/];
 
+let pageStatsOffUntil = 0;
 let lookupTimer = null;
 const lookupWanted = new Map(); // vid -> Set(tabId)
 
@@ -919,9 +950,10 @@ function scheduleLookup() {
     const vids = [...wanted.keys()].slice(0, 200);
     if (!vids.length || !(await getKey())) return;
     try {
-      const evals = await api("/capture/evaluations", { method: "POST", body: { vinted_ids: vids } });
+      const timing = { ep: "evaluations", n: vids.length };
+      const evals = await api("/capture/evaluations", { method: "POST", body: { vinted_ids: vids }, timing });
       const tabs = new Set([...wanted.values()].flatMap((s) => [...s]));
-      await onEvaluations(evals, { tabIds: [...tabs], fresh: false });
+      await onEvaluations(evals, { tabIds: [...tabs], fresh: false, timing });
     } catch (err) {
       await logError("valutazioni", err.message);
     }
@@ -1004,9 +1036,28 @@ const HANDLERS = {
   async "ff:cards"(msg, sender) {
     const tabId = sender.tab && sender.tab.id;
     await touchSession(tabId, msg.pageUrl, msg.pageType, (msg.cards || []).length);
-    const entries = (msg.cards || []).slice(0, 200).map((c) => ({ vid: c.vid, payload: c.payload, pageType: msg.pageType, pageUrl: String(msg.pageUrl || "").slice(0, 1000), tabId }));
-    await enqueue("cards", entries, 800);
+    const first = Boolean(msg.first);
+    const entries = (msg.cards || []).slice(0, 200).map((c) => ({ vid: c.vid, payload: c.payload, pageType: msg.pageType, pageUrl: String(msg.pageUrl || "").slice(0, 1000), tabId, ...(first ? { first } : {}) }));
+    // The page's best cards go at once; later ones join the requests already on their way.
+    await enqueue("cards", entries, first ? 0 : 150);
     return { queued: entries.length };
+  },
+
+  async "ff:page-stats"(msg) {
+    // One request per page (and per new batch of cards): pre-computed statistics, no analysis.
+    if (Date.now() < pageStatsOffUntil || !(await getKey())) return { ok: false, off: true };
+    const items = (msg.items || []).filter((i) => i && /^\d{1,20}$/.test(String(i.vinted_id))).slice(0, 120);
+    if (!items.length) return { ok: false };
+    const timing = { ep: "page-stats", n: items.length };
+    try {
+      const res = await api("/extension/page-stats", { method: "POST", body: { items }, timing });
+      return { ok: true, stats: (res && res.stats) || {}, timing };
+    } catch (err) {
+      // An older FlipFinder without it, or switched off: not asked again for a while.
+      if (err.status === 404 || err.status === 403 || err.status === 405) pageStatsOffUntil = Date.now() + 3600 * 1000;
+      else if (err.status === 429) pageStatsOffUntil = Date.now() + (err.retryAfterMs || 60000);
+      return { ok: false, status: err.status || 0 };
+    }
   },
 
   async "ff:item"(msg, sender) {
@@ -1021,8 +1072,10 @@ const HANDLERS = {
     const found = await cachedEvaluations(vids);
     const known = new Set(found.map((e) => e.vinted_id));
     const tabId = sender.tab && sender.tab.id;
+    // Cards sent for capture get their verdict from it: no second request for them.
+    const remote = Array.isArray(msg.remote) ? new Set(msg.remote) : null;
     for (const v of vids) {
-      if (known.has(v)) continue;
+      if (known.has(v) || (remote && !remote.has(v))) continue;
       if (!lookupWanted.has(v)) lookupWanted.set(v, new Set());
       if (typeof tabId === "number") lookupWanted.get(v).add(tabId);
     }

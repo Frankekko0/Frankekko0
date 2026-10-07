@@ -54,6 +54,29 @@
   const registered = new WeakSet();
   const pendingCards = new Map(); // vid -> payload (to send)
   const deepState = new Map(); // vid -> reading | paused | error message
+  // This page's progress (reset on navigation): what went to FlipFinder, what came back, and
+  // the timings exposed on <html> for measurement (data-ff-* attributes, ff:* marks).
+  const page = {
+    firstSent: false, // the best cards went out (the first, small capture request)
+    sent: new Set(), // vids sent for the full analysis
+    statsAsked: new Set(), // vids sent for the page statistics
+    stats: new Map(), // vid -> page statistics
+    visible: new Set(), // vids at least half on screen
+    order: 0, // cards registered, in page order
+    timing: { read_ms: 0, scan_ms: 0, cards: 0, requests: [] },
+  };
+  const html = document.documentElement;
+  const markOnce = (name) => {
+    if (html.hasAttribute(`data-ff-${name}-ms`)) return;
+    mark(name);
+    html.setAttribute(`data-ff-${name}-ms`, String(Math.round(performance.now())));
+  };
+  function addTiming(t) {
+    if (!t) return;
+    page.timing.requests.push({ ...t, at: Math.round(performance.now()) });
+    if (page.timing.requests.length > 40) page.timing.requests.shift();
+    html.setAttribute("data-ff-timing", JSON.stringify(page.timing));
+  }
 
   // ------------------------------------------------------------------ live page collection
   /** The parser's input from the live page (the same structure collectHtml builds). */
@@ -197,12 +220,13 @@
   const io = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
+        const vid0 = entry.target.getAttribute("data-ff-vid");
+        if (vid0) entry.isIntersecting ? page.visible.add(vid0) : page.visible.delete(vid0);
         if (!entry.isIntersecting) continue;
-        const vid = entry.target.getAttribute("data-ff-vid");
+        const vid = vid0;
         const card = vid && cards.get(vid);
         if (!card || card.captured) continue;
         card.captured = true;
-        io.unobserve(entry.target);
         idle(() => captureCard(vid, card));
       }
     },
@@ -219,7 +243,7 @@
       drawBadge(vid, { unreadable: true });
       return;
     }
-    if (!opts.captureCards) return;
+    if (!opts.captureCards || page.sent.has(vid)) return;
     pendingCards.set(vid, payload);
     if (!verdict(vid)) drawBadge(vid, null);
     card.quicked = false; // read late (lazy content): instant verdict now
@@ -229,13 +253,91 @@
 
   const quickSoon = debounce(() => quickPass(), 80);
 
-  const flushCards = debounce(() => {
+  // ------------------------------------------------------------------ full analysis, best first
+  // The value a card is sent for: its instant verdict (risk-adjusted profit), unknown ones last.
+  function valueOf(vid) {
+    const v = verdict(vid);
+    return v && !v.insufficient && typeof v.risk_adjusted_profit === "number" ? v.risk_adjusted_profit : -1e9;
+  }
+  const onScreen = (vid) => page.visible.has(vid) || (!page.visible.size && (cards.get(vid)?.order ?? 99) < 12);
+
+  /** The first request: the best instant verdicts and the cards on screen, at most 12. */
+  function firstWave(vids) {
+    const byValue = [...vids].sort((a, b) => valueOf(b) - valueOf(a));
+    const pick = new Set(byValue.filter((v) => valueOf(v) > 0).slice(0, 6));
+    for (const v of vids) if (pick.size < 12 && onScreen(v)) pick.add(v);
+    for (const v of byValue) if (pick.size < 12) pick.add(v);
+    return [...pick];
+  }
+  const restOrder = (vids) => [...vids].sort((a, b) => onScreen(b) - onScreen(a) || valueOf(b) - valueOf(a));
+
+  function postCards(vids, first) {
+    for (let i = 0; i < vids.length; i += 120) {
+      const chunk = vids.slice(i, i + 120).filter((vid) => pendingCards.has(vid));
+      if (!chunk.length) continue;
+      send({ type: "ff:cards", first, pageType: pageType === "item" ? "other" : pageType, pageUrl: location.href, cards: chunk.map((vid) => ({ vid, payload: pendingCards.get(vid) })) });
+      for (const vid of chunk) {
+        pendingCards.delete(vid);
+        page.sent.add(vid);
+      }
+    }
+  }
+
+  /**
+   * While the page is still arriving, the first request leaves as soon as two dozen cards are
+   * scored (its best ones and the ones on screen); the rest goes when the document is complete,
+   * best first. Cards read later (scrolling) follow in small groups.
+   */
+  function sendCards() {
     if (!pendingCards.size) return;
-    const batch = [...pendingCards.entries()].slice(0, 60);
-    for (const [vid] of batch) pendingCards.delete(vid);
-    send({ type: "ff:cards", pageType: pageType === "item" ? "other" : pageType, pageUrl: location.href, cards: batch.map(([vid, payload]) => ({ vid, payload })) });
-    if (pendingCards.size) flushCards();
-  }, 300);
+    const loading = document.readyState === "loading";
+    if (!page.firstSent) {
+      if (loading && pendingCards.size < 24) return;
+      page.firstSent = true;
+      postCards(firstWave(pendingCards.keys()), true);
+    }
+    if (!loading) postCards(restOrder(pendingCards.keys()), false);
+  }
+  const flushCards = debounce(sendCards, 300);
+
+  // ------------------------------------------------------------------ page statistics
+  // One request for the page's cards (and one per new batch when more cards load): pre-computed
+  // statistics per model / size / condition that refine the instant verdicts.
+  async function askStats() {
+    if (!paired || !opts.enabled || pageType === "item") return;
+    const items = [];
+    for (const [vid, card] of cards) {
+      if (!card.q || page.statsAsked.has(vid) || evals.has(vid)) continue;
+      page.statsAsked.add(vid);
+      items.push({ vinted_id: vid, title: card.q.title.slice(0, 300), brand: card.q.brand || null, size: card.q.size || null, condition: card.q.condition_label || card.q.condition || null });
+      if (items.length >= 120) break;
+    }
+    if (!items.length) return;
+    const href = location.href;
+    const r = await send({ type: "ff:page-stats", items });
+    if (!r || !r.ok || location.href !== href) return;
+    addTiming(r.timing);
+    let changed = 0;
+    for (const [vid, stat] of Object.entries(r.stats || {})) {
+      page.stats.set(vid, stat);
+      if (refine(vid)) changed += 1;
+    }
+    if (changed) updateBest();
+    markOnce("stats");
+  }
+
+  /** The instant verdict of a card from its page statistics (true when its badge changed). */
+  function refine(vid) {
+    const card = cards.get(vid);
+    const stat = page.stats.get(vid);
+    if (!card || !card.q || !stat || evals.has(vid)) return false;
+    const nv = Q.refineWithStats(card.q, stat, market);
+    if (!nv) return false;
+    nv.title = card.q.title;
+    quick.set(vid, nv);
+    if (card.root.isConnected) drawBadge(vid, nv);
+    return true;
+  }
 
   // ------------------------------------------------------------------ instant verdict
   // Every card of the page is read at once (the page you opened, nothing else) and scored by the
@@ -248,57 +350,80 @@
     return parsed && parsed.title && parsed.title.length >= 3 && parsed.price ? parsed : null;
   }
 
+  // Badges still to paint (instant verdicts), a few per frame: no long task while the page loads.
+  const paintQueue = [];
+  let painting = false;
+  function paintSlice() {
+    const t0 = performance.now();
+    while (paintQueue.length && performance.now() - t0 < 6) {
+      const vid = paintQueue.shift();
+      if (!evals.has(vid) && quick.has(vid)) drawBadge(vid, quick.get(vid));
+    }
+    if (paintQueue.length) return requestAnimationFrame(paintSlice);
+    painting = false;
+    mark("badges");
+    quickDone();
+  }
+
+  /** Every card of the complete document has its instant verdict painted. */
+  function quickDone() {
+    if (painting || paintQueue.length || document.readyState === "loading" || !page.finalPass || html.hasAttribute("data-ff-quick-ms")) return;
+    mark("cards-read");
+    markOnce("quick");
+    html.setAttribute("data-ff-timing", JSON.stringify(page.timing));
+  }
+
   function quickPass() {
     if (!paired || !opts.enabled) return;
+    const t0 = performance.now();
     mark("parse-start");
     const batch = [];
-    const titles = new Map();
     for (const [vid, card] of cards) {
       if (card.quicked || !card.root.isConnected) continue;
       card.quicked = true;
       const parsed = quickCard(vid, card);
       if (!parsed) continue; // read again when it scrolls into view (lazy content)
-      titles.set(vid, parsed.title);
-      batch.push({
+      card.q = {
         vinted_id: vid,
         title: parsed.title,
         brand: parsed.brand,
+        size: parsed.size,
+        condition_label: parsed.condition_label,
         price: parsed.price,
         condition: parsed.condition,
         buyer_protection_fee: parsed.buyer_protection_fee,
         status: parsed.status,
-      });
+      };
+      batch.push(card.q);
       // Second step, in the background: the whole card goes to FlipFinder for the full analysis.
-      const payload = opts.captureCards ? P.capturePayload(parsed, C) : null;
+      const payload = opts.captureCards && !page.sent.has(vid) ? P.capturePayload(parsed, C) : null;
       if (payload) {
         pendingCards.set(vid, payload);
         card.captured = true;
-        io.unobserve(card.root);
       }
     }
-    if (!batch.length) return;
+    page.timing.read_ms += performance.now() - t0;
+    page.timing.cards += batch.length;
+    if (!batch.length) return quickDone();
     mark("parse-end");
-    flushCards();
     // Scored right here from the stored market summary (~0.1 ms a card): no wait on the service
     // worker, which may be busy receiving full analyses. Server evaluations replace these.
     for (const c of batch) {
       const v = Q.quickEstimate(c, market);
-      v.title = titles.get(c.vinted_id);
+      v.title = c.title;
       quick.set(c.vinted_id, v);
+      if (page.stats.has(c.vinted_id)) refine(c.vinted_id);
     }
-    // The best one first, the other badges in small slices: no long task while the page loads.
+    // The best one first (progressively, as the page arrives), the other badges in slices.
     updateBest();
     mark("best");
-    const todo = batch.map((c) => c.vinted_id).filter((vid) => !evals.has(vid) && vid !== bestBox.vid);
-    const slice = () => {
-      for (const vid of todo.splice(0, 24)) if (!evals.has(vid)) drawBadge(vid, quick.get(vid));
-      if (todo.length) requestAnimationFrame(slice);
-      else {
-        mark("badges");
-        if (!document.documentElement.hasAttribute("data-ff-quick-ms")) document.documentElement.setAttribute("data-ff-quick-ms", String(Math.round(performance.now())));
-      }
-    };
-    slice();
+    sendCards();
+    for (const c of batch) if (!evals.has(c.vinted_id) && c.vinted_id !== bestBox.vid) paintQueue.push(c.vinted_id);
+    page.timing.read_ms = Math.round(page.timing.read_ms * 10) / 10;
+    if (!painting && paintQueue.length) {
+      painting = true;
+      paintSlice();
+    } else quickDone();
   }
 
   /** A newer market summary: re-score the cards that have no full analysis yet. */
@@ -312,6 +437,7 @@
       const nv = Q.quickEstimate({ ...parsed, vinted_id: vid }, market);
       nv.title = parsed.title;
       quick.set(vid, nv);
+      if (refine(vid)) continue;
       if (!evals.has(vid)) drawBadge(vid, nv);
     }
     updateBest();
@@ -347,7 +473,7 @@
     card.root.style.outline = "3px solid #16a34a";
     card.root.style.outlineOffset = "2px";
     renderBest(top);
-    if (!document.documentElement.hasAttribute("data-ff-best-ms")) document.documentElement.setAttribute("data-ff-best-ms", String(Math.round(performance.now())));
+    if (!html.hasAttribute("data-ff-best-ms")) html.setAttribute("data-ff-best-ms", String(Math.round(performance.now())));
   }
   const bestSoon = debounce(updateBest, 120);
 
@@ -406,7 +532,10 @@
     return link ? (link.getAttribute("title") || "").split(",")[0] : "";
   }
 
+  const seenLinks = new WeakSet();
   function register(link) {
+    if (seenLinks.has(link)) return;
+    seenLinks.add(link);
     const vid = linkId(link);
     if (!vid) return;
     if (pageType === "item" && vid === P.itemId(location.href, C)) return; // the item itself
@@ -416,7 +545,7 @@
     const prev = cards.get(vid);
     if (prev && prev.root.isConnected && prev.root !== root) return; // promoted + organic: first one wins
     root.setAttribute("data-ff-vid", vid);
-    cards.set(vid, { root, captured: false, badge: null });
+    cards.set(vid, { root, captured: page.sent.has(vid), badge: null, order: page.order++ });
     if (evals.has(vid)) drawBadge(vid, verdict(vid));
     io.observe(root);
   }
@@ -433,17 +562,74 @@
       if (r.matches && r.matches(C.selectors.item_link)) register(r);
       r.querySelectorAll?.(C.selectors.item_link).forEach(register);
     }
+    page.finalPass = true;
     quickPass();
-    for (const [vid, card] of cards) if (!card.badge && card.root.isConnected) known.push(vid);
-    if (known.length && paired) {
-      send({ type: "ff:get-evals", vids: known.slice(0, 300) }).then((r) => {
-        for (const ev of (r && r.evals) || []) onEval(ev);
-      });
-    }
+    sendCards();
+    askStats();
+    for (const [vid, card] of cards) if (!card.asked && !evals.has(vid) && card.root.isConnected) known.push(vid);
+    lookup(known);
   }
   const scanSoon = debounce(scanAdded, 250);
 
+  /** Server verdicts already known (the extension's cache; FlipFinder only for cards not sent for analysis). */
+  function lookup(vids) {
+    if (!vids.length || !paired) return;
+    for (const vid of vids) cards.get(vid).asked = true;
+    const remote = vids.filter((vid) => !page.sent.has(vid) && !pendingCards.has(vid));
+    send({ type: "ff:get-evals", vids: vids.slice(0, 300), remote }).then((r) => {
+      for (const ev of (r && r.evals) || []) onEval(ev);
+    });
+  }
+
+  // ------------------------------------------------------------------ while the page arrives
+  // Vinted's HTML is large (several MB) and the cards come in its first part: they are read and
+  // scored as soon as each one is complete (the one still arriving waits for the next look),
+  // the best card is highlighted and updated progressively; the pass at the end of the document
+  // reads whatever is left.
+  let streamTimer = 0;
+  let streamFrom = 0;
+  function scanStream() {
+    streamTimer = 0;
+    if (!paired || !opts.enabled || document.readyState !== "loading") return;
+    const t0 = performance.now();
+    if (!page.streamed) {
+      page.streamed = true;
+      mark("scan-start");
+    }
+    const links = document.querySelectorAll(C.selectors.item_link);
+    if (links.length <= streamFrom) return;
+    const lastVid = linkId(links[links.length - 1]);
+    const fresh = [];
+    let i = streamFrom;
+    for (; i < links.length; i += 1) {
+      const vid = linkId(links[i]);
+      if (vid && vid === lastVid) break; // still arriving
+      const before = cards.size;
+      register(links[i]);
+      if (cards.size > before) fresh.push(vid);
+    }
+    streamFrom = i;
+    page.timing.scan_ms = Math.round((page.timing.scan_ms + performance.now() - t0) * 10) / 10;
+    if (!fresh.length) return;
+    quickPass();
+    lookupSoon(fresh);
+  }
+  const streamSoon = () => {
+    if (!streamTimer) streamTimer = setTimeout(scanStream, 30);
+  };
+  let lookupWaiting = [];
+  const lookupLater = debounce(() => {
+    const vids = lookupWaiting.filter((vid) => cards.has(vid) && !cards.get(vid).asked && !evals.has(vid));
+    lookupWaiting = [];
+    lookup(vids);
+  }, 150);
+  function lookupSoon(vids) {
+    lookupWaiting.push(...vids);
+    lookupLater();
+  }
+
   const mo = new MutationObserver((mutations) => {
+    if (document.readyState === "loading") return streamSoon(); // the page is still arriving
     for (const m of mutations) {
       for (const n of m.addedNodes) if (n.nodeType === 1 && n.tagName !== "FF-BADGE" && !(n.id || "").startsWith("flipfinder")) addedRoots.add(n);
     }
@@ -556,6 +742,7 @@
       card.badge = host;
     }
     const { cls, html, aria } = badgeLabel(ev);
+    card.badge.setAttribute("data-ff-src", !ev ? "pending" : ev.unreadable ? "unreadable" : ev.source === "local" ? (ev.refined ? "stats" : "local") : "server");
     const b = card.badge.shadowRoot.querySelector(".b");
     b.className = `b ${cls}${card.hot ? " hot" : ""}`;
     b.innerHTML = html;
@@ -988,6 +1175,9 @@
   function onNavigate() {
     lastHref = location.href;
     pageType = P.pageType(location.pathname, C);
+    // Another page of results: its own first request, statistics and timings.
+    Object.assign(page, { firstSent: false, sent: new Set(), statsAsked: new Set(), stats: new Map(), order: 0, finalPass: true });
+    page.timing = { read_ms: 0, scan_ms: 0, cards: 0, requests: [] };
     send({ type: "ff:hello", pageType, url: location.href });
     if (pageType === "item") {
       itemBox.closedFor = null;
@@ -1014,6 +1204,11 @@
         for (const ev of msg.evals || []) {
           onEval(ev);
           if (msg.deep && msg.deep.vid === ev.vinted_id && msg.deep.mode !== "extension_item") deepState.set(ev.vinted_id, "ok");
+        }
+        addTiming(msg.timing);
+        if ((msg.evals || []).some((ev) => page.sent.has(ev.vinted_id))) {
+          markOnce("server-first");
+          if (!pendingCards.size && [...page.sent].every((vid) => evals.has(vid))) markOnce("server-all");
         }
         return false;
       case "ff:hot":
@@ -1165,8 +1360,18 @@
     send({ type: "ff:purchase-done", ...done });
   }
 
+  // The document is parsed (DOM interactive): Vinted's own deferred scripts don't need to run first.
   const domReady = () =>
-    document.readyState === "loading" ? new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true })) : Promise.resolve();
+    document.readyState === "loading"
+      ? new Promise((resolve) => {
+          const on = () => {
+            if (document.readyState === "loading") return;
+            document.removeEventListener("readystatechange", on);
+            resolve();
+          };
+          document.addEventListener("readystatechange", on);
+        })
+      : Promise.resolve();
 
   let startDone = () => {};
   const started = new Promise((resolve) => {
@@ -1191,10 +1396,12 @@
     send({ type: "ff:hello", pageType, url: location.href }); // live panel bookkeeping
     if (!opts.enabled) return;
     // Injected at the start of the navigation: settings are read while the page loads, the
-    // cards are scored as soon as the document is parsed.
+    // cards are scored while the document arrives (see scanStream), the rest once it is parsed.
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+    if (paired) streamSoon();
     await domReady();
     mark("dom");
-    mo.observe(document.body, { childList: true, subtree: true });
+    addedRoots.clear(); // the pass below reads the whole document
     setTimeout(checkPurchase, 600); // the confirmation text may render a moment after load
     if (pageType === "item") {
       itemBox.render();
