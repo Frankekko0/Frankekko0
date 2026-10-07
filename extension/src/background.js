@@ -220,6 +220,19 @@ async function updateMarketCache() {
   }
 }
 
+// What a Vinted page needs at its very start (pairing flag - never the key -, options, parser
+// configuration, market summary), mirrored in the memory-backed session storage: read there it
+// never waits behind the large writes of the local storage (queue, evaluations cache), which
+// can hold a page's first look at its cards for half a second.
+async function publishBoot() {
+  try {
+    const [{ paired, parserConfig, marketCache }, { options }] = await Promise.all([local.get(["paired", "parserConfig", "marketCache"]), chrome.storage.sync.get("options")]);
+    await sessionStore.set({ boot: { paired: Boolean(paired), parserConfig: parserConfig || null, marketCache: marketCache || null, options: options || null } });
+  } catch (err) {
+    await logError("avvio", err.message);
+  }
+}
+
 // ------------------------------------------------------------------ browsing sessions (live panel)
 // One session per tab and search: it resets when the search changes (unless locked).
 function searchKey(pageUrl) {
@@ -1038,8 +1051,9 @@ const HANDLERS = {
     await touchSession(tabId, msg.pageUrl, msg.pageType, (msg.cards || []).length);
     const first = Boolean(msg.first);
     const entries = (msg.cards || []).slice(0, 200).map((c) => ({ vid: c.vid, payload: c.payload, pageType: msg.pageType, pageUrl: String(msg.pageUrl || "").slice(0, 1000), tabId, ...(first ? { first } : {}) }));
-    // The page's best cards go at once; later ones join the requests already on their way.
-    await enqueue("cards", entries, first ? 0 : 150);
+    // At once: the page groups its cards itself (best first, then the rest of the document,
+    // then cards read later in small groups).
+    await enqueue("cards", entries, 0);
     return { queued: entries.length };
   },
 
@@ -1244,6 +1258,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.permissions.onAdded.addListener(() => registerAppBridge());
 
 chrome.storage.onChanged.addListener((changes, area) => {
+  if ((area === "sync" && changes.options) || (area === "local" && (changes.paired || changes.parserConfig || changes.marketCache))) publishBoot();
   if (area === "sync" && changes.options) {
     scheduleFlush(0);
     registerAppBridge();
@@ -1256,6 +1271,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 async function startup() {
+  // Vinted pages read their start-up data (see publishBoot) from the session storage.
+  await sessionStore.setAccessLevel?.({ accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" }).catch(() => {});
   chrome.alarms.create("ff-config", { periodInMinutes: 360, delayInMinutes: 1 });
   chrome.alarms.create("ff-market", { periodInMinutes: 180, delayInMinutes: 180 });
   chrome.alarms.create("ff-refresh", { periodInMinutes: 10, delayInMinutes: 2 });
@@ -1264,6 +1281,8 @@ async function startup() {
   const key = await getKey();
   // Pages read this flag (never the key) to know whether to score their cards.
   if (Boolean(key) !== Boolean((await local.get("paired")).paired)) await local.set({ paired: Boolean(key) });
+  const { boot } = await sessionStore.get("boot");
+  if (!boot) publishBoot();
   const q = await loadQueue();
   paintBadge(key ? { ...(await getSync()), pending: K.queueSize(q) } : { state: "unpaired" });
   if (key) {

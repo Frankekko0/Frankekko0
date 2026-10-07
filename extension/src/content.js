@@ -1381,11 +1381,16 @@
   async function start() {
     mark("start");
     // Straight from storage (not through the service worker): options, pairing flag (never the
-    // key), parser configuration and market summary.
-    const [store, synced] = await Promise.all([
-      chrome.storage.local.get(["paired", "parserConfig", "marketCache"]).catch(() => ({})),
-      chrome.storage.sync.get("options").catch(() => ({})),
-    ]);
+    // key), parser configuration and market summary - the copy in memory (session storage) when
+    // the service worker has published it, else the stored ones.
+    const boot = await chrome.storage.session.get("boot").then((r) => r.boot || null, () => null);
+    mark(boot ? "boot" : "boot-missing");
+    const [store, synced] = boot
+      ? [boot, { options: boot.options }]
+      : await Promise.all([
+          chrome.storage.local.get(["paired", "parserConfig", "marketCache"]).catch(() => ({})),
+          chrome.storage.sync.get("options").catch(() => ({})),
+        ]);
     mark("hello");
     opts = K.normalizeOptions(synced.options);
     paired = Boolean(store.paired);
