@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
+from app.core.timing import install_sql_timing
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
@@ -34,6 +35,7 @@ def get_engine() -> AsyncEngine:
             pool_pre_ping=True,
             pool_recycle=1800,
         )
+        install_sql_timing(_engine)  # Server-Timing "db" of the timed requests
         _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False, autoflush=False)
     return _engine
 
