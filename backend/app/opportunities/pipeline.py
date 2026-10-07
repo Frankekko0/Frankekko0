@@ -20,6 +20,8 @@ from app.analytics.calibration import Calibration
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.db.models import (
+    ExternalPrice,
+    ExternalSearch,
     Listing,
     ListingPriceHistory,
     MarketComparable,
@@ -27,9 +29,12 @@ from app.db.models import (
     Opportunity,
     OpportunityScore,
     Seller,
+    SoldSale,
     SystemState,
 )
 from app.domain.enums import AcquisitionMode, CaptureLevel, ListingStatus
+from app.external.keys import model_key
+from app.identification.taxonomy import fold
 from app.ingestion.catalog import Catalog, load_catalog
 from app.ingestion.normalizer import title_tokens
 from app.opportunities.engine import (
@@ -41,6 +46,16 @@ from app.opportunities.engine import (
     run_analysis,
 )
 from app.pricing.comparables import ItemProfile
+from app.pricing.evidence import (
+    GATE_KEY,
+    NEGOTIATION_KEY,
+    EvidenceGate,
+    ExternalRef,
+    OwnRecord,
+    PriceEvidence,
+    discount_from_state,
+    evidence_for_subject,
+)
 from app.pricing.market_value import SegmentPrior
 from app.profit.calculator import CostProfile
 from app.scoring.seller import SellerProfile
@@ -142,6 +157,81 @@ def profile_from_row(row: Any, catalog: Catalog) -> ItemProfile:
         url=row.url,
         favourite_count=row.favourite_count,
         tracked=getattr(row, "tracked_at", None) is not None,
+    )
+
+
+OWN_COLUMNS = (
+    SoldSale.id,
+    SoldSale.source,
+    SoldSale.title,
+    SoldSale.price_eur,
+    SoldSale.brand_id,
+    SoldSale.category_id,
+    SoldSale.model_name,
+    SoldSale.size_normalized,
+    SoldSale.condition,
+    SoldSale.sold_at,
+    SoldSale.published_at,
+    SoldSale.listing_id,
+    SoldSale.purchase_id,
+)
+EXTERNAL_COLUMNS = (
+    ExternalPrice.id,
+    ExternalPrice.kind,
+    ExternalPrice.source,
+    ExternalPrice.price,
+    ExternalPrice.currency,
+    ExternalPrice.price_eur,
+    ExternalPrice.observed_at,
+    ExternalPrice.source_date,
+    ExternalPrice.condition,
+    ExternalPrice.source_url,
+    ExternalPrice.title,
+    ExternalPrice.model_key,
+    ExternalPrice.brand_id,
+    ExternalPrice.category_id,
+    ExternalPrice.model_name,
+    ExternalPrice.size,
+)
+
+
+def own_record(r: Any, catalog: Catalog) -> OwnRecord:
+    """A ``sold_sales`` row of the user's own purchases/resales (``OWN_COLUMNS``)."""
+    return OwnRecord(
+        id=r.id,
+        source=r.source,
+        title=r.title,
+        price_eur=float(r.price_eur),
+        brand_slug=catalog.brand_slug(r.brand_id),
+        category_slug=catalog.category_slug(r.category_id),
+        model_name=r.model_name,
+        size=r.size_normalized,
+        condition=r.condition or "unknown",
+        sold_at=r.sold_at,
+        published_at=r.published_at,
+        listing_id=r.listing_id,
+        purchase_id=r.purchase_id,
+    )
+
+
+def external_ref(r: Any, catalog: Catalog) -> ExternalRef:
+    """An ``external_prices`` row (``EXTERNAL_COLUMNS``); its date is the one the source states,
+    else when the search found it."""
+    return ExternalRef(
+        id=r.id,
+        kind=r.kind,
+        source=r.source,
+        price=float(r.price),
+        currency=r.currency,
+        price_eur=float(r.price_eur),
+        at=r.source_date or r.observed_at,
+        condition=r.condition or "unknown",
+        url=r.source_url,
+        title=r.title,
+        brand_slug=catalog.brand_slug(r.brand_id) or r.model_key.split("|", 1)[0],
+        category_slug=catalog.category_slug(r.category_id),
+        model_name=r.model_name,
+        size=r.size,
     )
 
 
@@ -308,11 +398,104 @@ class AnalysisPipeline:
                     ask_to_sale_ratio=float(st.ask_to_sale_ratio) if st.ask_to_sale_ratio else None,
                     sell_through_rate=float(st.sell_through_rate),
                     avg_days_to_sale=float(st.avg_days_to_sale) if st.avg_days_to_sale else None,
+                    level="model" if st.model_name else "brand_category",
                 )
                 if st is not None
                 else None
             )
         return out
+
+    async def evidence_state(self) -> tuple[Calibration, EvidenceGate, float | None]:
+        """Calibration, backtest gate and negotiation discount in one query."""
+        rows = (
+            await self.session.execute(
+                select(SystemState.key, SystemState.value).where(
+                    SystemState.key.in_((CALIBRATION_KEY, GATE_KEY, NEGOTIATION_KEY))
+                )
+            )
+        ).all()
+        state = {r.key: r.value for r in rows}
+        return (
+            Calibration.from_state(state.get(CALIBRATION_KEY)),
+            EvidenceGate.from_state(state.get(GATE_KEY)),
+            discount_from_state(state.get(NEGOTIATION_KEY)),
+        )
+
+    async def price_evidence(
+        self,
+        subjects: list[ItemProfile],
+        catalog: Catalog,
+        gate: EvidenceGate,
+        discount: float | None,
+    ) -> list[PriceEvidence]:
+        """Own records and external prices of the batch's models, two queries for the whole batch
+        (never a query per listing, never an external search: only what the database holds)."""
+        wanted = {(s.brand, fold(s.model)) for s in subjects if s.brand and s.model}
+        own: list[OwnRecord] = []
+        refs: list[ExternalRef] = []
+        if wanted:
+            brand_ids = {bid for slug, _ in wanted if (bid := catalog.brand_id(slug)) is not None}
+            own_rows = (
+                await self.session.execute(
+                    select(*OWN_COLUMNS).where(
+                        SoldSale.source.in_(("own_sale", "own_purchase")),
+                        SoldSale.brand_id.in_(brand_ids),
+                        SoldSale.is_outlier.is_(False),
+                    )
+                )
+            ).all()
+            own = [
+                own_record(r, catalog)
+                for r in own_rows
+                if (catalog.brand_slug(r.brand_id), fold(r.model_name or "")) in wanted
+            ]
+            keys = sorted({model_key(slug, model) for slug, model in wanted})
+            ext_rows = (
+                await self.session.execute(
+                    select(*EXTERNAL_COLUMNS).where(
+                        ExternalPrice.model_key.in_(keys), ExternalPrice.is_outlier.is_(False)
+                    )
+                )
+            ).all()
+            refs = [external_ref(r, catalog) for r in ext_rows]
+        return [
+            evidence_for_subject(
+                s, own, refs, negotiation_discount=discount, gate=gate, parent_of=catalog.parent_slug
+            )
+            for s in subjects
+        ]
+
+    async def record_demand(self, listings: list[Listing], catalog: Catalog) -> None:
+        """Models seen while analysing join the refresh queue of the external search
+        (``demand`` counts analyses since the last search; nothing is searched here)."""
+        rows: dict[str, dict[str, Any]] = {}
+        for x in listings:
+            slug = catalog.brand_slug(x.brand_id)
+            if not slug or not x.model_name:
+                continue
+            key = model_key(slug, x.model_name)
+            row = rows.setdefault(
+                key,
+                {
+                    "model_key": key,
+                    "brand_id": x.brand_id,
+                    "category_id": x.category_id,
+                    "model_name": x.model_name[:120],
+                    "demand": 0,
+                    "status": "pending",
+                },
+            )
+            row["demand"] += 1
+        if not rows:
+            return
+        table = ExternalSearch.__table__
+        stmt = pg_insert(table)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["model_key"],
+            set_={"demand": table.c.demand + stmt.excluded.demand, "updated_at": func.now()},
+        )
+        # Sorted keys: concurrent batches lock the same rows in the same order (no deadlocks).
+        await self.session.execute(stmt, sorted(rows.values(), key=lambda r: r["model_key"]))
 
     async def seller_anomalies(
         self, seller_id: uuid.UUID | None, catalog: Catalog, now: datetime
@@ -513,12 +696,13 @@ class AnalysisPipeline:
             subject.price_history = histories.get(x.id, [])
             subject.seller_habits = habits.get(x.seller_id) if x.seller_id else None
         priors = await self.segment_priors([(x.brand_id, x.category_id, x.model_name) for x in listings])
-        calibration = await self.calibration()
+        calibration, gate, discount = await self.evidence_state()
+        evidence = await self.price_evidence([s.profile for s in subjects], catalog, gate, discount)
 
         pools: dict[tuple[int, tuple[int, ...]], CandidatePool] = {}
         cost, targets = default_cost_profile(self.settings), default_targets(self.settings)
         results: list[tuple[Listing, AnalysisResult]] = []
-        for listing, subject, prior in zip(listings, subjects, priors, strict=True):
+        for listing, subject, prior, ev in zip(listings, subjects, priors, evidence, strict=True):
             if listing.brand_id is None:
                 cands = await self._unbranded_candidates(subject.profile, catalog, now)
             else:
@@ -528,9 +712,16 @@ class AnalysisPipeline:
                     pools[key] = await self.candidate_pool(listing.brand_id, cat_ids, catalog, now)
                 cands = pools[key].for_subject(listing.id)
             results.append(
-                (listing, run_analysis(subject, cands, now, cost, targets, prior, calibration=calibration))
+                (
+                    listing,
+                    run_analysis(
+                        subject, cands, now, cost, targets, prior, calibration=calibration, evidence=ev
+                    ),
+                )
             )
-        return await self.persist_many(results, now, mode)
+        outcomes = await self.persist_many(results, now, mode)
+        await self.record_demand(listings, catalog)
+        return outcomes
 
     async def persist(self, listing: Listing, result: AnalysisResult, now: datetime) -> AnalysisOutcome:
         return (await self.persist_many([(listing, result)], now))[0]
@@ -750,6 +941,7 @@ def opportunity_values(
             "velocity_detail": r.time_online,
             "risk_signals": [s.as_dict() for s in r.risk_signals],
             "headline": r.headline,
+            "provenance": r.provenance,
         },
         "explanation": r.explanation,
         "risk_factors": r.risk.as_list(),
