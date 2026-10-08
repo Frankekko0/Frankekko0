@@ -664,7 +664,7 @@
   const mo = new MutationObserver((mutations) => {
     if (document.readyState === "loading") return streamSoon(); // the page is still arriving
     for (const m of mutations) {
-      for (const n of m.addedNodes) if (n.nodeType === 1 && n.tagName !== "FF-BADGE" && !(n.id || "").startsWith("flipfinder")) addedRoots.add(n);
+      for (const n of m.addedNodes) if (n.nodeType === 1 && n.tagName !== "FF-BADGE" && !(n.getAttribute("id") || "").startsWith("flipfinder")) addedRoots.add(n); // the attribute: n.id is an element when a form has a field named "id"
     }
     if (location.href !== lastHref) onNavigate();
     if (onCheckoutPath()) purchaseSoon(); // the confirmation may render well after load

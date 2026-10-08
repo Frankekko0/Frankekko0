@@ -53,7 +53,11 @@ async function offerScan() {
     return; // not a Vinted page (or not reloaded since the update)
   }
   const n = info && info.pageType === "catalog" ? K.normalizeSearchUrl(info.url) : null;
-  if (!n || n.error) return;
+  if (!n || n.error) {
+    // A Vinted page, but not a search (home, item, profile...): say what to do instead of showing nothing.
+    if (info) setStatus("Per aggiungere una ricerca allo scanner, apri su Vinted una ricerca o una categoria (l'indirizzo contiene /catalog).");
+    return;
+  }
   pageSearch = n;
   $("scan").hidden = false;
 }
