@@ -4,6 +4,14 @@ Stato del lavoro "massimo livello" (analisi, autenticità, estensione veloce, li
 Aggiornato a ogni passo: **fatto**, **in corso**, **ipotesi**.
 
 ## Fatto
+- **Web app: accessibilità, navigazione e leggerezza** (verificato: audit automatico axe-core su 14 pagine × desktop/mobile × tema chiaro/scuro con dati sintetici, prima ~1.900 violazioni, dopo 0; typecheck, lint, 46 test, build di produzione; revisione del codice e di sicurezza).
+  - Colori: testi secondari, blu e toni di avviso/pericolo portati a contrasto WCAG AA (4,5:1) su tutte le superfici, in chiaro e in scuro; pulsanti e contatori pieni usano tinte dedicate sotto il testo bianco (in scuro il pulsante blu era 3,3:1).
+  - Ogni controllo ha un nome: cursori dei filtri, ordinamento, interruttori, campi delle Impostazioni, ricerca brand. I filtri a schede senza pannelli (Flip, Avvisi, Salvati) sono ora un selettore a scelta singola con frecce da tastiera.
+  - Struttura: titoli in ordine, liste e tabelle valide, tabelle larghe scorribili da tastiera solo quando servono, link "Skip to content", 404 e offline con area principale, le due ricerche distinguibili.
+  - Schede opportunità: una sola tappa di tastiera per scheda (prima foto e titolo erano due link uguali), punteggio letto una volta, prime foto della lista caricate subito.
+  - Navigazione: tra 768 e 1023 px Salvati, Archivio e Impostazioni non erano raggiungibili da nessun menu; ora sì. L'icona Impostazioni è un ingranaggio, non un menu.
+  - Pagina Analisi: i link alle sezioni non finiscono sotto le barre fisse; "Add to Vinted favourites" non esce più dal pulsante; la barra in basso su iPhone non copre la barra di sistema.
+  - I grafici (la libreria più pesante, ~109 KB compressi) si scaricano solo quando un grafico viene mostrato.
 - **Obiettivo 7 – prezzi dalle vendite concluse e da altri mercati** (verificato: 469 test backend, benchmark sintetico).
   - Nuove tabelle (migrazione `0009`): `sold_sales` (vendite concluse: articolo, modello, taglia, condizione, prezzo, data, giorni per vendere, fonte), `external_prices` (prezzi trovati fuori da Vinted: tipo nuovo/richiesto/venduto, fonte, data, valuta, condizione, link), `external_searches` (cache per modello), `model_price_stats` (statistiche pre-calcolate per brand, categoria, modello, taglia e condizione: mediana, fascia bassa/alta, campioni per fonte, giorni per vendere, quota venduta, prezzo da nuovo). Indici nuovi per i comparabili per modello.
   - Fonti delle vendite concluse, in ordine di affidabilità: tue vendite (prezzo incassato) > tuoi acquisti (prezzo pagato) > articoli Vinted visti passare a "venduto" (ultimo prezzo rilevato, giorni dalla pubblicazione) > vendite pubblicate da altri mercati. Un articolo che hai comprato conta una volta sola. Registrazione immediata dopo ogni cattura, controllo o email che vede la vendita, e dopo ogni acquisto o vendita inseriti; sincronizzazione completa ogni notte, incrementale ogni 30 minuti (`app/market/*`).
