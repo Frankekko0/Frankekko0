@@ -158,7 +158,24 @@ function renderScan(sc) {
     del.className = "btn small ghost";
     del.textContent = "Rimuovi";
     del.addEventListener("click", async () => renderScan((await chrome.runtime.sendMessage({ type: "ff:scan-remove", id: s.id })).summary));
-    li.append(info, toggle, del);
+    li.append(info);
+    if (s.diag) {
+      // What Vinted sent back to the last failed read: copy it to share it, so the parser can be fixed.
+      const diag = document.createElement("button");
+      diag.type = "button";
+      diag.className = "btn small ghost";
+      diag.textContent = "Copia diagnostica";
+      diag.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(JSON.stringify(s.diag, null, 2));
+          diag.textContent = "Copiata ✓";
+        } catch {
+          diag.textContent = "Copia non riuscita";
+        }
+      });
+      li.append(diag);
+    }
+    li.append(toggle, del);
     ul.append(li);
   }
 }

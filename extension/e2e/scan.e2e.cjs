@@ -202,6 +202,7 @@ const SVG = (n) => `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="
   const empty = (await scanner()).searches[1];
   assert.equal(empty.enabled, false);
   assert.match(empty.lastError, /sospesa/);
+  assert.ok(empty.diag && empty.diag.status === 200 && empty.diag.itemLinksInDom === 0 && empty.diag.bytes > 0, "a read without cards keeps a diagnostic of what was received");
   log("empty search set aside:", empty.lastError.slice(0, 90));
 
   // 6) The first refusal pauses everything for 6 hours and nothing is retried.

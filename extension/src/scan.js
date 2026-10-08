@@ -21,6 +21,39 @@ function compile(raw) {
   }
 }
 
+/** What the reader received, for a read that yielded no cards (to fix the parser configuration without guessing). */
+function diagnose(res, body, doc, C) {
+  const lower = body.toLowerCase();
+  const count = (rx) => (body.match(rx) || []).length;
+  const first = body.search(/\/items\/\d{6,}/);
+  let path = "";
+  try {
+    const u = new URL(res.url);
+    path = u.hostname + u.pathname;
+  } catch {
+    /* no final address */
+  }
+  return {
+    status: res.status,
+    finalPage: path,
+    redirected: Boolean(res.redirected),
+    contentType: (res.headers.get("content-type") || "").slice(0, 60),
+    bytes: body.length,
+    title: ((doc.querySelector("title") || {}).textContent || "").trim().slice(0, 120),
+    itemLinksInDom: doc.querySelectorAll(C.selectors.item_link).length,
+    itemPathsInText: count(/\/items\/\d{6,}/g), // also counts links inside scripts / embedded data
+    productTestIds: count(/data-testid="product-item-id-\d+/g),
+    scripts: doc.scripts.length,
+    hasNextFlight: lower.includes("__next_f"),
+    hasNextData: lower.includes("__next_data__"),
+    hasConsentWall: /onetrust|consent|cookie/.test(lower.slice(0, 20000)),
+    challengeMarkers: ["datadome", "captcha", "cf-chl", "just a moment", "verify you are human"].filter((m) => lower.includes(m)),
+    // A short look at the markup around the first item address (public search page, no cookies sent).
+    around: first >= 0 ? body.slice(Math.max(0, first - 200), first + 300).replace(/\s+/g, " ") : "",
+    text: (doc.body ? doc.body.textContent : "").replace(/\s+/g, " ").trim().slice(0, 300),
+  };
+}
+
 async function readSearch(url, rawConfig) {
   const C = compile(rawConfig || globalThis.FF_PARSER_CONFIG);
   let target;
@@ -50,7 +83,7 @@ async function readSearch(url, rawConfig) {
     if (payload && parsed.vinted_id) cards.push({ vid: parsed.vinted_id, payload });
   }
   if (!cards.length) {
-    return { outcome: "empty", status: res.status, unreadable, message: "Nessuna scheda leggibile: la ricerca è vuota oppure la configurazione del parser va aggiornata." };
+    return { outcome: "empty", status: res.status, unreadable, diag: diagnose(res, body, doc, C), message: "Nessuna scheda leggibile: la ricerca è vuota oppure la configurazione del parser va aggiornata." };
   }
   return { outcome: "ok", status: res.status, cards, unreadable };
 }

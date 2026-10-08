@@ -782,6 +782,7 @@ async function scanResult(search, r, opts) {
       if (!s) return null;
       s.failures = (s.failures || 0) + 1;
       s.lastError = r.message || "Lettura non riuscita.";
+      s.diag = r.diag ? { ...r.diag, at: now, search: s.url } : s.diag;
       if (s.failures >= K.SCAN.maxFailures) {
         s.enabled = false;
         s.lastError = `${s.lastError} Ricerca sospesa dopo ${K.SCAN.maxFailures} tentativi falliti: riattivala dalle opzioni.`.slice(0, SCAN_STATUS_MAX + 60);
@@ -907,6 +908,7 @@ async function scanSummary() {
       lastNew: s.lastNew ?? 0,
       totalNew: s.totalNew || 0,
       lastError: s.lastError || "",
+      diag: s.diag || null,
     })),
   };
 }
