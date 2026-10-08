@@ -44,21 +44,66 @@ export const TIMEOUTS = {
 
 let seq = 0;
 
+/** What this page knows of the extension's bridge: its newest generation and what it can do. */
+interface BridgeMemory {
+  generation: number;
+  features: string[];
+}
+const memories = new WeakMap<object, BridgeMemory>();
+function memoryOf(host: BridgeHost): BridgeMemory {
+  let m = memories.get(host);
+  if (!m) memories.set(host, (m = { generation: 0, features: [] }));
+  return m;
+}
+
+/** Remembers a stamped message of the bridge ("bridge-ready", or an answer). */
+export function noteBridge(host: BridgeHost, data: { bridge?: unknown; features?: unknown } | null | undefined): void {
+  const gen = typeof data?.bridge === "number" ? data.bridge : 0;
+  if (!gen) return;
+  const m = memoryOf(host);
+  if (gen < m.generation) return;
+  m.generation = gen;
+  if (Array.isArray(data?.features)) m.features = data.features.filter((f): f is string => typeof f === "string");
+}
+
+/** Whether the extension on this page buys in one click (ff:vinted-buy). */
+export function canBuyInOneClick(host: BridgeHost): boolean {
+  return memoryOf(host).features.includes("buy");
+}
+
+/**
+ * How long an unstamped answer waits for a stamped one. After an update of the extension, the
+ * bridge of the old version can stay on an open page next to the new one, and it answers first:
+ * the new bridge's answer is the one that counts.
+ */
+export const OLD_BRIDGE_GRACE_MS = 400;
+
 /** One request to the extension; null when nobody answers within ``timeoutMs``. */
 export function request<T>(host: BridgeHost, type: Action, payload: Record<string, unknown>, timeoutMs: number): Promise<T | null> {
   return new Promise((resolve) => {
     const id = `ff-${Date.now()}-${++seq}`;
-    const timer = host.setTimeout(() => {
+    let grace: number | null = null;
+    let fallback: T | null = null;
+    const timer = host.setTimeout(() => finish(fallback), timeoutMs);
+    function finish(value: T | null) {
+      host.clearTimeout(timer);
+      if (grace !== null) host.clearTimeout(grace);
       host.removeEventListener("message", onMessage);
-      resolve(null);
-    }, timeoutMs);
+      resolve(value);
+    }
     function onMessage(e: MessageEvent) {
       if (e.source !== (host as unknown) || e.origin !== host.location.origin) return;
-      const d = e.data as { ff?: string; id?: string; result?: T } | null;
+      const d = e.data as { ff?: string; id?: string; result?: T; bridge?: unknown } | null;
       if (!d || d.ff !== "response" || d.id !== id) return;
-      host.clearTimeout(timer);
-      host.removeEventListener("message", onMessage);
-      resolve(d.result ?? null);
+      if (typeof d.bridge === "number" && d.bridge > 0) {
+        noteBridge(host, { bridge: d.bridge, features: (d.result as { features?: unknown } | undefined)?.features });
+        return finish(d.result ?? null);
+      }
+      // An unstamped answer comes from an older bridge: ignored when a newer one is known on
+      // this page, otherwise used unless a stamped answer arrives in a moment.
+      if (memoryOf(host).generation > 0 || grace !== null) return;
+      fallback = d.result ?? null;
+      grace = host.setTimeout(() => finish(fallback), OLD_BRIDGE_GRACE_MS);
     }
     host.addEventListener("message", onMessage);
     host.postMessage({ ff: "request", id, type, payload }, host.location.origin);
@@ -84,13 +129,6 @@ export async function confirmReady(host: BridgeHost, current: BridgeStatus, ping
   return "absent";
 }
 
-/** An older extension that does not know the action (it answers before doing anything). */
-export function isUnknownAction(r: VintedResult): boolean {
-  if (r.ok) return false;
-  if (r.code === "unknown_action" || r.code === "unsupported" || r.code === "unsupported_action") return true;
-  return r.code === "forbidden" && /azione non consentita|unknown action|not allowed/i.test(r.message ?? "");
-}
-
 const UNAVAILABLE = new Set(["sold", "reserved", "removed"]);
 
 export type BuyOutcome =
@@ -105,26 +143,27 @@ export type BuyOutcome =
 
 /**
  * Buy at the first click: one request opens the item, checks it is still on sale at the analysed
- * price and presses Buy (``ff:vinted-buy``). An older extension that does not know the action
- * falls back to the check-then-open flow (``ff:vinted-buy-check`` now, ``ff:vinted-buy-open`` on
- * the next click).
+ * price and presses Buy (``ff:vinted-buy``). An older extension, which does not offer it, gets
+ * the check-then-open flow (``ff:vinted-buy-check`` now, ``ff:vinted-buy-open`` on the next
+ * click): the flow is chosen up front, never by retrying after a refusal.
  */
 export async function buyAtFirstClick(
   host: BridgeHost,
   item: { vid: string; url: string; price: number },
   timeouts: { buy: number; action: number } = TIMEOUTS,
+  oneClick: boolean = canBuyInOneClick(host),
 ): Promise<BuyOutcome> {
-  const r = (await request<VintedResult>(host, "ff:vinted-buy", { vid: item.vid, url: item.url, expect_price: item.price }, timeouts.buy)) ?? {
-    ok: false,
-    code: "timeout",
-  };
-  if (r.ok) return { kind: "opened", result: r };
-  if (isUnknownAction(r)) {
+  if (!oneClick) {
     const c = (await request<VintedResult>(host, "ff:vinted-buy-check", { vid: item.vid, url: item.url }, timeouts.action)) ?? { ok: false, code: "timeout" };
     if (!c.ok) return { kind: "error", result: c };
     if (c.signedIn === false) return { kind: "error", result: { ok: false, code: "signed_out" } };
     return { kind: "checked", result: c };
   }
+  const r = (await request<VintedResult>(host, "ff:vinted-buy", { vid: item.vid, url: item.url, expect_price: item.price }, timeouts.buy)) ?? {
+    ok: false,
+    code: "timeout",
+  };
+  if (r.ok) return { kind: "opened", result: r };
   if (r.code === "price_changed") return { kind: "price_changed", price: typeof r.price === "number" ? r.price : null, result: r };
   const gone = r.code && UNAVAILABLE.has(r.code) ? r.code : r.status && UNAVAILABLE.has(r.status) ? r.status : null;
   if (gone) return { kind: "unavailable", code: gone as "sold" | "reserved" | "removed", result: { ...r, code: gone } };
@@ -151,7 +190,9 @@ export function useExtensionBridge() {
     let alive = true;
     // A late "bridge-ready" (extension woken up after the page loaded) always wins.
     const onReady = (e: MessageEvent) => {
-      if (e.source === window && e.data?.ff === "bridge-ready" && alive) update(e.data.paired ? "ready" : "unpaired");
+      if (e.source !== window || e.data?.ff !== "bridge-ready" || !alive) return;
+      noteBridge(browserHost(), e.data);
+      update(e.data.paired ? "ready" : "unpaired");
     };
     window.addEventListener("message", onReady);
     (async () => {
@@ -176,7 +217,10 @@ export function useExtensionBridge() {
   }, [update]);
 
   const act = useCallback(
-    async (type: Exclude<Action, "ff:bridge-status" | "ff:vinted-buy">, payload: { vid: string; url: string; want?: boolean }): Promise<VintedResult> => {
+    async (
+      type: Exclude<Action, "ff:bridge-status" | "ff:vinted-buy">,
+      payload: { vid: string; url: string; want?: boolean; expect_price?: number },
+    ): Promise<VintedResult> => {
       const r = await request<VintedResult>(browserHost(), type, payload, TIMEOUTS.action);
       return r ?? { ok: false, code: "timeout" };
     },

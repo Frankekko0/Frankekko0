@@ -74,6 +74,10 @@ describe("readProvenance", () => {
     expect(p).not.toBeNull();
     expect(p!.external).toEqual([]);
     expect(p!.new_price).toBeNull();
+    // Parts the page reads directly are always there (a partial record never crashes the page).
+    expect(p!.price_range).toMatchObject({ low: null, high: null });
+    expect(p!.days_to_sell).toMatchObject({ value: null, n: 0 });
+    expect(p!.sale_probability).toMatchObject({ value: null, basis: "insufficient" });
   });
 });
 

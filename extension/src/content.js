@@ -324,11 +324,20 @@
     for (let i = 0; i < vids.length; i += 120) {
       const chunk = vids.slice(i, i + 120).filter((vid) => pendingCards.has(vid));
       if (!chunk.length) continue;
-      send({ type: "ff:cards", first, pageType: pageType === "item" ? "other" : pageType, pageUrl: location.href, cards: chunk.map((vid) => ({ vid, payload: pendingCards.get(vid) })) });
+      const cardsOut = chunk.map((vid) => ({ vid, payload: pendingCards.get(vid) }));
       for (const vid of chunk) {
         pendingCards.delete(vid);
         page.sent.add(vid);
       }
+      send({ type: "ff:cards", first, pageType: pageType === "item" ? "other" : pageType, pageUrl: location.href, cards: cardsOut }).then((r) => {
+        if (r && typeof r.queued === "number") return;
+        // Not delivered (the service worker was restarting): the cards go back in line, never lost.
+        for (const c of cardsOut) {
+          page.sent.delete(c.vid);
+          if (!pendingCards.has(c.vid)) pendingCards.set(c.vid, c.payload);
+        }
+        flushCards();
+      });
     }
   }
 
@@ -362,9 +371,12 @@
       if (items.length >= 120) break;
     }
     if (!items.length) return;
-    const href = location.href;
     const r = await send({ type: "ff:page-stats", items });
-    if (!r || !r.ok || location.href !== href) return;
+    if (!r || !r.ok) {
+      // Asked again with the next batch (the statistics are per card, not per page).
+      for (const it of items) page.statsAsked.delete(it.vinted_id);
+      return;
+    }
     addTiming(r.timing);
     let changed = 0;
     for (const [vid, stat] of Object.entries(r.stats || {})) {
@@ -1203,10 +1215,18 @@
     if (msg.action === "buy") {
       if (!buyButton()) return { ok: false, code: "no_button", message: "Tasto Acquista non trovato in questa pagina (configurazione da aggiornare).", ...snap };
       await pageLoaded();
+      // The wait can be long: still this item, still on sale, still at the expected price?
+      if (pageType !== "item" || P.itemId(location.href, C) !== String(msg.vid)) return { ok: false, code: "wrong_page", message: "Pagina dell'annuncio cambiata: nessun clic fatto." };
+      const now = await itemSnapshot(String(msg.vid));
+      if (now.status !== "active") return { ok: false, code: now.status, message: "L'articolo non è più acquistabile.", ...now };
+      const expected = msg.expect_price === undefined || msg.expect_price === null ? null : Number(msg.expect_price);
+      if (expected !== null && (typeof now.price !== "number" || Math.abs(now.price - expected) >= 0.01)) {
+        return { ok: false, code: typeof now.price === "number" ? "price_changed" : "no_price", message: "Il prezzo è cambiato: nessun clic fatto.", ...now, expected };
+      }
       const btn = buyButton();
-      if (!btn) return { ok: false, code: "no_button", message: "Tasto Acquista non trovato in questa pagina (configurazione da aggiornare).", ...snap };
+      if (!btn) return { ok: false, code: "no_button", message: "Tasto Acquista non trovato in questa pagina (configurazione da aggiornare).", ...now };
       btn.click(); // opens Vinted's checkout: the payment is confirmed by you
-      return { ok: true, ...snap };
+      return { ok: true, ...now };
     }
     return { ok: false, code: "unknown", message: "Azione non supportata." };
   }

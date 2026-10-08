@@ -13,8 +13,13 @@ export function readProvenance(value: unknown): Provenance | null {
   if (!value || typeof value !== "object") return null;
   const p = value as Partial<Provenance>;
   if (!p.expected_price || typeof p.expected_price !== "object" || !p.real_sales || typeof p.real_sales !== "object") return null;
+  const part = <T extends object>(v: unknown, fallback: T): T => (v && typeof v === "object" ? { ...fallback, ...(v as T) } : fallback);
   return {
     ...(p as Provenance),
+    // Parts an older or partial record may lack get neutral values ("—" on the page), never a crash.
+    price_range: part(p.price_range, { low: null, high: null, basis: "percentiles", label: "" }),
+    days_to_sell: part(p.days_to_sell, { value: null, n: 0, basis: "category_baseline", label: "" }),
+    sale_probability: part(p.sale_probability, { value: null, n: 0, basis: "insufficient", label: "" }),
     external: Array.isArray(p.external) ? p.external : [],
     new_price: p.new_price && typeof p.new_price === "object" ? p.new_price : null,
   };

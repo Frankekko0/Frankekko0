@@ -128,7 +128,9 @@ export function VintedActions({
 
   async function onOpen() {
     setBusy("open");
-    const r = await bridge.act("ff:vinted-buy-open", { vid: vintedId!, url });
+    // The price you are shown in the dialog: Buy is pressed only if it is still the price on Vinted.
+    const expect = dialog?.result.price ?? price;
+    const r = await bridge.act("ff:vinted-buy-open", { vid: vintedId!, url, ...(typeof expect === "number" && expect > 0 ? { expect_price: expect } : {}) });
     setBusy(null);
     setDialog(null);
     if (!r.ok) return warn(r);

@@ -698,11 +698,14 @@ async function buyTabOf(vid) {
   return chrome.tabs.get(tabId).then(() => tabId, () => null);
 }
 
-async function setBuyTab(vid, tabId) {
-  const { buyTabs = {} } = await sessionStore.get("buyTabs");
-  if (tabId === null) delete buyTabs[String(vid)];
-  else buyTabs[String(vid)] = tabId;
-  await sessionStore.set({ buyTabs });
+function setBuyTab(vid, tabId) {
+  // Read and written in one step: two purchases started at once never overwrite each other.
+  return exclusive(async () => {
+    const { buyTabs = {} } = await sessionStore.get("buyTabs");
+    if (tabId === null) delete buyTabs[String(vid)];
+    else buyTabs[String(vid)] = tabId;
+    await sessionStore.set({ buyTabs });
+  });
 }
 
 async function appOrigin() {

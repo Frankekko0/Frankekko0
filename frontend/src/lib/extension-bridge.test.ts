@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buyAtFirstClick, confirmReady, isUnknownAction, type BridgeHost, type VintedResult } from "./extension-bridge";
+import { buyAtFirstClick, canBuyInOneClick, confirmReady, noteBridge, request, type BridgeHost } from "./extension-bridge";
 
 type Reply = (type: string, payload: Record<string, unknown>) => unknown | undefined;
 
@@ -7,7 +7,7 @@ type Reply = (type: string, payload: Record<string, unknown>) => unknown | undef
  * A page with a fake extension bridge: every request posted by the web app is answered by
  * ``reply`` (undefined = the extension does not answer, e.g. not installed or asleep).
  */
-function fakeHost(reply: Reply): BridgeHost & { sent: { type: string; payload: Record<string, unknown> }[] } {
+function fakeHost(reply: Reply, bridge = 2): BridgeHost & { sent: { type: string; payload: Record<string, unknown> }[] } {
   const listeners = new Set<(e: MessageEvent) => void>();
   const host = {
     sent: [] as { type: string; payload: Record<string, unknown> }[],
@@ -23,7 +23,8 @@ function fakeHost(reply: Reply): BridgeHost & { sent: { type: string; payload: R
       const result = reply(m.type, m.payload);
       if (result === undefined) return;
       queueMicrotask(() => {
-        for (const l of [...listeners]) l({ source: host, origin: host.location.origin, data: { ff: "response", id: m.id, result } } as unknown as MessageEvent);
+        const data = bridge ? { ff: "response", id: m.id, result, bridge } : { ff: "response", id: m.id, result };
+        for (const l of [...listeners]) l({ source: host, origin: host.location.origin, data } as unknown as MessageEvent);
       });
     },
   };
@@ -55,53 +56,77 @@ describe("bridge readiness at click time", () => {
   });
 });
 
+/** A page whose bridge said it buys in one click. */
+function newBridge(reply: Reply) {
+  const host = fakeHost(reply);
+  noteBridge(host, { bridge: 2, features: ["buy"] });
+  return host;
+}
+
 describe("Buy at the first click", () => {
   it("one request opens the checkout and carries the analysed price", async () => {
-    const host = fakeHost((type) => (type === "ff:vinted-buy" ? { ok: true, price: 20, status: "active" } : undefined));
+    const host = newBridge((type) => (type === "ff:vinted-buy" ? { ok: true, price: 20, status: "active" } : undefined));
     const out = await buyAtFirstClick(host, item, fast);
     expect(out.kind).toBe("opened");
     expect(host.sent).toEqual([{ type: "ff:vinted-buy", payload: { vid: "4242", url: item.url, expect_price: 20 } }]);
   });
 
   it("a changed price comes back without any click, with the new price", async () => {
-    const host = fakeHost(() => ({ ok: false, code: "price_changed", price: 17.5 }));
+    const host = newBridge(() => ({ ok: false, code: "price_changed", price: 17.5 }));
     const out = await buyAtFirstClick(host, item, fast);
     expect(out).toMatchObject({ kind: "price_changed", price: 17.5 });
     expect(host.sent.map((s) => s.type)).toEqual(["ff:vinted-buy"]);
   });
 
   it("sold, reserved or removed items are unavailable (by code or by status)", async () => {
-    const byCode = await buyAtFirstClick(fakeHost(() => ({ ok: false, code: "sold" })), item, fast);
+    const byCode = await buyAtFirstClick(newBridge(() => ({ ok: false, code: "sold" })), item, fast);
     expect(byCode).toMatchObject({ kind: "unavailable", code: "sold" });
-    const byStatus = await buyAtFirstClick(fakeHost(() => ({ ok: false, code: "not_buyable", status: "reserved" })), item, fast);
+    const byStatus = await buyAtFirstClick(newBridge(() => ({ ok: false, code: "not_buyable", status: "reserved" })), item, fast);
     expect(byStatus).toMatchObject({ kind: "unavailable", code: "reserved" });
   });
 
-  it("an older extension that refuses the new action falls back to the check (two-step flow)", async () => {
-    const host = fakeHost((type) =>
-      type === "ff:vinted-buy"
-        ? { ok: false, code: "forbidden", message: "Azione non consentita." }
-        : type === "ff:vinted-buy-check"
-          ? { ok: true, status: "active", price: 20, signedIn: true }
-          : undefined,
-    );
+  it("an older extension gets the check (two-step flow) and never the one-click request", async () => {
+    const host = fakeHost((type) => (type === "ff:vinted-buy-check" ? { ok: true, status: "active", price: 20, signedIn: true } : undefined), 0);
+    expect(canBuyInOneClick(host)).toBe(false);
     const out = await buyAtFirstClick(host, item, fast);
     expect(out.kind).toBe("checked");
-    expect(host.sent.map((s) => s.type)).toEqual(["ff:vinted-buy", "ff:vinted-buy-check"]);
+    expect(host.sent.map((s) => s.type)).toEqual(["ff:vinted-buy-check"]);
   });
 
-  it("signed out on the fallback check and silence from the extension are errors", async () => {
-    const signedOut = fakeHost((type) =>
-      type === "ff:vinted-buy" ? { ok: false, code: "forbidden", message: "Azione non consentita." } : { ok: true, status: "active", signedIn: false },
-    );
+  it("a refusal of the one-click request is an error, never a second purchase flow", async () => {
+    const host = newBridge(() => ({ ok: false, code: "forbidden", message: "Azione non consentita." }));
+    expect(await buyAtFirstClick(host, item, fast)).toMatchObject({ kind: "error" });
+    expect(host.sent.map((s) => s.type)).toEqual(["ff:vinted-buy"]);
+  });
+
+  it("signed out on the check and silence from the extension are errors", async () => {
+    const signedOut = fakeHost(() => ({ ok: true, status: "active", signedIn: false }), 0);
     expect(await buyAtFirstClick(signedOut, item, fast)).toMatchObject({ kind: "error", result: { code: "signed_out" } });
-    expect(await buyAtFirstClick(fakeHost(() => undefined), item, fast)).toMatchObject({ kind: "error", result: { code: "timeout" } });
+    expect(await buyAtFirstClick(newBridge(() => undefined), item, fast)).toMatchObject({ kind: "error", result: { code: "timeout" } });
+  });
+});
+
+describe("old bridge left on the page after an update", () => {
+  it("the stamped answer wins over an older bridge's earlier answer", async () => {
+    const host = fakeHost(() => undefined);
+    const listeners: ((e: MessageEvent) => void)[] = [];
+    const orig = host.addEventListener;
+    host.addEventListener = (t, l) => {
+      listeners.push(l);
+      orig(t, l);
+    };
+    host.postMessage = (message: unknown) => {
+      const m = message as { id: string };
+      const send = (data: unknown) => queueMicrotask(() => listeners.forEach((l) => l({ source: host, origin: host.location.origin, data } as unknown as MessageEvent)));
+      send({ ff: "response", id: m.id, result: { ok: false, code: "forbidden" } }); // old bridge, first
+      setTimeout(() => send({ ff: "response", id: m.id, result: { ok: true }, bridge: 2 }), 5); // new bridge
+    };
+    expect(await request(host, "ff:vinted-favourite", {}, 1000)).toEqual({ ok: true });
   });
 
-  it("a refusal for another reason is not mistaken for an older extension", () => {
-    const r: VintedResult = { ok: false, code: "forbidden", message: "Richiesta non autorizzata." };
-    expect(isUnknownAction(r)).toBe(false);
-    expect(isUnknownAction({ ok: false, code: "unknown_action" })).toBe(true);
-    expect(isUnknownAction({ ok: true })).toBe(false);
+  it("once a newer bridge is known, unstamped answers are ignored", async () => {
+    const host = fakeHost(() => ({ ok: false, code: "forbidden" }), 0);
+    noteBridge(host, { bridge: 2, features: ["buy"] });
+    expect(await request(host, "ff:vinted-favourite", {}, 30)).toBeNull();
   });
 });

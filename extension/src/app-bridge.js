@@ -15,6 +15,16 @@
   window.__flipfinderBridgeLatest = me;
 
   const ACTIONS = new Set(["ff:vinted-favourite", "ff:vinted-buy", "ff:vinted-buy-check", "ff:vinted-buy-open"]);
+  // Every message of this bridge carries its generation and what it can do: the web app then
+  // ignores answers of a bridge left on the page by an older extension (it would refuse
+  // "ff:vinted-buy" first and trigger the old two-step purchase as well).
+  const BRIDGE = 2;
+  const FEATURES = ["buy"];
+  // One click, one action: each real click (or Enter/Space) on the page allows one request.
+  let gestures = 0;
+  let used = 0;
+  window.addEventListener("click", (e) => e.isTrusted && (gestures += 1), true);
+  window.addEventListener("keydown", (e) => e.isTrusted && (e.key === "Enter" || e.key === " ") && (gestures += 1), true);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const NO_RECEIVER = /Receiving end does not exist|Could not establish connection/i;
 
@@ -46,7 +56,7 @@
   function announce(h) {
     document.documentElement.dataset.flipfinderExtension = h.version;
     announced = true;
-    window.postMessage({ ff: "bridge-ready", version: h.version, paired: h.paired }, location.origin);
+    window.postMessage({ ff: "bridge-ready", version: h.version, paired: h.paired, bridge: BRIDGE, features: FEATURES }, location.origin);
   }
 
   // At page start the service worker may be asleep or busy starting: retried with backoff until
@@ -67,17 +77,18 @@
     const m = event.data;
     if (!m || m.ff !== "request" || typeof m.id !== "string") return;
     if (window.__flipfinderBridgeLatest !== me) return; // a newer bridge answers
-    const reply = (result) => window.postMessage({ ff: "response", id: m.id, result }, location.origin);
+    const reply = (result) => window.postMessage({ ff: "response", id: m.id, result, bridge: BRIDGE }, location.origin);
     if (m.type === "ff:bridge-status") {
       // Asked now, never a remembered failure: the extension may have been asleep a moment ago.
       const h = await hello(4);
       if (h && h.ok && !announced) announce(h);
-      return reply(h && h.ok ? { ok: true, version: h.version, paired: h.paired } : { ok: false });
+      return reply(h && h.ok ? { ok: true, version: h.version, paired: h.paired, features: FEATURES } : { ok: false });
     }
     if (!ACTIONS.has(m.type)) return reply({ ok: false, code: "forbidden", message: "Azione non consentita." });
-    if (!(navigator.userActivation && navigator.userActivation.isActive)) {
+    if (!(navigator.userActivation && navigator.userActivation.isActive) || gestures <= used) {
       return reply({ ok: false, code: "no_click", message: "L'azione parte solo da un tuo clic sul pulsante." });
     }
+    used = gestures;
     const p = m.payload || {};
     const expect = Number(p.expect_price);
     const r = await toWorker({
