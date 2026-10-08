@@ -190,16 +190,25 @@ async def run(
         if slug is None:
             return 2, {"status": "error", "reason": "marca sconosciuta"}, f"Marca sconosciuta: {args.brand}"
         model, category = resolve_model(catalog.taxonomy, slug, args.model)
-        search, summary = await refresh_model(
-            session,
-            catalog.brand_id(slug),
-            catalog.category_id(category),
-            model,
-            slug,
-            provider=provider,
-            settings=settings,
-            store=not args.dry_run,
-        )
+        # Same lock as the hourly refresh: two runs at once could each read the query budget
+        # before the other saved it and together go past the daily or monthly cap.
+        async with redis_lock(LOCK_NAME, LOCK_TTL_SECONDS) as acquired:
+            if not acquired:
+                return (
+                    1,
+                    {"status": "skipped", "reason": "already running"},
+                    "Aggiornamento automatico in corso: riprova tra qualche minuto.",
+                )
+            search, summary = await refresh_model(
+                session,
+                catalog.brand_id(slug),
+                catalog.category_id(category),
+                model,
+                slug,
+                provider=provider,
+                settings=settings,
+                store=not args.dry_run,
+            )
         report = search_report(search, summary)
         code = 1 if summary["status"] == "error" else 0
         return code, report, format_search(report, settings, args.dry_run)

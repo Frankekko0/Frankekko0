@@ -297,3 +297,21 @@ async def test_serper_out_of_credits_reported_as_400() -> None:
     with pytest.raises(ProviderError) as exc:
         await _serper(handler).search("search", "q")
     assert exc.value.fatal and "Crediti" in exc.value.message
+
+
+@pytest.mark.parametrize(
+    ("title", "reason"),
+    [
+        ("Scarpa Nike Air Max 90 - Ragazzi", "kids"),
+        ("Nike Air Max 90 LTR Scarpa - Ragazzo/a", "kids"),
+        ("Nike Air Max 90/1 bianche", "other_model"),
+        ("Nike Air Max 90 tre paia", "lot"),
+    ],
+)
+def test_italian_retail_labels_and_hybrids_are_not_the_adult_model(title: str, reason: str) -> None:
+    m = match_offer(AIR_MAX_90, title)
+    assert not m.ok and m.reason == reason
+
+
+def test_a_size_after_the_model_number_is_still_the_model() -> None:
+    assert match_offer(AIR_MAX_90, "Nike Air Max 90 42 bianche usate").ok

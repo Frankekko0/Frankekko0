@@ -655,3 +655,29 @@ async def test_listing_without_extra_evidence_is_unchanged(session, make_listing
     prov = outcome.result.provenance
     assert prov["external"] == [] and prov["new_price"] is None
     assert prov["real_sales"]["total"] == prov["real_sales"]["vinted_sold"] == outcome.result.market.n_sold
+
+
+async def test_a_bought_listing_is_counted_once_and_comes_back_when_the_purchase_is_deleted(
+    session, make_listing
+) -> None:
+    from sqlalchemy import select
+
+    from app.db.models import Listing, Purchase, SoldSale
+    from app.market.sold_sales import sync_own_records, sync_sold_sales
+
+    async def keys() -> set[str]:
+        return {r.dedupe_key for r in (await session.execute(select(SoldSale))).scalars()}
+
+    await market(session, make_listing, sold=6, active=0)
+    await sync_sold_sales(session, full=True)
+    bought = (await session.execute(select(Listing).where(Listing.external_id == "s2"))).scalar_one()
+    p = await purchase(session, await user(session), 24, listing_id=bought.id)
+    await sync_own_records(session, [p.id])  # what the portfolio API does right after recording it
+    k = await keys()
+    assert f"purchase:{p.id}" in k and f"vinted:{bought.external_id}" not in k  # recorded once
+    listing_id = p.listing_id
+    await session.delete(await session.get(Purchase, p.id))
+    await session.flush()
+    await sync_own_records(session, [], [listing_id])  # what the portfolio API does after deleting it
+    k = await keys()
+    assert f"purchase:{p.id}" not in k and f"vinted:{bought.external_id}" in k

@@ -20,6 +20,8 @@ again for work the previous one had just done:
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import time
 import uuid
 from collections import OrderedDict
@@ -27,7 +29,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from redis.exceptions import RedisError
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.acquisition.identity import listing_identity
@@ -79,6 +81,33 @@ async def sync_pools(drop: bool = False) -> bool:
         _pools.clear()
         _generation = gen
     return gen is not None
+
+
+def drop_pools_after_commit(session: AsyncSession) -> None:
+    """Start a new generation once ``session`` commits: pools that other requests built while this
+    capture was being stored (from data without its new sale or removal) are dropped too."""
+
+    def after_commit(_: Any) -> None:
+        with contextlib.suppress(RuntimeError):  # no running loop: nothing to drop in this process
+            task = asyncio.get_running_loop().create_task(sync_pools(drop=True))
+            _pending.add(task)
+            task.add_done_callback(_pending.discard)
+
+    event.listen(session.sync_session, "after_commit", after_commit, once=True)
+
+
+_pending: set[asyncio.Task[bool]] = set()
+
+
+async def prepare_pools(session: AsyncSession, market_changed: bool) -> bool:
+    """Whether this capture may share pools. A capture that brings a new sale or removal neither
+    reads nor caches shared pools (its own transaction is not committed yet): it drops every
+    process's copies now and again after its commit."""
+    if not market_changed:
+        return await sync_pools()
+    await sync_pools(drop=True)
+    drop_pools_after_commit(session)
+    return False
 
 
 class CapturePipeline(AnalysisPipeline):

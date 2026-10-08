@@ -246,15 +246,23 @@ def _own_query() -> Select[Any]:
 
 
 async def sync_own_records(
-    session: AsyncSession, purchase_ids: Sequence[uuid.UUID] | None = None
+    session: AsyncSession,
+    purchase_ids: Sequence[uuid.UUID] | None = None,
+    listing_ids: Sequence[uuid.UUID] = (),
 ) -> dict[str, int]:
     """Upsert the user's purchases and resales (all of them, or only ``purchase_ids``, e.g. right
-    after one is recorded or edited); rows of deleted or zero-priced records are removed."""
+    after one is recorded or edited); rows of deleted or zero-priced records are removed.
+
+    With ``purchase_ids``, the Vinted sale of each listing involved is brought in line at once (a
+    listing is recorded once: as the purchase while it exists, as a Vinted sale again after the
+    purchase is deleted - pass the deleted purchase's listing in ``listing_ids``)."""
+    if purchase_ids is not None and not purchase_ids:
+        if listing_ids:
+            await record_vinted_sold(session, list(listing_ids))
+        return {"own_sale": 0, "own_purchase": 0, "removed": 0}
     catalog = await load_catalog(session)
     stmt = _own_query()
     if purchase_ids is not None:
-        if not purchase_ids:
-            return {"own_sale": 0, "own_purchase": 0, "removed": 0}
         stmt = stmt.where(Purchase.id.in_(list(purchase_ids)))
     rows = own_rows((await session.execute(stmt)).all(), catalog)
     counts = {"own_sale": 0, "own_purchase": 0}
@@ -273,6 +281,10 @@ async def sync_own_records(
             delete(SoldSale).where(scope, SoldSale.dedupe_key.not_in(keys) if keys else true())
         )
     ).rowcount
+    if purchase_ids is not None:
+        involved = [*listing_ids, *(r["listing_id"] for r in rows if r["listing_id"] is not None)]
+        if involved:
+            await record_vinted_sold(session, involved)
     return {**counts, "removed": int(removed or 0)}
 
 

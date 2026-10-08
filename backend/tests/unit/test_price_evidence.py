@@ -18,6 +18,7 @@ from app.market.negotiation import discount_from_samples
 from app.opportunities.engine import estimate_from_similar
 from app.pricing.comparables import SOURCE_WEIGHTS, ItemProfile, evidence_source, select_comparables
 from app.pricing.evidence import (
+    NEW_CAP_NOTE,
     EvidenceGate,
     ExternalRef,
     OwnRecord,
@@ -243,6 +244,33 @@ def test_new_price_cap_only_for_used_items() -> None:
     assert cap_at_new_price(market, PriceEvidence(), "very_good") is market
 
 
+class _WideCalibration:
+    """An active calibration whose range is wider than the comparables' (as on a mature database)."""
+
+    active = True
+    n = 200
+
+    def apply(self, expected, category, brand, condition, confidence):  # type: ignore[no-untyped-def]
+        return expected * 0.8, expected, expected * 1.3
+
+
+def test_new_price_cap_holds_after_calibration_and_the_note_tells_the_truth() -> None:
+    from app.opportunities.engine import price_estimate
+
+    cands = [item(p, status="sold") for p in (60, 70, 80, 90, 100, 110, 120, 130)]
+    ev = PriceEvidence(
+        new_prices=[ref(i, "new", 80) for i in range(3)],
+        gate=EvidenceGate(use_external=True, use_own_purchases=True, use_new_cap=True),
+    )
+    _, _, market = price_estimate(SUBJECT, cands, NOW, None, _WideCalibration(), ev)  # type: ignore[arg-type]
+    assert market.optimistic_sale_price <= max(D("80.00"), market.expected_sale_price)
+    assert sum(n.startswith(NEW_CAP_NOTE) for n in market.notes) == 1
+    # Without the cap in use the calibrated maximum stays and no cap note is shown.
+    ev_off = replace(ev, gate=EvidenceGate(use_external=True, use_own_purchases=True, use_new_cap=False))
+    _, _, free = price_estimate(SUBJECT, cands, NOW, None, _WideCalibration(), ev_off)  # type: ignore[arg-type]
+    assert free.optimistic_sale_price > D("80") and not any(n.startswith(NEW_CAP_NOTE) for n in free.notes)
+
+
 # ---------------------------------------------------------------------------- provenance
 PROVENANCE = {
     "expected_price": {
@@ -452,3 +480,12 @@ def test_gate_keeps_sources_until_measurable_and_drops_harmful_ones() -> None:
     bad_own = [_case(i, 65, n_own_purchase=1) for i in range(n)]
     gate = decide_gate(_bt(listings=listings, own=bad_own, own_sales=listings))
     assert gate["use_own_purchases"] is False and gate["variant"] in ("external_sales", "own_sales")
+
+
+def test_a_bought_listing_is_never_its_own_comparable() -> None:
+    mine = own(1, "own_purchase", 40.0, listing_id=SUBJECT.id)
+    other = own(2, "own_purchase", 44.0, listing_id=uuid.uuid4())
+    ev = evidence_for_subject(
+        SUBJECT, [mine, other], [], negotiation_discount=None, gate=EvidenceGate(), parent_of=str
+    )
+    assert len(ev.own) == 1 and float(ev.own[0].price) == 44.0

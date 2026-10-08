@@ -272,6 +272,8 @@ def evidence_for_subject(
         return row_cat, parent_of(row_cat)
 
     for rec in own:
+        if subject.id is not None and rec.listing_id == subject.id:
+            continue  # the price paid for this very listing is not a comparable of itself
         if rec.brand_slug == subject.brand and same_model(rec.model_name, subject.model):
             ev.own.append(own_profile(rec, *cat(rec.category_slug)))
     matching = [

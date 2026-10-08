@@ -21,7 +21,7 @@ from app.api.capture_pipeline import (
     analysis_needed,
     changes_market,
     inputs_before,
-    sync_pools,
+    prepare_pools,
 )
 from app.api.deps import DB, CurrentUser, Economics
 from app.core.cache import NS_FEED, cache
@@ -261,7 +261,7 @@ async def persist_observations(
         merged.status_updates |= res.status_updates
         merged.ids_by_external |= res.ids_by_external
     if reuse_recent:
-        shared = await sync_pools(drop=changes_market(merged, listings))
+        shared = await prepare_pools(db, changes_market(merged, listings))
         ids = await analysis_needed(db, merged, before)
         pipeline: AnalysisPipeline = CapturePipeline(db, share_pools=shared)
     else:

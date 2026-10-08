@@ -429,3 +429,20 @@ async def test_cli_stores_one_model_and_reports_status(session: Any, monkeypatch
     assert code == 2 and result["status"] == "disabled"
     code, status, _ = await cli.run(args(status=True), session=session)
     assert code == 0 and set(status) == STATUS_KEYS and status["prices"]["sold"] == 6
+
+
+async def test_cli_never_searches_while_the_hourly_refresh_runs(session: Any) -> None:
+    from app.core.redis import redis_lock
+    from app.external.jobs import LOCK_NAME, LOCK_TTL_SECONDS
+
+    fake = FakeSerper()
+    async with redis_lock(LOCK_NAME, LOCK_TTL_SECONDS) as held:
+        assert held
+        code, report, _ = await cli.run(
+            args(brand="Nike", model="air max 90", dry_run=True),
+            provider=fake.provider(),
+            settings=settings(),
+            session=session,
+        )
+    assert code == 1 and report["status"] == "skipped"
+    assert await get_state(session, BUDGET_KEY) is None  # no query was spent

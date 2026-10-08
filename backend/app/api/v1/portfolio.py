@@ -61,12 +61,14 @@ async def _purchase(db: DB, user_id: uuid.UUID, purchase_id: uuid.UUID) -> Purch
     return p
 
 
-async def sync_own_safely(db: DB, purchase_ids: list[uuid.UUID]) -> None:
+async def sync_own_safely(
+    db: DB, purchase_ids: list[uuid.UUID], listing_ids: list[uuid.UUID] | None = None
+) -> None:
     """Own purchases and resales are the most reliable concluded sales: the price evidence
     (``sold_sales``) gets them right away. A failure is logged, never shown to the user: the
     30-minute evidence sync records them anyway."""
     try:
-        await sync_own_records(db, purchase_ids)
+        await sync_own_records(db, purchase_ids, listing_ids or [])
         await db.commit()
     except Exception as exc:
         await db.rollback()
@@ -225,8 +227,11 @@ async def update_purchase(purchase_id: uuid.UUID, body: PurchaseUpdate, user: Cu
 @router.delete("/purchases/{purchase_id}", response_model=Message)
 async def delete_purchase(purchase_id: uuid.UUID, user: CurrentUser, db: DB) -> Message:
     p = await _purchase(db, user.id, purchase_id)
+    listing_id = p.listing_id
     await db.delete(p)
     await db.commit()  # its concluded-sale rows go with it (foreign key cascade)
+    if listing_id is not None:
+        await sync_own_safely(db, [], [listing_id])  # the listing counts again as a Vinted sale
     await _refresh_learning(db, user.id)
     return Message(message="Acquisto eliminato.")
 

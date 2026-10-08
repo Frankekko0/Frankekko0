@@ -23,7 +23,7 @@ from app.market.sold_sales import SYNC_KEY, sold_sales_summary, sync_sold_sales
 from app.market.state import get_state, parse_time
 
 log = get_logger(__name__)
-FULL_EVERY = timedelta(hours=20)
+FULL_EVERY = timedelta(hours=26)  # longer than a day: only catches a missed nightly full sync
 LOCK_TTL_SECONDS = 900
 
 

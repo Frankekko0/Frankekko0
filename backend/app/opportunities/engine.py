@@ -551,6 +551,10 @@ def price_estimate(
     comps, market = estimate_from_similar(subject, similar, now, prior, evidence)
     if calibration is not None and calibration.active and market.has_value:
         market = calibrate(market, calibration, subject)
+        if evidence is not None and evidence.gate.use_new_cap:
+            # The calibrated range replaces the capped one: the new price caps the final maximum.
+            market = replace(market, notes=[n for n in market.notes if not n.startswith(NEW_CAP_NOTE)])
+            market = cap_at_new_price(market, evidence, subject.condition)
     return similar, comps, market
 
 

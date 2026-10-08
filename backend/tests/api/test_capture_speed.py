@@ -104,19 +104,26 @@ async def test_pools_shared_between_requests(
     assert len(loads) == 1  # one pool for the batch
     await _post(auth_client, headers, [_card(8502, 13)])
     assert len(loads) == 1  # next request of the page: same pool, no query
-    # A sold item changes the market: every process drops its copies.
+    # A sold item changes the market: that capture reads its own (uncommitted) data, and every
+    # process drops its copies, before and after its commit.
     await _post(auth_client, headers, [_card(8503, 25, status="sold"), _card(8504, 16)])
     assert len(loads) == 2
+    await _post(auth_client, headers, [_card(8508, 15)])
+    assert len(loads) == 3  # reloaded with the committed sale
     # The same sold item seen again (a closet page reloaded) changes nothing.
     await _post(auth_client, headers, [_card(8503, 25, status="sold"), _card(8506, 15)])
-    assert len(loads) == 2
+    assert len(loads) == 3
     # An active item turning sold does.
     await _post(auth_client, headers, [_card(8500, 12, status="sold"), _card(8507, 15)])
-    assert len(loads) == 3
+    assert len(loads) == 4
+    await _post(auth_client, headers, [_card(8509, 16)])
+    assert len(loads) == 5
+    await _post(auth_client, headers, [_card(8510, 14)])
+    assert len(loads) == 5
     # Expired copies are reloaded.
     monkeypatch.setattr(capture_pipeline, "POOL_TTL_SECONDS", 0.0)
     await _post(auth_client, headers, [_card(8505, 17)])
-    assert len(loads) == 4
+    assert len(loads) == 6
 
 
 async def test_shared_pool_gives_the_same_analysis(session: Any, make_listing: Any) -> None:

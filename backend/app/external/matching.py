@@ -158,7 +158,7 @@ _FURNITURE = re.compile(r"\b(articoli|oggetti|prodotti|annunci) simili\b|\bsimil
 _LOOKALIKE = r"\b(?:stile|tipo|like|style|simil|genere|modello tipo)\s+(?:\w+\s+)?"
 
 _KIDS_WORDS = re.compile(
-    r"\b(bambin[oaie]|bimb[oaie]|kids?|junior|jr|boys?|girls?|enfants?|kinder\w*|nin[oa]s?|"
+    r"\b(bambin[oaie]|bimb[oaie]|ragazz[oaie]|kids?|junior|jr|boys?|girls?|enfants?|kinder\w*|nin[oa]s?|"
     r"toddlers?|neonat[oaie]|infants?|youth|grade school|little kids|big kids|"
     r"baby(?!\s+(?:blue|pink|blu|rosa|celeste|azzurro)))\b"
 )
@@ -178,7 +178,7 @@ _LOT = re.compile(
     r"\b(lott[oi]|bundle|konvolut|lot of|lot de|set di|set of|multipack|stock)\b"
     r"|\b\d+\s*-?\s*pack\b|\bpack\s+(?:da|di|of|de)\s+\d+\b"
     r"|\bx\s?[2-9]\b|\b[2-9]\s?x\b"
-    r"|\b[2-9]\d?\s*(?:pezzi|paia|pairs|pcs|pieces|stuck|unita|articoli|capi|items)\b"
+    r"|\b(?:[2-9]\d?|due|tre|quattro|cinque|sei|two|three|four|five|six)\s*(?:pezzi|paia|pairs|pcs|pieces|stuck|unita|articoli|capi|items)\b"
 )
 _STOCK_OK = re.compile(r"\b(in|out of|esaurit\w*)\s+stock\b|\bstock\s?x\b")
 _KIT = re.compile(r"\bkit\b")
@@ -253,9 +253,17 @@ def _accessory(title: str) -> str | None:
     return None
 
 
-def _number_mismatch(title: str, spec: ModelSpec) -> str | None:
+def _number_mismatch(title: str, spec: ModelSpec, raw_title: str = "") -> str | None:
     """ "air max 95" or "air max 1" in a result for "Air Max 90" (years such as "nuptse 1996" are
-    not model numbers)."""
+    not model numbers), or the model number joined to another one: "Air Max 90/1" is a hybrid
+    model, not the Air Max 90 (a size after a space, "Air Max 90 42", is fine)."""
+    for kw in spec.keywords:
+        tokens = kw.split()
+        if len(tokens) >= 2 and tokens[-1].isdigit() and raw_title:
+            stem, number = " ".join(tokens[:-1]), tokens[-1]
+            joined = rf"(?<![\w&]){re.escape(stem)}\s*{number}\s*[/+&]\s*\d+"
+            if m := re.search(joined, raw_title):
+                return m.group(0)
     for kw in spec.keywords:
         tokens = kw.split()
         if len(tokens) < 2 or not tokens[-1].isdigit():
@@ -288,7 +296,7 @@ def match_offer(spec: ModelSpec, title: str, snippet: str | None = None) -> Matc
         for start, end in _spans([_phrase(k) for k in keywords], t):
             if not any(a <= start and end <= b for a, b in own):
                 return Match(False, "other_model", name)
-    if detail := _number_mismatch(t, spec):
+    if detail := _number_mismatch(t, spec, fold(title)):
         return Match(False, "other_model", detail)
     if model_kw is None:
         return Match(False, "model")
