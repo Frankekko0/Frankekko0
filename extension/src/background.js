@@ -1187,7 +1187,16 @@ async function onPurchaseDone(msg, sender) {
 }
 
 // ------------------------------------------------------------------ bridge to FlipFinder's pages
-async function registerAppBridge() {
+// One registration at a time: the worker start-up, a permission just granted and a changed address
+// can all ask at once, and two concurrent runs both try to register the same script ID
+// ("Duplicate script ID 'ff-app-bridge'").
+let bridgeRun = Promise.resolve();
+function registerAppBridge() {
+  bridgeRun = bridgeRun.then(registerAppBridgeNow, registerAppBridgeNow);
+  return bridgeRun;
+}
+
+async function registerAppBridgeNow() {
   const origin = await appOrigin();
   const allowed = Boolean(origin) && (await chrome.permissions.contains({ origins: [`${origin}/*`] }).catch(() => false));
   const want = allowed ? [`${origin}/*`] : null;
