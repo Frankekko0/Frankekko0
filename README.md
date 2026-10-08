@@ -25,7 +25,7 @@ Ogni annuncio visto finisce in un **archivio permanente**.
 | ![Dettaglio](docs/screenshots/deal-detail-dark.jpg) | ![Mercato](docs/screenshots/market-analysis-dark.jpg) | ![Mobile](docs/screenshots/mobile-deals.jpg) |
 
 > **Principi.**
-> - FlipFinder legge ciò che **tu** apri: estensione, link, email di notifica, import manuale, feed autorizzati. Nessun dato simulato: senza dati sufficienti mostra "dati insufficienti".
+> - FlipFinder legge ciò che **tu** apri: estensione, link, email di notifica, import manuale, feed autorizzati. Se lo attivi tu, anche le ricerche che salvi nello scanner automatico. Nessun dato simulato: senza dati sufficienti mostra "dati insufficienti".
 > - Le letture automatiche di pagine pubbliche sono facoltative, spente di default e lente; si fermano al primo rifiuto.
 > - Non aggira mai CAPTCHA, rate limit, anti-bot o autenticazioni.
 > - Non acquista, non invia offerte e non contatta venditori: la decisione finale resta sempre all'utente. Non
@@ -182,6 +182,7 @@ Il confronto completo (affidabilità, copertura, costi, rischio di blocco, confo
 | Modalità | Stato | Come si attiva |
 |---|---|---|
 | **Estensione browser** (schede viste, annunci aperti, analisi su comando) | attiva | carica `extension/` e associala con una chiave da *Settings → Browser extension* |
+| **Scanner automatico delle ricerche salvate** (estensione, browser aperto) | **spento di default** | opzioni dell'estensione → *Scanner automatico*, poi "Aggiungi questa ricerca allo scanner" dal popup. Prima pagina di ogni ricerca, senza cookie, una lettura al minuto al massimo (30/h, 300/giorno), notifica per gli annunci nuovi sopra le soglie, stop di 6 ore al primo rifiuto. I termini di Vinted vietano la raccolta automatica: la scelta è tua. Vedi [`extension/README.md`](extension/README.md). |
 | **Link** incollati (uno o tanti) e **bookmarklet** | attiva | *Analyze a listing* → *Paste links* / bookmarklet |
 | **Import manuale** (modulo) e **pagina di ricerca** | attiva | *Analyze a listing*, `/import` |
 | **Email di notifica Vinted** ("preferito venduto", "prezzo ridotto") | attiva su richiesta | upload `.eml` in *Settings → Data sources*; lettura automatica con `IMAP_HOST`/`IMAP_USER`/`IMAP_PASSWORD` (sola lettura) |
@@ -192,7 +193,7 @@ Il confronto completo (affidabilità, copertura, costi, rischio di blocco, confo
 **Ordine di fallback** per aggiornare un articolo:
 1. feed o provider;
 2. lettura pubblica, se attiva;
-3. estensione: lettura lenta facoltativa, oppure quando riapri la pagina;
+3. estensione: lettura lenta facoltativa, oppure quando riapri la pagina (lo scanner delle ricerche scopre annunci nuovi, non aggiorna quelli noti);
 4. email;
 5. altrimenti l'articolo resta in attesa, con il motivo visibile nella pagina di tracking.
 
@@ -225,8 +226,9 @@ Ultimo e prossimo controllo sono sempre visibili nella pagina di tracking e nell
 
 ## Estensione browser e pannello live
 
-[`extension/`](extension/README.md) (Manifest V3, v1.0).
-- **Dove e cosa legge:** gira solo sui domini `www.vinted.*` e legge le pagine che **tu** apri e scorri.
+[`extension/`](extension/README.md) (Manifest V3, v1.1).
+- **Dove e cosa legge:** gira solo sui domini `www.vinted.*` e legge le pagine che **tu** apri e scorri. In più, solo se lo attivi, lo **scanner automatico** rilegge le ricerche che salvi (vedi sotto).
+- **Scanner automatico (facoltativo):** con il browser aperto rilegge la prima pagina delle tue ricerche salvate, senza cookie e con ritmo prudente, salva gli annunci nuovi e ti avvisa con una notifica se superano le soglie. Non acquista, non invia offerte e non contatta venditori.
 - **Ricerche, armadi e preferiti:** ogni scheda viene valutata quando entra a schermo; sulla scheda compare un **badge** con score, margine netto e "già tracciato".
 - **Annuncio aperto:** viene letto tutto e analizzato a fondo.
 - **Azioni rapide**, solo su tuo clic: *Traccia*, *Analisi approfondita* (una lettura di quella pagina, senza cookie) e *Apri nella pagina di tracking*.

@@ -29,8 +29,11 @@ test("the extension runs on exactly the Vinted domains of the configuration", ()
   assert.deepEqual([...hosts].sort(), [...C.domains].sort());
   // scripting: only to place the Favourite/Buy bridge on the FlipFinder address you grant at
   // pairing time (unknown at build time); it adds no site access by itself.
-  assert.deepEqual(manifest.permissions.sort(), ["alarms", "scripting", "sidePanel", "storage"]);
-  assert.equal(manifest.host_permissions, undefined); // FlipFinder's address is asked at pairing time only
+  // offscreen: a hidden page that parses the HTML of the searches saved for the optional scanner
+  // (the service worker has no DOM); notifications: the scanner's alerts. Neither adds site access.
+  assert.deepEqual(manifest.permissions.sort(), ["alarms", "notifications", "offscreen", "scripting", "sidePanel", "storage"]);
+  // FlipFinder's address is asked at pairing time, and a Vinted site when you add a search to the scanner.
+  assert.equal(manifest.host_permissions, undefined);
 });
 
 test("item page: every field matches the shared expectation (same as the server)", async () => {

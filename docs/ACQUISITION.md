@@ -33,6 +33,7 @@ Legenda: ●●● alto · ●●○ medio · ●○○ basso.
 |---|---|---|---|---|---|
 | **1. Estensione: lettura passiva della pagina che apro** | ●●● è ciò che vedo | annuncio: tutti i campi visibili, tutte le foto, stato; catalogo/ricerca/armadio/preferiti: le card caricate | 0 | nessuno: zero richieste aggiuntive | ●●○ legge solo pagine aperte da me; resta uno "strumento esterno" |
 | **2. Estensione: approfondimento su comando (o pochi candidati, lento)** | ●●● | come 1, per annunci che non ho aperto | 0 | basso: poche richieste con la mia sessione, intervallo minimo, stop al primo segnale di blocco | ●○○ è traffico automatico, anche se lento: disattivato di default |
+| **2b. Estensione: scanner automatico delle ricerche salvate** | ●●○ legge ciò che Vinted serve alla pagina di ricerca senza cookie; se cambia la struttura, il parser lo segnala (ricerca sospesa) invece di inventare | schede della prima pagina di ogni ricerca salvata, dal più recente (poi analisi come per ogni scheda) | 0 | medio-basso: una richiesta al minuto al massimo, 30/h e 300/giorno, senza cookie; stop di 6 ore al primo 403/429/CAPTCHA | ●○○ è traffico automatico, anche se lento: disattivato di default; non è consentito dai Termini |
 | **3. Bookmarklet** | ●●○ | singolo annuncio (dati strutturati) | 0 | nessuno | ●●○ come 1 |
 | **4. Import manuale di link (anche elenchi)** | ●●● per ID e link; il resto arriva con le altre modalità | ID Vinted, URL, titolo dal link; poi arricchimento | 0 | nessuno | ●●● |
 | **5. Dati strutturati nel sorgente** (JSON-LD, meta, JSON incorporato) | ●●● i formati SEO cambiano raramente | titolo, prezzo, valuta, foto, brand, disponibilità; in parte preferiti, stato | — | — | (è una tecnica di lettura usata da 1, 2, 6) |
@@ -56,13 +57,20 @@ ogni tentativo, riuscito o fallito):
    (almeno 60 s tra un controllo e l'altro, al massimo 20 letture automatiche all'ora in tutto);
    al primo 403/429/CAPTCHA si ferma per 6 ore. Le analisi approfondite su comando seguono la
    stessa coda (al massimo una ogni 4 s) e si fermano anch'esse dopo un rifiuto.
-4. **Lettura dal server** (6): opzionale, spenta di default (`VINTED_PUBLIC_FETCH_ENABLED`).
+4. **Scanner automatico delle ricerche** (2b): opzionale, spento di default. Con il browser aperto,
+   una pagina nascosta dell'estensione rilegge la prima pagina (dal più recente) delle ricerche
+   che hai aggiunto, una per volta, senza cookie: almeno 60 s tra due letture, al massimo 30 all'ora
+   e 300 al giorno (l'intervallo scelto si allunga da solo per restare nei tetti); al primo
+   403/429/CAPTCHA si ferma per 6 ore insieme a ogni altra lettura automatica, senza ritentare.
+   La prima lettura di una ricerca è solo la base (nessuna notifica); poi gli annunci non ancora visti
+   sono "nuovi", salvati con modalità `extension_scan`. Non aggiorna gli articoli già noti (lo fanno 3 e 5).
+5. **Lettura dal server** (6): opzionale, spenta di default (`VINTED_PUBLIC_FETCH_ENABLED`).
    Rispetta robots.txt, identità dichiarata, una richiesta ogni ≥ 30 s, tetto giornaliero, cache
    di 6 ore. Al primo blocco si ferma (circuit breaker) e non ritenta con trucchi.
-5. **Email** (7): opzionale. Casella IMAP in sola lettura (credenziali solo da variabili
+6. **Email** (7): opzionale. Casella IMAP in sola lettura (credenziali solo da variabili
    d'ambiente) oppure caricamento manuale di file `.eml`. "Preferito venduto" conferma la vendita;
    "ribassato" aggiunge uno snapshot di prezzo.
-6. **Manuale** (4): link o elenchi di link, modulo *Analyze a listing*, bookmarklet (3).
+7. **Manuale** (4): link o elenchi di link, modulo *Analyze a listing*, bookmarklet (3).
 
 Non implementate: **Vinted Pro** (non dà dati di mercato; si può aggiungere se diventi venditore
 Pro per gestire i tuoi annunci) e i **fornitori terzi** specifici (nessuno con licenza: se ne

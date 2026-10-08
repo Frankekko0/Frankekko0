@@ -711,6 +711,7 @@ export type AcquisitionMode =
   | "extension_card"
   | "extension_deep"
   | "extension_refresh"
+  | "extension_scan"
   | "batch_import"
   | "link_import"
   | "manual_form"

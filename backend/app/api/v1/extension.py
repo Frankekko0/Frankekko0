@@ -174,13 +174,11 @@ async def capture_cards(
     scorrimento"). Each is stored (a snapshot per sighting, status updated when seen again),
     quickly analysed from the card data, and evaluated with the user's costs."""
     items = _vinted_only(body.items)
+    mode = AcquisitionMode.EXTENSION_SCAN if body.page_type == "scan" else AcquisitionMode.EXTENSION_CARD
     by_id = {
-        pl.external_id: pl
-        for pl in (manual_to_provider(i, "extension_card", CaptureLevel.CARD) for i in items)
+        pl.external_id: pl for pl in (manual_to_provider(i, mode.value, CaptureLevel.CARD) for i in items)
     }
-    result, _outcomes = await persist_observations(
-        db, list(by_id.values()), AcquisitionMode.EXTENSION_CARD, track=False
-    )
+    result, _outcomes = await persist_observations(db, list(by_id.values()), mode, track=False)
     await _touch_sync(db, body.extension_version, "cards", len(by_id))
     await db.commit()
     await cache.bump(NS_FEED)

@@ -92,6 +92,29 @@ async def test_cards_seen_while_scrolling_are_stored_and_evaluated(
     assert sync["last_sync"] and sync["listings"] == 2
 
 
+async def test_cards_read_by_the_automatic_scanner_are_marked_as_such(
+    auth_client: httpx.AsyncClient, make_listing
+) -> None:
+    await seed_deal(make_listing)
+    headers = await _paired(auth_client)
+    card = {**CARD, "url": "https://www.vinted.it/items/9201-polo", "title": "Polo Ralph Lauren", "price": 9}
+    r = await auth_client.post(
+        f"{API}/capture/cards",
+        json={
+            "page_type": "scan",
+            "page_url": "https://www.vinted.it/catalog?search_text=polo",
+            "items": [card],
+        },
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["stored"] == 1 and r.json()["evaluations"][0]["analysis_depth"] == "quick"
+    item = (await auth_client.get(f"{API}/items/9201")).json()
+    assert item["item"]["acquisition_mode"] == "extension_scan"
+    extension = (await auth_client.get(f"{API}/acquisition/status")).json()["extension"]
+    assert extension["listings"] >= 1
+
+
 async def test_item_capture_full_analysis_and_track(auth_client: httpx.AsyncClient, make_listing) -> None:
     await seed_deal(make_listing)
     headers = await _paired(auth_client)

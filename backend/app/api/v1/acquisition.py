@@ -125,7 +125,13 @@ async def acquisition_status(user: CurrentUser, db: DB) -> dict[str, Any]:
         "extension": {
             "listings": sum(
                 by_mode.get(k, 0)
-                for k in ("extension_item", "extension_card", "extension_deep", "extension_refresh")
+                for k in (
+                    "extension_item",
+                    "extension_card",
+                    "extension_deep",
+                    "extension_refresh",
+                    "extension_scan",
+                )
             ),
             "last_sync": (extension_state.value or {}).get("last_sync") if extension_state else None,
         },

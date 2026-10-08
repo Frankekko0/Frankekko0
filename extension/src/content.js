@@ -17,6 +17,7 @@
   const P = globalThis.FlipFinderParse;
   const K = globalThis.FlipFinderCore;
   const Q = globalThis.FlipFinderQuick;
+  const Cards = globalThis.FlipFinderCards;
   let market = null; // compiled market summary (downloaded by the service worker)
   let C = P.compileConfig(globalThis.FF_PARSER_CONFIG);
   let opts = K.normalizeOptions({});
@@ -153,46 +154,9 @@
     return P.itemId(a.getAttribute("href") || "", C);
   }
 
-  /** The largest ancestor of an item link that contains no link to another item: the card. */
-  function cardRoot(link, id) {
-    const other = `${C.selectors.item_link}:not([href*="/items/${id}-"]):not([href$="/items/${id}"]):not([href*="/items/${id}?"])`;
-    let el = link;
-    for (let depth = 0; depth < 10; depth += 1) {
-      const parent = el.parentElement;
-      if (!parent || parent === document.body || parent.tagName === "MAIN") break;
-      if (parent.querySelector(other)) return el;
-      el = parent;
-    }
-    return el;
-  }
-
-  function collectCard(root, link) {
-    // The item's own photo: never the seller's avatar shown on the card.
-    const img = [...root.querySelectorAll(C.selectors.card_image || "img")].find((el) => !el.closest(C.selectors.card_exclude)) || null;
-    const testids = {};
-    const suffixRx = new RegExp(C.selectors.card_testid_suffix || "--([a-z-]+)$");
-    root.querySelectorAll("[data-testid]").forEach((el) => {
-      const suffix = suffixRx.exec(el.getAttribute("data-testid") || "")?.[1];
-      if (suffix && !(suffix in testids)) testids[suffix] = text(el);
-    });
-    const texts = [];
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    while (walker.nextNode() && texts.length < 40) {
-      const t = (walker.currentNode.textContent || "").replace(/\s+/g, " ").trim();
-      if (t && t.length <= 200) texts.push(t);
-    }
-    const summaryLink = root.querySelector(C.selectors.card_summary_link) || link;
-    const fav = root.querySelector(C.selectors.favourite_count);
-    return {
-      href: link.getAttribute("href") || "",
-      summary: summaryLink.getAttribute("title") || summaryLink.getAttribute("aria-label") || "",
-      alt: img?.getAttribute("alt") || "",
-      image: img?.currentSrc || img?.getAttribute("src") || "",
-      testids,
-      texts,
-      favourites: fav ? fav.getAttribute("aria-label") || text(fav) : "",
-    };
-  }
+  // Card reading is shared with the scanner (src/cards.js).
+  const cardRoot = (link, id) => Cards.cardRoot(link, id, C);
+  const collectCard = (root, link) => Cards.collectCard(root, link, C);
 
   const io = new IntersectionObserver(
     (entries) => {
@@ -1003,6 +967,10 @@
       case "ff:read-page":
         readPage(msg.url, msg.vid).then(sendResponse);
         return true;
+      case "ff:page-info":
+        // For the popup: what kind of Vinted page this is (to offer "add to the scanner").
+        sendResponse({ pageType, url: location.href });
+        return false;
       case "ff:scroll-to": {
         const card = cards.get(msg.vid);
         if (!card || !card.root.isConnected) {
@@ -1066,15 +1034,7 @@
         }),
       };
     }
-    const raw = [];
-    const done = new Set();
-    for (const link of document.querySelectorAll(C.selectors.item_link)) {
-      const id = linkId(link);
-      if (!id || done.has(id)) continue;
-      done.add(id);
-      raw.push(collectCard(cardRoot(link, id), link));
-    }
-    const { items } = P.parseCards(raw, location.href, C);
+    const { items } = P.parseCards(Cards.collectAll(document, C, P.itemId), location.href, C);
     if (!items.length) return { error: "Nessun articolo leggibile qui. Apri una ricerca di Vinted o un annuncio e riprova." };
     const max = C.limits.max_batch || 200;
     let query = "";

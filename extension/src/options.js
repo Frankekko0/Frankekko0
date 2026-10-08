@@ -1,4 +1,4 @@
-/* FlipFinder for Vinted - options page: pairing, features, thresholds, filters, slow reads, state. */
+/* FlipFinder for Vinted - options page: pairing, features, thresholds, filters, slow reads, scanner, state. */
 "use strict";
 
 const K = globalThis.FlipFinderCore;
@@ -99,6 +99,89 @@ $("clear").addEventListener("click", async () => {
   await refresh();
 });
 
+// ------------------------------------------------------------------ automatic scanner
+function setScanStatus(message, kind = "") {
+  const el = $("scanStatus");
+  el.textContent = message;
+  el.className = `status ${kind}`;
+}
+
+function scanLine(s) {
+  const bits = [];
+  if (!s.enabled) bits.push("sospesa");
+  else if (!s.allowed) bits.push("serve il permesso: aggiungila di nuovo");
+  else if (!s.lastOkAt) bits.push(s.lastScanAt ? "prima lettura non riuscita" : "in attesa della prima lettura");
+  else bits.push(`letta ${ago(s.lastOkAt)} · ${s.lastCount} annunci · ${s.lastNew} nuovi · ${s.totalNew} dall'inizio`);
+  if (s.lastError) bits.push(s.lastError);
+  return bits.join(" — ");
+}
+
+function renderScan(sc) {
+  if (!sc) return;
+  const active = sc.searches.filter((s) => s.enabled).length;
+  $("scanPace").textContent = active
+    ? `${active} ${active === 1 ? "ricerca" : "ricerche"}: una lettura ogni ${sc.effectiveIntervalMin} min ciascuna (circa ${sc.requestsPerHour} richieste all'ora, tetto ${sc.limits.perHour}/h e ${sc.limits.perDay}/giorno).${sc.effectiveIntervalMin > sc.intervalMin ? " L'intervallo è stato allungato per restare nei tetti." : ""}`
+    : "Aggiungi almeno una ricerca.";
+  const ul = $("scanList");
+  ul.replaceChildren();
+  if (!sc.searches.length) {
+    const li = document.createElement("li");
+    li.className = "muted";
+    li.textContent = "Nessuna ricerca nell'elenco.";
+    ul.append(li);
+  }
+  for (const s of sc.searches) {
+    const li = document.createElement("li");
+    li.style.cssText = "display:flex;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--line)";
+    const info = document.createElement("div");
+    info.className = "grow";
+    const name = document.createElement("b");
+    name.textContent = s.name;
+    const link = document.createElement("a");
+    link.href = s.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = " apri";
+    link.style.fontSize = "12px";
+    const line = document.createElement("div");
+    line.className = "muted";
+    line.style.fontSize = "12px";
+    line.textContent = scanLine(s);
+    info.append(name, link, line);
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "btn small ghost";
+    toggle.textContent = s.enabled ? "Sospendi" : "Riattiva";
+    toggle.addEventListener("click", async () => renderScan((await chrome.runtime.sendMessage({ type: "ff:scan-toggle", id: s.id, enabled: !s.enabled })).summary));
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "btn small ghost";
+    del.textContent = "Rimuovi";
+    del.addEventListener("click", async () => renderScan((await chrome.runtime.sendMessage({ type: "ff:scan-remove", id: s.id })).summary));
+    li.append(info, toggle, del);
+    ul.append(li);
+  }
+}
+
+$("scanAdd").addEventListener("click", async () => {
+  const n = K.normalizeSearchUrl($("scanUrl").value);
+  if (n.error) return setScanStatus(n.error, "error");
+  // Access to this Vinted site only, asked now by a click (not at install time).
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ origins: [`${n.origin}/*`] });
+  } catch {
+    granted = false;
+  }
+  if (!granted) return setScanStatus(`Serve il permesso per leggere ${new URL(n.origin).hostname}.`, "error");
+  const res = await chrome.runtime.sendMessage({ type: "ff:scan-add", url: n.url, name: $("scanName").value });
+  if (!res || res.error) return setScanStatus((res && res.error) || "Non riesco ad aggiungerla.", "error");
+  $("scanUrl").value = "";
+  $("scanName").value = "";
+  setScanStatus(current.scanEnabled ? "Aggiunta: la prima lettura parte a breve." : "Aggiunta. Attiva lo scanner per farla partire.", "ok");
+  renderScan(res.summary);
+});
+
 // ------------------------------------------------------------------ state
 const SYNC_LABEL = {
   idle: "in attesa della prima cattura",
@@ -136,6 +219,11 @@ async function refresh() {
   fact(dl, "Sincronizzazione", SYNC_LABEL[st.sync.state] || st.sync.state);
   fact(dl, "In coda", String(st.sync.pending));
   fact(dl, "Ultimo invio", ago(st.sync.lastSyncAt));
+  const sc = await chrome.runtime.sendMessage({ type: "ff:scan-state" });
+  if (sc) {
+    fact(dl, "Scanner", !sc.enabled ? "spento" : sc.pausedUntil ? `in pausa per ${Math.ceil((sc.pausedUntil - Date.now()) / 60000)} min (${sc.pauseReason})` : `attivo · ${sc.searches.filter((x) => x.enabled).length} ricerche · ${sc.usedToday}/${sc.limits.perDay} letture oggi`);
+    renderScan(sc);
+  }
   fact(dl, "Letture di altre pagine", st.deep.pausedUntil > Date.now() ? `in pausa per ${Math.ceil((st.deep.pausedUntil - Date.now()) / 60000)} min (${st.deep.pauseReason})` : `${st.deep.queued} in attesa`);
   const ul = $("errors");
   ul.replaceChildren();

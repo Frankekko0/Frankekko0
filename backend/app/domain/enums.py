@@ -58,6 +58,7 @@ class AcquisitionMode(StrEnum):
     EXTENSION_CARD = "extension_card"  # browser extension, card seen while scrolling
     EXTENSION_DEEP = "extension_deep"  # browser extension, deep analysis on the user's command
     EXTENSION_REFRESH = "extension_refresh"  # browser extension, slow background status check
+    EXTENSION_SCAN = "extension_scan"  # browser extension, automatic scan of a saved search (opt-in)
     BATCH_IMPORT = "batch_import"  # a whole search page sent in one click
     LINK_IMPORT = "link_import"  # pasted link(s)
     MANUAL_FORM = "manual_form"  # data typed in the Analyze form

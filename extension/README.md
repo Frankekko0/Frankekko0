@@ -1,4 +1,4 @@
-# FlipFinder for Vinted (estensione browser) · v1.0
+# FlipFinder for Vinted (estensione browser) · v1.1
 
 Mentre navighi su Vinted l'estensione valuta gli annunci che vedi:
 - **badge** sulle schede con score, margine netto e "già tracciato";
@@ -12,7 +12,7 @@ Tutto viene salvato in FlipFinder, con la data, la modalità di acquisizione e l
 - **Legge solo le pagine di Vinted che apri e scorri tu.**
   - Una scheda viene valutata quando almeno metà di essa entra a schermo.
   - L'annuncio aperto viene letto tutto: campi, foto e stato.
-- **Non naviga, non scorre e non apre annunci da sola.**
+- **Di base non naviga, non scorre e non apre annunci da sola.** Le letture automatiche sono tutte facoltative e spente di default (analisi dei candidati, aggiornamento dei tracciati, **scanner delle ricerche**, vedi sotto).
   - L'**analisi approfondita** di una scheda parte su tuo clic e legge solo quella pagina, senza cookie.
   - Le letture automatiche dei migliori candidati sono facoltative e spente di default:
     - al massimo una ogni 30 secondi e 20 all'ora;
@@ -30,9 +30,31 @@ Tutto viene salvato in FlipFinder, con la data, la modalità di acquisizione e l
 - **Nessun cookie, token o credenziale di Vinted** viene letto o inviato.
   - L'estensione si autentica a FlipFinder con una **chiave dell'estensione** (`ff_ext_…`), creata e revocabile da FlipFinder.
   - Del venditore arrivano a FlipFinder solo valutazione, numero di recensioni e un'impronta non reversibile dell'ID: mai il nome utente.
-- **Permessi minimi:** `storage`, `alarms`, `sidePanel` e `scripting` (solo per collegare i tasti Preferiti/Acquista alla pagina di FlipFinder, all'indirizzo che autorizzi tu).
+- **Permessi minimi:** `storage`, `alarms`, `sidePanel`, `scripting` (solo per collegare i tasti Preferiti/Acquista alla pagina di FlipFinder, all'indirizzo che autorizzi tu), `offscreen` (una pagina nascosta che legge l'HTML delle ricerche dello scanner: il service worker non ha un DOM) e `notifications` (gli avvisi dello scanner).
   - Gira solo sui domini `www.vinted.*`.
   - L'accesso all'indirizzo di FlipFinder viene chiesto al momento dell'associazione, non all'installazione.
+  - L'accesso a un sito di Vinted per lo scanner viene chiesto con un clic, quando aggiungi una ricerca.
+
+## Scanner automatico delle ricerche (facoltativo, spento di default)
+
+Rilegge da solo le ricerche che salvi, finché **il browser è aperto** (non serve una scheda di Vinted aperta), e salva in FlipFinder gli annunci nuovi. Quelli nuovi che superano le tue soglie (score e margine minimo) ti arrivano come notifica del browser; un clic sulla notifica apre l'annuncio su Vinted. Acquisto, offerte e messaggi restano una tua decisione.
+
+**Come si usa**
+1. Apri una ricerca su Vinted, imposta filtri e prezzo massimo.
+2. Dal popup dell'estensione: **Aggiungi questa ricerca allo scanner**. Il browser chiede il permesso per quel sito di Vinted. In alternativa incolla l'indirizzo nelle opzioni.
+3. Nelle opzioni: **Scanner automatico → Attiva lo scanner**, e scegli ogni quanti minuti (10–240, 15 di default).
+
+**Come funziona**
+- Legge solo la **prima pagina** di ogni ricerca, dal più recente (aggiunge `order=newest_first` se manca; toglie `page`, `time` e simili). Al massimo 10 ricerche.
+- La **prima lettura** di una ricerca costruisce la base: tutto quello che c'è è già "visto" e non genera notifiche. Dalla seconda in poi, gli annunci non ancora visti sono "nuovi". Tutto viene comunque salvato nell'archivio, con modalità `extension_scan`.
+- La pagina viene scaricata **senza cookie** (l'account Vinted non c'entra) e letta in una pagina nascosta (`offscreen`) senza eseguire script né caricare immagini, con lo stesso lettore di schede e la stessa configurazione del parser delle pagine che apri tu.
+
+**Ritmo prudente (fisso nel codice)**
+- Una sola lettura per volta, **almeno 1 minuto** tra due letture, **30 all'ora** e **300 al giorno**. L'intervallo scelto viene allungato da solo se con più ricerche supererebbe questi tetti (per esempio 4 ricerche: ogni 20 minuti).
+- Al **primo rifiuto o CAPTCHA** (403, 429, pagina anti-bot) tutte le letture automatiche (scanner, analisi dei candidati, aggiornamento dei tracciati) si fermano per **6 ore**, senza ritentare e senza aggirare nulla; ti arriva una notifica.
+- Una ricerca che non mostra schede leggibili per 3 volte di fila viene sospesa e va riattivata dalle opzioni (può voler dire che la configurazione del parser va aggiornata).
+- Se il permesso per il sito è stato tolto, non legge nulla.
+- Le condizioni di Vinted vietano la raccolta automatica: attivarlo è una tua scelta.
 
 ## Installazione e associazione (Chrome, Edge, Brave)
 
@@ -79,13 +101,15 @@ Senza associazione resta il pulsante del popup **"Apri questa pagina in FlipFind
 
 | File | Ruolo |
 |---|---|
-| `manifest.json` | Manifest V3: content script solo su `www.vinted.*`; permessi `storage`, `alarms`, `sidePanel`, `scripting`; FlipFinder in `optional_host_permissions`. |
+| `manifest.json` | Manifest V3: content script solo su `www.vinted.*`; permessi `storage`, `alarms`, `sidePanel`, `scripting`, `offscreen`, `notifications`; FlipFinder e i siti di Vinted dello scanner in `optional_host_permissions`. |
 | `src/app-bridge.js` | Solo sull'indirizzo di FlipFinder autorizzato: inoltra al service worker Preferiti/Acquista, e solo subito dopo un clic reale. Non passa cookie, token o password. |
 | `src/parser-config.js` | Copia di `backend/app/acquisition/vinted_parser.json`, la configurazione del parser condivisa con il server. L'estensione scarica le versioni nuove da FlipFinder (`/extension/parser-config`), quindi una correzione si fa in un punto solo, senza ripubblicare l'estensione. |
 | `src/parse.js` | Parser puro guidato dalla configurazione: annuncio (JSON-LD, script della pagina, meta, etichette in 15 lingue), schede, prezzi e valute, stato, record da inviare entro i limiti del server. |
-| `src/core.js` | Logica pura: opzioni, coda (un record per ID Vinted, nuovi tentativi con attesa crescente), ritmo delle letture, classifica live, export CSV. |
+| `src/core.js` | Logica pura: opzioni, coda (un record per ID Vinted, nuovi tentativi con attesa crescente), ritmo delle letture, classifica live, export CSV, e per lo scanner: validazione degli indirizzi, ritmo (1 minuto, 30/h, 300/giorno), scelta della ricerca da leggere, riconoscimento dei nuovi annunci. |
+| `src/cards.js` | Lettura delle schede da un documento (condivisa da `content.js` e dallo scanner). |
+| `src/scan.html`, `src/scan.js` | Pagina nascosta (`offscreen`) dello scanner: scarica una ricerca senza cookie, la legge senza eseguirla, riconosce rifiuti e pagine anti-bot. |
 | `src/content.js` | Sulla pagina: `MutationObserver` con debounce per le schede nuove, `IntersectionObserver` per valutarle quando entrano a schermo, `requestIdleCallback` per il parsing, badge (Shadow DOM), riquadro dell'annuncio, lettura su comando. |
-| `src/background.js` | Service worker: coda persistente e sincronizzazione, client di FlipFinder, ritmo delle letture, aggiornamento della configurazione, sessioni per scheda del pannello live. |
+| `src/background.js` | Service worker: coda persistente e sincronizzazione, client di FlipFinder, ritmo delle letture, aggiornamento della configurazione, sessioni per scheda del pannello live, pianificazione e notifiche dello scanner. |
 | `src/panel.*`, `src/options.*`, `src/popup.*`, `src/ui.css` | Pannello live, opzioni, popup. |
 
 Quando l'annuncio è aperto dopo una navigazione interna di Vinted, gli script della pagina descrivono ancora il primo annuncio. In quel caso vengono ignorati e si usa solo ciò che è visibile.
@@ -105,6 +129,9 @@ APP_URL=http://localhost:3000 CHROME_PATH=/percorso/chrome node extension/e2e/li
 APP_URL=http://localhost:3000 CHROME_PATH=/percorso/chrome node extension/e2e/speed.e2e.cjs
 # Preferiti e Acquista dalla pagina Analisi, dal tracking e dal pannello (Vinted finto in HTTPS locale; serve openssl)
 APP_URL=http://localhost:3000 CHROME_PATH=/percorso/chrome node extension/e2e/actions.e2e.cjs /tmp/screenshots
+# scanner: spento di default, prima lettura come base, annuncio nuovo e conveniente = notifica, ritmo, pausa di 6 ore al primo 403
+# (Vinted finto in HTTPS locale; basta l'API: APP_URL può essere http://localhost:8000)
+APP_URL=http://localhost:8000 CHROME_PATH=/percorso/chrome node extension/e2e/scan.e2e.cjs
 ```
 
 ### Verdetto rapido

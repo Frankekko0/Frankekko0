@@ -114,6 +114,7 @@ export const MODE_LABEL: Record<string, string> = {
   extension_card: "Extension · seen while scrolling",
   extension_deep: "Extension · deep analysis",
   extension_refresh: "Extension · status check",
+  extension_scan: "Extension · automatic scan",
   batch_import: "Search page import",
   link_import: "Link import",
   manual_form: "Analyze form",

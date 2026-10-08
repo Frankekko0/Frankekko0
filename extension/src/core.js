@@ -31,6 +31,10 @@
     autoDeep: false,
     autoDeepPerHour: 10,
     slowRefresh: false,
+    // Automatic scanner of saved searches (opt-in, off by default, browser open).
+    scanEnabled: false,
+    scanIntervalMin: 15,
+    scanNotify: true,
   });
 
   const clampNum = (v, lo, hi, dflt) => {
@@ -58,6 +62,9 @@
       autoDeep: bool("autoDeep"),
       autoDeepPerHour: clampNum(src.autoDeepPerHour, 1, 20, DEFAULT_OPTIONS.autoDeepPerHour),
       slowRefresh: bool("slowRefresh"),
+      scanEnabled: bool("scanEnabled"),
+      scanIntervalMin: Math.round(clampNum(src.scanIntervalMin, 10, 240, DEFAULT_OPTIONS.scanIntervalMin)),
+      scanNotify: bool("scanNotify"),
     };
   }
 
@@ -231,6 +238,115 @@
     return CHALLENGE_MARKERS.some((m) => head.includes(m));
   }
 
+  // ------------------------------------------------------------------ automatic scanner
+  // Opt-in and cautious: it re-reads page 1 of the searches you saved (newest first), one search
+  // at a time, never more than one read a minute, 30 an hour and 300 a day, without cookies, and
+  // stops for 6 hours at the first refusal or anti-bot page. It never works around a block.
+  const SCAN = Object.freeze({
+    gapMs: 60 * 1000,
+    perHour: 30,
+    perDay: 300,
+    pauseMs: 6 * 3600 * 1000,
+    maxSearches: 10,
+    maxSeen: 600, // Vinted IDs remembered per search, to tell what is new
+    maxFailures: 3, // consecutive failed reads before a search is set aside
+    watchTtlMs: 24 * 3600 * 1000,
+  });
+
+  const SCAN_HOST = /^www\.vinted\.[a-z]{2,3}(\.[a-z]{2})?$/;
+  const SCAN_DROP_PARAMS = ["page", "time", "search_id", "referrer", "search_by_image_uuid"];
+
+  /**
+   * A Vinted search/category address -> the one that is scanned: https, a vinted.* host, a /catalog
+   * path, without paging or tracking parameters, newest first (so the first page holds what is
+   * new). Returns { url, key, name, origin } or { error }.
+   */
+  function normalizeSearchUrl(value) {
+    let u;
+    try {
+      u = new URL(String(value || "").trim());
+    } catch {
+      return { error: "Indirizzo non valido: copia l'indirizzo di una ricerca di Vinted." };
+    }
+    if (u.protocol !== "https:" || !SCAN_HOST.test(u.hostname)) return { error: "Serve l'indirizzo di una ricerca di Vinted (https://www.vinted.it/catalog?…)." };
+    if (!/^\/catalog(\/|$)/.test(u.pathname)) return { error: "Apri una ricerca o una categoria su Vinted e copia quell'indirizzo: deve contenere /catalog." };
+    for (const p of SCAN_DROP_PARAMS) u.searchParams.delete(p);
+    if (!u.searchParams.has("order")) u.searchParams.set("order", "newest_first");
+    u.searchParams.sort();
+    u.hash = "";
+    const text = (u.searchParams.get("search_text") || "").trim();
+    const last = decodeURIComponent(u.pathname.split("/").filter(Boolean).pop() || "").replace(/^\d+-/, "").replace(/-/g, " ");
+    const name = (text || (last !== "catalog" ? last : "") || "Ricerca").slice(0, 60);
+    return { url: u.href, key: u.hostname + u.pathname + "?" + u.searchParams.toString(), name, origin: u.origin };
+  }
+
+  function emptyScanPacing() {
+    return { lastAt: 0, hourStart: 0, hourCount: 0, dayStart: 0, dayCount: 0, pausedUntil: 0, pauseReason: "" };
+  }
+
+  /** Whether a read may start now; otherwise how long to wait and why. */
+  function scanPacingCheck(state, now) {
+    const s = { ...emptyScanPacing(), ...(state || {}) };
+    if (s.pausedUntil > now) return { ok: false, waitMs: s.pausedUntil - now, reason: "paused" };
+    if (now - s.lastAt < SCAN.gapMs) return { ok: false, waitMs: SCAN.gapMs - (now - s.lastAt), reason: "gap" };
+    const hour = now - s.hourStart >= 3600000 ? 0 : s.hourCount;
+    if (hour >= SCAN.perHour) return { ok: false, waitMs: s.hourStart + 3600000 - now, reason: "hourly" };
+    const day = now - s.dayStart >= 86400000 ? 0 : s.dayCount;
+    if (day >= SCAN.perDay) return { ok: false, waitMs: s.dayStart + 86400000 - now, reason: "daily" };
+    return { ok: true, waitMs: 0, reason: "" };
+  }
+
+  function scanPacingRecord(state, now) {
+    const s = { ...emptyScanPacing(), ...(state || {}) };
+    if (now - s.hourStart >= 3600000) {
+      s.hourStart = now;
+      s.hourCount = 0;
+    }
+    if (now - s.dayStart >= 86400000) {
+      s.dayStart = now;
+      s.dayCount = 0;
+    }
+    s.hourCount += 1;
+    s.dayCount += 1;
+    s.lastAt = now;
+    return s;
+  }
+
+  function scanPacingPause(state, now, reason) {
+    return { ...emptyScanPacing(), ...(state || {}), pausedUntil: now + SCAN.pauseMs, pauseReason: reason };
+  }
+
+  /** Minutes between two reads of the same search: the chosen one, stretched so that all the
+   * searches together stay within the hourly and daily caps. */
+  function scanIntervalMin(searchCount, chosenMin) {
+    const n = Math.max(1, searchCount);
+    return Math.max(Math.round(chosenMin) || 15, Math.ceil((n * 1440) / SCAN.perDay), Math.ceil((n * 60) / SCAN.perHour));
+  }
+
+  /** Searches due for a read, the longest unread first. A failing search waits longer each time. */
+  function scanPickDue(searches, now, chosenMin) {
+    const active = (searches || []).filter((s) => s.enabled !== false);
+    const every = scanIntervalMin(active.length, chosenMin) * 60000;
+    return active
+      .filter((s) => now - (s.lastScanAt || 0) >= every * (1 + Math.min(s.failures || 0, 3)))
+      .sort((a, b) => (a.lastScanAt || 0) - (b.lastScanAt || 0));
+  }
+
+  /** What a read shows against what was seen before: the IDs not seen yet, and the new memory. */
+  function scanDiff(seen, vids) {
+    const known = new Set(seen || []);
+    const fresh = [...new Set(vids)].filter((v) => !known.has(v));
+    return { fresh, seen: [...fresh, ...(seen || [])].slice(0, SCAN.maxSeen) };
+  }
+
+  /** Evaluations of items that were new in a scan and are worth an alert: best first, at most `max`. */
+  function scanHotPick(evals, watch, opts, max = 3) {
+    return (evals || [])
+      .filter((e) => watch && watch[e.vinted_id] && isHot(e, opts) && passesFilters(e, opts))
+      .sort(compare)
+      .slice(0, max);
+  }
+
   // ------------------------------------------------------------------ live ranking
   /** Filters of the live panel: budget (total cost), minimum net margin, brands, sizes, fakes. */
   function passesFilters(ev, f) {
@@ -315,6 +431,16 @@
     pacingCheck,
     pacingRecord,
     pacingPause,
+    SCAN,
+    normalizeSearchUrl,
+    emptyScanPacing,
+    scanPacingCheck,
+    scanPacingRecord,
+    scanPacingPause,
+    scanIntervalMin,
+    scanPickDue,
+    scanDiff,
+    scanHotPick,
     isRefusal,
     passesFilters,
     rank,

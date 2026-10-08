@@ -11,7 +11,8 @@ from pydantic import BaseModel, Field
 from app.marketplace.base import ManualListingInput
 from app.schemas.common import Money, Ratio, Schema
 
-PageType = Literal["catalog", "closet", "favourites", "item", "other"]
+# "scan": a saved search read by the extension's optional automatic scanner (not a page the user opened).
+PageType = Literal["catalog", "closet", "favourites", "item", "other", "scan"]
 
 
 class ApiKeyIn(BaseModel):

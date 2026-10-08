@@ -299,6 +299,7 @@ const favouriteSeenLater = new Map();
 
 async function onEvaluations(evals, { tabIds = [], fresh = true, deep = null } = {}) {
   await cacheEvaluations(evals);
+  await scanNotify(evals).catch((err) => logError("scanner", err.message));
   for (const ev of evals) {
     if (!favouriteSeenLater.has(ev.vinted_id)) continue;
     const value = favouriteSeenLater.get(ev.vinted_id);
@@ -609,6 +610,262 @@ async function pollRefreshQueue() {
   } catch (err) {
     await logError("aggiornamento", err.message);
   }
+}
+
+// ------------------------------------------------------------------ automatic scanner (opt-in)
+// Re-reads page 1 (newest first) of the Vinted searches you saved, while the browser is open.
+// Cautious by construction: one read at a time, at least a minute apart, 30 an hour and 300 a
+// day, without cookies, and a 6-hour pause at the first refusal or anti-bot page (for every
+// automatic read). New items go through the normal capture queue; the ones that are new AND above
+// your thresholds raise a notification. Nothing is bought, offered or sent to a seller.
+const SCAN_STATUS_MAX = 160;
+
+async function loadScanner() {
+  const { scanner } = await local.get("scanner");
+  const ok = scanner && Array.isArray(scanner.searches);
+  return { searches: ok ? scanner.searches : [], pacing: ok && scanner.pacing ? scanner.pacing : K.emptyScanPacing(), watch: ok && scanner.watch ? scanner.watch : {} };
+}
+
+/** The parser configuration in use as plain data (the offscreen reader compiles it itself). */
+async function rawParserConfig() {
+  const { parserConfig } = await local.get("parserConfig");
+  return parserConfig && parserConfig.version ? parserConfig : globalThis.FF_PARSER_CONFIG;
+}
+
+async function ensureOffscreen() {
+  if (!chrome.offscreen) throw new Error("Questa versione del browser non supporta lo scanner (serve Chrome 120 o successivo).");
+  const open = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
+  if (open.length) return;
+  await chrome.offscreen.createDocument({
+    url: "src/scan.html",
+    reasons: ["DOM_PARSER"],
+    justification: "Legge l'HTML delle ricerche salvate di Vinted per lo scanner automatico (analisi della pagina, senza eseguirla).",
+  });
+}
+
+async function readSearchPage(search) {
+  await ensureOffscreen();
+  try {
+    const config = await rawParserConfig();
+    const timeout = new Promise((resolve) => setTimeout(() => resolve({ outcome: "error", message: "Lettura troppo lenta." }), 40000));
+    return await Promise.race([chrome.runtime.sendMessage({ type: "ff:scan-read", url: search.url, config }), timeout]).then((r) => r || { outcome: "error", message: "Nessuna risposta dal lettore." });
+  } finally {
+    chrome.offscreen.closeDocument().catch(() => {});
+  }
+}
+
+let scanning = false;
+async function scanTick() {
+  if (scanning) return;
+  scanning = true;
+  try {
+    await scanStep();
+  } catch (err) {
+    await logError("scanner", err.message);
+  } finally {
+    scanning = false;
+  }
+}
+
+async function scanStep() {
+  const opts = await getOptions();
+  if (!opts.scanEnabled || !(await getKey())) return;
+  const now = Date.now();
+  if ((await loadDeep()).pacing.pausedUntil > now) return; // a refusal anywhere pauses every automatic read
+  const sc = await loadScanner();
+  if (K.scanPacingCheck(sc.pacing, now).ok === false) return;
+  const due = K.scanPickDue(sc.searches, now, opts.scanIntervalMin);
+  if (!due.length) return;
+
+  // The first due search whose site you allowed. Without the permission nothing is read.
+  let search = null;
+  for (const s of due) {
+    const origin = new URL(s.url).origin;
+    if (await chrome.permissions.contains({ origins: [`${origin}/*`] })) {
+      search = s;
+      break;
+    }
+    await scanMark(s.id, { lastError: `Serve il permesso di leggere ${new URL(s.url).hostname}: aggiungila di nuovo dalle opzioni.` });
+  }
+  if (!search) return;
+
+  // Reserve the slot before reading: a crash in the middle never makes the same read repeat at once.
+  await exclusive(async () => {
+    const cur = await loadScanner();
+    cur.pacing = K.scanPacingRecord(cur.pacing, now);
+    const s = cur.searches.find((x) => x.id === search.id);
+    if (s) s.lastScanAt = now;
+    await local.set({ scanner: cur });
+  });
+
+  const result = await readSearchPage(search);
+  await scanResult(search, result, opts);
+}
+
+/** Updates one saved search under the lock. */
+function scanMark(id, patch) {
+  return exclusive(async () => {
+    const sc = await loadScanner();
+    const s = sc.searches.find((x) => x.id === id);
+    if (!s) return null;
+    Object.assign(s, patch);
+    await local.set({ scanner: sc });
+    return s;
+  });
+}
+
+async function scanResult(search, r, opts) {
+  const now = Date.now();
+  if (r.outcome === "blocked") {
+    await exclusive(async () => {
+      const sc = await loadScanner();
+      sc.pacing = K.scanPacingPause(sc.pacing, now, r.message || "rifiuto di Vinted");
+      const s = sc.searches.find((x) => x.id === search.id);
+      if (s) s.lastError = r.message || "Vinted ha rifiutato la lettura.";
+      await local.set({ scanner: sc });
+      const d = await loadDeep();
+      d.pacing = K.pacingPause(d.pacing, now, "scanner: rifiuto di Vinted");
+      await local.set({ deep: d });
+    });
+    await logError("scanner", `Vinted ha rifiutato la lettura (${r.status || "?"}): tutte le letture automatiche sono sospese per 6 ore.`);
+    sendToPanel({ type: "ff:reads-paused" });
+    if (opts.scanNotify) notify("ff-scan-paused", "Scanner in pausa per 6 ore", "Vinted ha rifiutato una lettura. FlipFinder si ferma e non ritenta: riparte da solo dopo la pausa.");
+    return;
+  }
+  if (r.outcome !== "ok") {
+    const updated = await exclusive(async () => {
+      const sc = await loadScanner();
+      const s = sc.searches.find((x) => x.id === search.id);
+      if (!s) return null;
+      s.failures = (s.failures || 0) + 1;
+      s.lastError = r.message || "Lettura non riuscita.";
+      if (s.failures >= K.SCAN.maxFailures) {
+        s.enabled = false;
+        s.lastError = `${s.lastError} Ricerca sospesa dopo ${K.SCAN.maxFailures} tentativi falliti: riattivala dalle opzioni.`.slice(0, SCAN_STATUS_MAX + 60);
+      }
+      await local.set({ scanner: sc });
+      return s;
+    });
+    await logError("scanner", `${search.name}: ${(updated && updated.lastError) || r.message || r.outcome}`);
+    return;
+  }
+
+  // Read: what is new against what this search showed before. The first read of a search only
+  // builds the baseline (everything on it counts as already seen, no notification).
+  const vids = r.cards.map((c) => c.vid);
+  const fresh = await exclusive(async () => {
+    const sc = await loadScanner();
+    const s = sc.searches.find((x) => x.id === search.id);
+    if (!s) return [];
+    const diff = K.scanDiff(s.seen, vids);
+    const wasPrimed = Boolean(s.primed);
+    s.seen = diff.seen;
+    s.primed = true;
+    s.failures = 0;
+    s.lastError = "";
+    s.lastOkAt = now;
+    s.lastCount = vids.length;
+    s.lastNew = wasPrimed ? diff.fresh.length : 0;
+    s.totalNew = (s.totalNew || 0) + s.lastNew;
+    if (wasPrimed && opts.scanNotify) {
+      for (const vid of diff.fresh) sc.watch[vid] = { name: s.name, at: now };
+    }
+    for (const [vid, w] of Object.entries(sc.watch)) if (now - w.at > K.SCAN.watchTtlMs) delete sc.watch[vid];
+    await local.set({ scanner: sc });
+    return wasPrimed ? diff.fresh : [];
+  });
+  const entries = r.cards.map((c) => ({ vid: c.vid, payload: c.payload, pageType: "scan", pageUrl: search.url.slice(0, 1000), tabId: null }));
+  await enqueue("cards", entries, 0);
+  if (fresh.length) sendToPanel({ type: "ff:scan-new", name: search.name, count: fresh.length });
+}
+
+// ------------------------------------------------------------------ scanner notifications
+// notification id -> the Vinted item page it opens (session storage: survives the worker being stopped)
+async function scanLinksUpdate(fn) {
+  return exclusive(async () => {
+    const { scanLinks = {} } = await sessionStore.get("scanLinks");
+    const out = fn(scanLinks);
+    await sessionStore.set({ scanLinks });
+    return out;
+  });
+}
+
+function notify(id, title, message) {
+  chrome.notifications.create(id, { type: "basic", iconUrl: chrome.runtime.getURL("icons/icon-128.png"), title: title.slice(0, 80), message: message.slice(0, 240), priority: 1 }).catch(() => {});
+}
+
+/** Evaluations arrived: the items that were new in a scan and pass your thresholds raise a notification. */
+async function scanNotify(evals) {
+  if (!evals.length) return;
+  const opts = await getOptions();
+  const hits = await exclusive(async () => {
+    const sc = await loadScanner();
+    const watched = evals.filter((e) => sc.watch[e.vinted_id]);
+    if (!watched.length) return [];
+    const picked = opts.scanNotify ? K.scanHotPick(watched, sc.watch, opts) : [];
+    const out = picked.map((e) => ({ ev: e, name: sc.watch[e.vinted_id].name }));
+    for (const e of watched) delete sc.watch[e.vinted_id]; // answered, hot or not
+    await local.set({ scanner: sc });
+    return out;
+  });
+  for (const { ev, name } of hits) {
+    const id = `ff-scan-${ev.vinted_id}`;
+    await scanLinksUpdate((links) => {
+      links[id] = ev.url;
+      const ids = Object.keys(links);
+      for (const old of ids.slice(0, Math.max(0, ids.length - 50))) delete links[old];
+    });
+    const profit = ev.net_margin !== null && ev.net_margin !== undefined ? ` · margine ${K.eur(ev.net_margin, true)}` : "";
+    notify(id, `Nuova occasione${ev.brand ? ` · ${ev.brand}` : ""}`, `${ev.title}\n${K.eur(ev.price)}${profit} · score ${ev.flip_score} · ${name}`);
+  }
+}
+
+chrome.notifications?.onClicked.addListener(async (id) => {
+  const url = await scanLinksUpdate((links) => {
+    const found = links[id];
+    delete links[id];
+    return found;
+  });
+  chrome.notifications.clear(id).catch(() => {});
+  // Opens the item page on Vinted; buying, offering and messaging stay your decision.
+  if (url && /^https:\/\/www\.vinted\.[a-z.]+\/items\//.test(url)) chrome.tabs.create({ url });
+});
+
+/** The scanner as shown in the options and the popup (no private data: only the search list and counters). */
+async function scanSummary() {
+  const [sc, opts, key] = await Promise.all([loadScanner(), getOptions(), getKey()]);
+  const now = Date.now();
+  const active = sc.searches.filter((s) => s.enabled !== false);
+  const permitted = {};
+  for (const s of sc.searches) {
+    const origin = new URL(s.url).origin;
+    if (!(origin in permitted)) permitted[origin] = await chrome.permissions.contains({ origins: [`${origin}/*`] });
+  }
+  const effective = K.scanIntervalMin(active.length, opts.scanIntervalMin);
+  return {
+    enabled: opts.scanEnabled,
+    paired: Boolean(key),
+    intervalMin: opts.scanIntervalMin,
+    effectiveIntervalMin: effective,
+    requestsPerHour: active.length ? Math.round((active.length * 60) / effective) : 0,
+    pausedUntil: sc.pacing.pausedUntil > now ? sc.pacing.pausedUntil : 0,
+    pauseReason: sc.pacing.pausedUntil > now ? sc.pacing.pauseReason : "",
+    usedToday: now - sc.pacing.dayStart < 86400000 ? sc.pacing.dayCount : 0,
+    limits: { perHour: K.SCAN.perHour, perDay: K.SCAN.perDay, maxSearches: K.SCAN.maxSearches, gapSeconds: K.SCAN.gapMs / 1000 },
+    searches: sc.searches.map((s) => ({
+      id: s.id,
+      name: s.name,
+      url: s.url,
+      enabled: s.enabled !== false,
+      allowed: permitted[new URL(s.url).origin] === true,
+      lastScanAt: s.lastScanAt || 0,
+      lastOkAt: s.lastOkAt || 0,
+      lastCount: s.lastCount ?? null,
+      lastNew: s.lastNew ?? 0,
+      totalNew: s.totalNew || 0,
+      lastError: s.lastError || "",
+    })),
+  };
 }
 
 // ------------------------------------------------------------------ shared parser configuration
@@ -1035,6 +1292,43 @@ const HANDLERS = {
     };
   },
 
+  // ---- automatic scanner (the page asking has just obtained the site permission)
+  async "ff:scan-state"() {
+    return scanSummary();
+  },
+
+  async "ff:scan-add"(msg) {
+    const n = K.normalizeSearchUrl(msg.url);
+    if (n.error) return { error: n.error };
+    if (!(await chrome.permissions.contains({ origins: [`${n.origin}/*`] }))) return { error: `Serve il permesso di leggere ${new URL(n.origin).hostname}.` };
+    const name = String(msg.name || "").trim().slice(0, 60) || n.name;
+    const res = await exclusive(async () => {
+      const sc = await loadScanner();
+      if (sc.searches.some((s) => K.normalizeSearchUrl(s.url).key === n.key)) return { error: "Questa ricerca è già nello scanner." };
+      if (sc.searches.length >= K.SCAN.maxSearches) return { error: `Al massimo ${K.SCAN.maxSearches} ricerche: toglierne una prima di aggiungerne un'altra.` };
+      sc.searches.push({ id: crypto.randomUUID(), name, url: n.url, enabled: true, addedAt: Date.now(), lastScanAt: 0, failures: 0, seen: [], primed: false });
+      await local.set({ scanner: sc });
+      return { ok: true };
+    });
+    if (res.ok) scanTick();
+    return res.ok ? { ok: true, summary: await scanSummary() } : res;
+  },
+
+  async "ff:scan-remove"(msg) {
+    await exclusive(async () => {
+      const sc = await loadScanner();
+      sc.searches = sc.searches.filter((s) => s.id !== msg.id);
+      await local.set({ scanner: sc });
+    });
+    return { ok: true, summary: await scanSummary() };
+  },
+
+  async "ff:scan-toggle"(msg) {
+    await scanMark(String(msg.id), msg.enabled ? { enabled: true, failures: 0, lastError: "" } : { enabled: false });
+    if (msg.enabled) scanTick();
+    return { ok: true, summary: await scanSummary() };
+  },
+
   async "ff:pair"(msg) {
     const appUrl = K.normalizeAppUrl(msg.appUrl);
     const key = String(msg.key || "").trim();
@@ -1128,6 +1422,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "ff-flush") flush().catch((e) => logError("flush", e.message));
   else if (alarm.name === "ff-deep") deepPump().catch((e) => logError("deep", e.message));
   else if (alarm.name === "ff-refresh") pollRefreshQueue();
+  else if (alarm.name === "ff-scan") scanTick();
   else if (alarm.name === "ff-config") updateParserConfig();
   else if (alarm.name === "ff-market") updateMarketCache();
 });
@@ -1138,6 +1433,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "sync" && changes.options) {
     scheduleFlush(0);
     registerAppBridge();
+    // Switched on: the first read starts at once (the pacing still applies).
+    const before = changes.options.oldValue && changes.options.oldValue.scanEnabled;
+    if (changes.options.newValue && changes.options.newValue.scanEnabled && !before) scanTick();
   }
   if (area === "local" && changes.apiKey) {
     // Pages only see whether the extension is paired, never the key.
@@ -1150,6 +1448,7 @@ async function startup() {
   chrome.alarms.create("ff-config", { periodInMinutes: 360, delayInMinutes: 1 });
   chrome.alarms.create("ff-market", { periodInMinutes: 180, delayInMinutes: 180 });
   chrome.alarms.create("ff-refresh", { periodInMinutes: 10, delayInMinutes: 2 });
+  chrome.alarms.create("ff-scan", { periodInMinutes: 1, delayInMinutes: 1 }); // does nothing unless the scanner is on
   if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
   registerAppBridge();
   const key = await getKey();

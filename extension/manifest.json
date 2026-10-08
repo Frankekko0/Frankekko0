@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "FlipFinder for Vinted",
   "short_name": "FlipFinder",
-  "version": "1.0.0",
-  "description": "Valuta con FlipFinder gli annunci Vinted che stai guardando: margine netto, score, rischio e classifica live. Legge solo le pagine che apri tu.",
+  "version": "1.1.0",
+  "description": "Valuta con FlipFinder gli annunci Vinted: margine netto, score, rischio e classifica live. Legge le pagine che apri tu e, se lo attivi, rilegge con cautela le tue ricerche salvate.",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -25,7 +25,9 @@
     "storage",
     "alarms",
     "sidePanel",
-    "scripting"
+    "scripting",
+    "offscreen",
+    "notifications"
   ],
   "optional_host_permissions": [
     "http://*/*",
@@ -66,6 +68,7 @@
         "src/parse.js",
         "src/core.js",
         "src/quick.js",
+        "src/cards.js",
         "src/content.js"
       ],
       "run_at": "document_start"
