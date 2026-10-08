@@ -6,9 +6,9 @@
  * downloads newer versions from FlipFinder, so a change on Vinted's pages is fixed in one place
  * without publishing a new extension.
  *
- *  - collectHtml(html): what the parser needs from a page's HTML (JSON-LD, scripts, meta tags,
- *    member links, visible text in reading order). content.js builds the same structure from
- *    the live page.
+ *  - collectHtml(html, C): what the parser needs from a page's HTML (JSON-LD, scripts, meta tags,
+ *    member links, visible text in reading order; the item's favourite button, total price and
+ *    status badges). content.js builds the same structure from the live page.
  *  - parseItem(collected, url, now, C): an item page -> every field, like the server parser.
  *  - parseCardSummary / parseCatalogCard: search, closet and favourites result cards.
  *  - capturePayload: the record sent to FlipFinder, checked against the server's limits.
@@ -94,6 +94,12 @@
 
   const isHttpUrl = (v) => typeof v === "string" && /^https?:\/\/[^\s]+$/i.test(v);
   const round2 = (n) => Math.round(n * 100) / 100;
+
+  /** Buyer protection = total - price, when plausible (positive, at most 20% + 5); else null. */
+  function protectionFee(total, price) {
+    const diff = round2(total - price);
+    return diff > 0 && diff <= price * 0.2 + 5 ? diff : null;
+  }
 
   /** "18,00 €", "€1.234,50", "18.5", 18 -> number; null when not a price. */
   function parsePrice(value) {
@@ -216,7 +222,9 @@
   // ------------------------------------------------------------------ the item's embedded object
   // Same algorithm as backend/app/acquisition/embedded.py. A Vinted item page embeds several
   // objects (the item, its seller, the signed-in user with their profile photo, suggested items):
-  // the item is located by its id and only its own fields are read.
+  // the item is located by its id and only its own fields are read. The current layout also
+  // describes the item in page sections ("plugins": seller header, favourites, status banner, buy
+  // actions) whose data carries the item's id: those are read only when that id matches.
   const FLIGHT_CHUNK = /self\.__next_f\.push\(\[\s*\d+\s*,\s*("(?:[^"\\]|\\.)*")\s*\]\)/g;
   const LITERAL = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/y;
   const MAX_BACKSCAN = 400000;
@@ -238,10 +246,39 @@
     seller_id: ["id"],
     seller_rating: ["feedback_reputation"],
     seller_reviews: ["feedback_count"],
+    favourite_by_me: ["is_favourite", "is_favorite", "is_favourited"],
+    // Current layout: the item object names its seller by id; the rest is in page sections
+    // ("plugins") whose data carries the item's id.
+    item_seller_id: ["seller_id", "user_id"],
+    can_buy: ["can_buy"],
+    plugin_name: ["name"],
+    plugin_data: ["data"],
+    plugin_item_id: ["item_id"],
+    favourite_plugins: ["favourite"],
+    seller_plugins: ["user_info_header"],
+    buy_plugins: ["ask_seller", "buy_actions", "buy"],
+    status_plugins: ["buyer_item_status"],
+    status_text: ["title", "text"],
+  };
+
+  // Item-page elements read from the HTML by data-testid (item_dom in the configuration).
+  const DEFAULT_ITEM_DOM = {
+    favourite_testids: ["favourite-button", "item-favourite-button"],
+    total_price_testids: ["total-combined-price"],
+    status_testids: ["item-status"],
+    summary_testids: ["item-page-summary-plugin"],
+    exclude_testid_prefixes: ["product-item-id-"],
+    zone_tags: ["aside"],
+    zone_id_prefixes: ["sidebar", "S:"],
+    badge_max_length: 40,
   };
 
   function itemJsonKeys(C) {
     return { ...DEFAULT_ITEM_JSON, ...((C && C.raw && C.raw.item_json) || {}) };
+  }
+
+  function itemDomConfig(C) {
+    return { ...DEFAULT_ITEM_DOM, ...((C && C.raw && C.raw.item_dom) || {}) };
   }
 
   function payloadTexts(scripts) {
@@ -394,6 +431,46 @@
     return null;
   }
 
+  /**
+   * Data of the page sections ("plugins") of item `vintedId`, by plugin name. The current item
+   * page describes the item in sections such as {"data": {"item_id": "...", ...}, "name":
+   * "user_info_header"}: a section is read only when its data carries the item's own id, so
+   * sections of other items (suggested items, other members' wardrobes) are never taken. The
+   * first section of each name wins.
+   */
+  function findPlugins(scripts, vintedId, names, nameKeys, dataKeys, idKeys) {
+    const out = {};
+    if (!vintedId || !/^\d+$/.test(vintedId) || !names.length) return out;
+    const alternatives = names.map(escapeKey).join("|");
+    for (const text of payloadTexts(scripts)) {
+      if (!text.includes(vintedId)) continue;
+      for (const nameKey of nameKeys) {
+        const rx = new RegExp(`(\\\\*)"${escapeKey(nameKey)}\\1"\\s*:\\s*\\1"(${alternatives})\\1"`, "g");
+        for (const m of text.matchAll(rx)) {
+          const name = m[2];
+          const q = m[1].length;
+          if (name in out || (q + 1) & q) continue;
+          const reader = new EmbeddedReader(text, q);
+          const start = reader.enclosingObject(m.index);
+          if (start === null) continue;
+          let obj;
+          try {
+            [obj] = reader.value(start);
+          } catch {
+            continue;
+          }
+          if (!isPlainObject(obj) || obj[nameKey] !== name) continue;
+          const dataKey = dataKeys.find((k) => isPlainObject(obj[k]));
+          const data = dataKey === undefined ? null : obj[dataKey];
+          if (data !== null && String(pick(data, idKeys)) === vintedId) out[name] = data;
+        }
+      }
+    }
+    return out;
+  }
+
+  const isPlainObject = (v) => Boolean(v) && typeof v === "object" && !Array.isArray(v);
+
   function photoUrlsOf(obj, urlKeys) {
     const out = new Set();
     const add = (o) => {
@@ -476,28 +553,115 @@
   }
 
   function emptyCollected() {
-    return { jsonld: [], scripts: [], meta: {}, canonical: null, memberLinks: [], texts: [], heading: null };
+    return {
+      jsonld: [],
+      scripts: [],
+      meta: {},
+      canonical: null,
+      memberLinks: [],
+      texts: [],
+      heading: null,
+      favourites: null,
+      totalPrice: null,
+      statusTexts: [],
+    };
   }
 
   const SKIP = new Set(["style", "noscript", "template", "svg"]);
   const VOID = new Set(["meta", "link", "img", "br", "input", "hr", "source", "wbr", "area", "base", "col", "embed", "param", "track"]);
+  const CHROME = new Set(["header", "nav", "footer"]);
+  /** Length in characters (code points), as the server counts it. */
+  const charCount = (s) => [...String(s)].length;
 
-  /** The structure the parser reads, from raw HTML (tolerant tokenizer, no HTML engine). */
-  function collectHtml(html) {
+  /**
+   * The structure the parser reads, from raw HTML (tolerant tokenizer, no HTML engine). Like the
+   * server's collector it also reads, by data-testid (item_dom in the configuration), the item's
+   * favourite button, its total price and its status badges - never inside another item's card
+   * or the site header/nav/footer.
+   */
+  function collectHtml(html, C) {
     const out = emptyCollected();
+    const dom = itemDomConfig(C);
+    const favIds = new Set(dom.favourite_testids);
+    const totalIds = new Set(dom.total_price_testids);
+    const statusIds = new Set(dom.status_testids);
+    const summaryIds = new Set(dom.summary_testids);
+    const zoneTags = new Set(dom.zone_tags);
+    const badgeMax = Number(dom.badge_max_length);
     const src = String(html || "");
     const rx = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<![^>]*>|<(\/?)([a-zA-Z][\w:-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|([^<]+)|</g;
     let skip = 0;
     let chrome = 0; // inside <header>, <nav> or <footer>: links there are the signed-in user's
     let inH1 = false;
     let h1 = [];
+    // Open elements: whether they hide other items (cards) or the site chrome, where their text
+    // starts (for zones), and the text being captured for an item element.
+    const frames = [];
+    const capturing = [];
+    const excludedTexts = new Set();
+    let summarySeen = false;
+
+    // Short texts right before the item's summary in its sidebar: the status banner ("Venduto",
+    // "Riservato") of the current layout. Taken once, from the innermost zone.
+    const badgesBeforeSummary = () => {
+      summarySeen = true;
+      const zone = [...frames].reverse().find((f) => f.zoneStart !== null);
+      if (!zone) return;
+      const own = [];
+      for (let i = zone.zoneStart; i < out.texts.length; i += 1) {
+        if (!excludedTexts.has(i) && charCount(out.texts[i]) <= badgeMax) own.push(out.texts[i]);
+      }
+      out.statusTexts.push(...own.slice(-3));
+    };
+    const itemElement = (testid, a, frame) => {
+      if (favIds.has(testid) && out.favourites === null) {
+        const label = a["aria-label"] || "";
+        if (/\d/.test(label)) out.favourites = label;
+        else [frame.capture, frame.buf] = ["favourites", []];
+      } else if (totalIds.has(testid) && out.totalPrice === null) {
+        [frame.capture, frame.buf] = ["total_price", []];
+      } else if (statusIds.has(testid)) {
+        [frame.capture, frame.buf] = ["status", []];
+      }
+      if (summaryIds.has(testid) && !summarySeen) badgesBeforeSummary();
+    };
+    const closeFrame = (frame) => {
+      const text = frame.buf.join("").replace(/\s+/g, " ").trim();
+      if (frame.capture === "favourites" && out.favourites === null && /\d/.test(text)) out.favourites = text;
+      else if (frame.capture === "total_price" && out.totalPrice === null && text) out.totalPrice = text;
+      else if (frame.capture === "status" && text && charCount(text) <= badgeMax) out.statusTexts.push(text);
+    };
+    const closeTag = (tag) => {
+      if (SKIP.has(tag)) skip = Math.max(0, skip - 1);
+      if (CHROME.has(tag)) chrome = Math.max(0, chrome - 1);
+      if (tag === "h1" && inH1) {
+        inH1 = false;
+        out.heading = h1.join(" ").replace(/\s+/g, " ").trim() || null;
+      }
+      // Close up to the matching open element (tolerates an unclosed child).
+      for (let depth = frames.length - 1; depth >= 0; depth -= 1) {
+        if (frames[depth].tag !== tag) continue;
+        while (frames.length > depth) {
+          const frame = frames.pop();
+          if (frame.capture !== null) {
+            capturing.splice(capturing.indexOf(frame), 1);
+            closeFrame(frame);
+          }
+        }
+        break;
+      }
+    };
+
     let m;
     while ((m = rx.exec(src))) {
       const [, closing, rawTag, rawAttrs, text] = m;
       if (text !== undefined || (!rawTag && m[0] === "<")) {
         if (skip > 0) continue;
-        const t = decodeEntities(text ?? "<").replace(/\s+/g, " ").trim();
+        const data = decodeEntities(text ?? "<");
+        for (const frame of capturing) frame.buf.push(data);
+        const t = data.replace(/\s+/g, " ").trim();
         if (!t) continue;
+        if (frames.length && frames[frames.length - 1].excluded) excludedTexts.add(out.texts.length);
         out.texts.push(t);
         if (inH1) h1.push(t);
         continue;
@@ -505,12 +669,7 @@
       if (!rawTag) continue; // comment, doctype
       const tag = rawTag.toLowerCase();
       if (closing) {
-        if (SKIP.has(tag)) skip = Math.max(0, skip - 1);
-        if (tag === "header" || tag === "nav" || tag === "footer") chrome = Math.max(0, chrome - 1);
-        if (tag === "h1" && inH1) {
-          inH1 = false;
-          out.heading = h1.join(" ").replace(/\s+/g, " ").trim() || null;
-        }
+        closeTag(tag);
         continue;
       }
       const a = attrsOf(rawAttrs || "");
@@ -522,6 +681,14 @@
         if (tag === "script") ((a.type || "").includes("ld+json") ? out.jsonld : out.scripts).push(body);
         continue;
       }
+      const testid = a["data-testid"] || "";
+      const excluded =
+        (frames.length > 0 && frames[frames.length - 1].excluded) ||
+        CHROME.has(tag) ||
+        (Boolean(testid) && dom.exclude_testid_prefixes.some((p) => testid.startsWith(p)));
+      const frame = { tag, excluded, zoneStart: null, capture: null, buf: null };
+      if (zoneTags.has(tag) || dom.zone_id_prefixes.some((p) => (a.id || "").startsWith(p))) frame.zoneStart = out.texts.length;
+      if (testid && !excluded) itemElement(testid, a, frame);
       if (tag === "meta") {
         const key = a.property || a.name || a.itemprop;
         if (key && "content" in a) (out.meta[key] = out.meta[key] || []).push(a.content);
@@ -529,13 +696,17 @@
         out.canonical = a.href || null;
       } else if (tag === "a" && (a.href || "").includes("/member/")) {
         if (chrome === 0) out.memberLinks.push(a.href);
-      } else if (tag === "header" || tag === "nav" || tag === "footer") {
+      } else if (CHROME.has(tag)) {
         chrome += 1;
       } else if (tag === "h1" && out.heading === null && !inH1) {
         inH1 = true;
         h1 = [];
       }
-      if (SKIP.has(tag) && !selfClosing && !VOID.has(tag)) skip += 1;
+      if (VOID.has(tag)) continue;
+      if (SKIP.has(tag)) skip += 1;
+      frames.push(frame);
+      if (frame.capture !== null) capturing.push(frame);
+      if (selfClosing) closeTag(tag); // <div/>: opened and closed at once
     }
     return out;
   }
@@ -637,6 +808,9 @@
       status_source: "default",
       buyer_protection_fee: null,
       shipping_fee: null,
+      // Whether the page offers the item for sale to the visitor. Informational only: it is also
+      // false for your own items, when signed out or reserved - never a sign of a sale.
+      can_buy: null,
       images: [],
       images_source: "none",
       member_id: null,
@@ -662,10 +836,25 @@
     const keys = itemJsonKeys(C);
     const obj = useScripts ? findItem(c.scripts, id, keys) : null;
     if (obj) item.sources.push("item_json");
-    const emb = (name) => {
-      const v = pick(obj, keys[name]);
-      if (v === null || typeof v === "object") return null;
-      return String(v);
+    // Current layout: the item's page sections (seller header, favourites, status banner, buy
+    // actions), each read only when its data carries the item's id.
+    const groups = ["favourite_plugins", "seller_plugins", "buy_plugins", "status_plugins"];
+    const found = useScripts
+      ? findPlugins(c.scripts, id || "", groups.flatMap((g) => keys[g]), keys.plugin_name, keys.plugin_data, keys.plugin_item_id)
+      : {};
+    const plugin = {};
+    for (const g of groups) {
+      const name = keys[g].find((n) => n in found);
+      plugin[g] = name === undefined ? null : found[name];
+    }
+    if (Object.keys(found).length) item.sources.push("plugins");
+    /** First scalar value of `name`'s keys in the item object (or the given sections). */
+    const emb = (name, ...sources) => {
+      for (const src of sources.length ? sources : [obj]) {
+        const v = pick(src, keys[name]);
+        if (v !== null && typeof v !== "object") return String(v);
+      }
+      return null;
     };
 
     const title = (product && product.name) || c.heading || first(meta, "og:title") || "";
@@ -704,7 +893,9 @@
     if (!item.category_path.length && c.breadcrumbs) item.category_path = c.breadcrumbs.slice(0, 6);
 
     const digits = (s) => String(s || "").replace(/\D/g, "");
-    const fav = emb("favourites") || digits(pairs.favourites) || digits(c.favourites) || null;
+    // Favourites: the item object, else the item's favourites section, else the label pair
+    // (older pages) or the item's own favourite button ("Aggiunto ai preferiti da 78 utenti").
+    const fav = emb("favourites", obj, plugin.favourite_plugins) || digits(pairs.favourites) || digits(c.favourites) || null;
     const views = emb("views") || digits(pairs.views) || null;
     item.favourite_count = fav ? Number(fav) : null;
     item.view_count = views ? Number(views) : null;
@@ -720,15 +911,17 @@
       item.published_at = d ? d.toISOString() : null;
     }
 
-    // Fees: "€19,60 include la Protezione acquisti" -> protection = total - price.
+    // Fees: protection = total - price. The item's total price element ("19,60 €" next to
+    // "incl. la commissione Vinted"), else a text like "€19,60 include la Protezione acquisti".
     if (item.price) {
-      for (const t of c.texts.slice(0, 600)) {
+      const total = c.totalPrice ? findPrice(c.totalPrice, C) : null;
+      if (total) item.buyer_protection_fee = protectionFee(total.price, item.price);
+      for (const t of item.buyer_protection_fee === null ? c.texts.slice(0, 600) : []) {
         if (!C.patterns.protection_included.test(t)) continue;
         const hit = findPrice(t, C);
-        if (!hit) continue;
-        const diff = round2(hit.price - item.price);
-        if (diff > 0 && diff <= item.price * 0.2 + 5) {
-          item.buyer_protection_fee = diff;
+        const fee = hit ? protectionFee(hit.price, item.price) : null;
+        if (fee !== null) {
+          item.buyer_protection_fee = fee;
           break;
         }
       }
@@ -740,27 +933,35 @@
     const ship = emb("shipping");
     if (ship !== null) item.shipping_fee = parsePrice(ship);
 
-    // Status: embedded flags, schema.org availability, then visible badges.
+    // Status: embedded flags (older pages: is_closed / item_closing_action; current pages: the
+    // item's status banner section, e.g. "Venduto"), schema.org availability, then the item's
+    // own status badge. "can_buy" is never read as a sale: it is also false for your own items,
+    // when signed out or reserved, and a false sale would corrupt the concluded sales.
     const action = emb("closing_action");
     const closed = emb("closed");
-    const reserved = emb("reserved");
+    const reserved = emb("reserved", obj, plugin.buy_plugins);
+    const banner = emb("status_text", plugin.status_plugins) || "";
+    const badges = (c.statusTexts || []).join(" | ");
     const availability = String(offer.availability || "");
     const pageText = c.texts.slice(0, 250).join(" ");
-    const topText = [...(c.statusTexts || []), ...c.texts.slice(0, 60)].join(" ");
     const set = (status, source) => {
       item.status = status;
       item.status_source = source;
     };
     if (action === "sold" || (closed === "true" && (action === null || action === "sold"))) set("sold", "embedded");
     else if (closed === "true") set("removed", "embedded");
-    else if (reserved === "true") set("reserved", "embedded");
+    else if (C.patterns.status_sold.test(banner)) set("sold", "embedded");
+    else if (reserved === "true" || C.patterns.status_reserved.test(banner)) set("reserved", "embedded");
     else if (availability.includes("SoldOut")) set("sold", "jsonld");
     else if (!product && C.patterns.status_removed.test(pageText)) set("removed", "text");
     else if (closed === "false" || availability.includes("InStock")) set("active", closed ? "embedded" : "jsonld");
-    else if (C.patterns.status_sold.test(topText)) set("sold", "text");
-    else if (C.patterns.status_reserved.test(topText)) set("reserved", "text");
-    // Whether you (signed in) have the item in your favourites, as the page was served.
-    const mine = emb("favourite_by_me");
+    else if (C.patterns.status_sold.test(badges)) set("sold", "text");
+    else if (C.patterns.status_reserved.test(badges)) set("reserved", "text");
+    const canBuy = emb("can_buy", obj, plugin.buy_plugins);
+    item.can_buy = canBuy === "true" ? true : canBuy === "false" ? false : null;
+    // Whether you (signed in) have the item in your favourites, as the page was served: the item
+    // object, else the item's own favourites section (current layout).
+    const mine = emb("favourite_by_me", obj, plugin.favourite_plugins);
     item.favourite_by_me = mine === "true" ? true : mine === "false" ? false : null;
 
     // Photos: only the item's gallery, in its order. The item's structured data first; then the
@@ -787,35 +988,49 @@
     for (const u of c.avatarUrls || []) avatars.add(u);
     item.images = [...new Set(images.filter((u) => isHttpUrl(u) && !avatars.has(u)))].slice(0, C.limits.images);
 
-    // Seller: from the item's own seller object (member id hashed before sending), rating and
-    // review count. A member link in the page body only when the page has no structured data.
+    // Seller: opaque key (member id hashed before sending), rating, review count. Nothing else.
+    // From the item's own seller object (older pages), else the item's seller id and its seller
+    // header section (current pages); a member link in the page body only when the page has no
+    // structured data.
     const sellerObj = pick(obj, keys.seller);
-    const seller = sellerObj && typeof sellerObj === "object" && !Array.isArray(sellerObj) ? sellerObj : null;
+    let seller = isPlainObject(sellerObj) ? sellerObj : null;
+    const header = plugin.seller_plugins;
     const sid = pick(seller, keys.seller_id);
-    if (sid !== null) item.member_id = String(sid);
-    else if (!obj) {
+    let member = sid ? String(sid) : null;
+    if (member === null) member = emb("item_seller_id", obj, header);
+    if (seller === null && header !== null) {
+      const headerId = pick(header, keys.item_seller_id);
+      if (headerId === null || member === null || String(headerId) === member) seller = header;
+    }
+    if (member === null && !obj && !Object.keys(found).length) {
       for (const href of c.memberLinks) {
         const mm = C.patterns.member_id.exec(href);
         if (mm) {
-          item.member_id = mm[1];
+          member = mm[1];
           break;
         }
       }
     }
+    item.member_id = member;
     const semb = (name) => {
       const v = pick(seller, keys[name]);
       return v === null || typeof v === "object" || typeof v === "boolean" ? null : String(v);
     };
-    const rep = semb("seller_rating");
-    if (rep && Number.isFinite(Number(rep))) {
-      const v = Number(rep);
-      item.seller_rating = round2(v <= 1 ? v * 5 : v);
-    } else if (c.sellerRating) {
-      const v = parsePrice(String(c.sellerRating).replace(/\s*(su|of|sur|von|de)\s*5.*$/i, ""));
-      if (v && v <= 5) item.seller_rating = v;
-    }
+    // Live page only (content.js): the seller's rating and reviews shown on the page, when the
+    // page data can't be read (after client-side navigation).
     const count = semb("seller_reviews") || (obj ? null : digits(c.sellerReviews)) || null;
-    item.seller_review_count = count ? Number(count) : null;
+    item.seller_review_count = count && /^\d+$/.test(count) ? Number(count) : null;
+    if (item.seller_review_count !== 0) {
+      // No reviews yet: no rating (Vinted says 0).
+      const rep = semb("seller_rating");
+      if (rep && Number.isFinite(Number(rep))) {
+        const v = Number(rep);
+        item.seller_rating = round2(v <= 1 ? v * 5 : v);
+      } else if (c.sellerRating && !obj) {
+        const v = parsePrice(String(c.sellerRating).replace(/\s*(su|of|sur|von|de)\s*5.*$/i, ""));
+        if (v && v <= 5) item.seller_rating = v;
+      }
+    }
 
     item.missing = ["title", "price"].filter((k) => !item[k]);
     item.complete = item.missing.length === 0 && Boolean(item.vinted_id);
@@ -1064,6 +1279,8 @@
     findItem,
     profilePhotoUrls,
     itemJsonKeys,
+    itemDomConfig,
+    findPlugins,
     parseItem,
     parseCardSummary,
     parseCatalogCard,
