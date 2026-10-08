@@ -41,7 +41,7 @@ export function EmptyState({
 
 export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <div className="enter flex flex-col items-center gap-3 rounded-2xl border border-line bg-surface px-6 py-10 text-center">
+    <div role="alert" className="enter flex flex-col items-center gap-3 rounded-2xl border border-line bg-surface px-6 py-10 text-center">
       <p className="text-sm font-medium text-fg">Qualcosa non ha funzionato</p>
       <p className="max-w-md text-[13px] text-fg-3">{message}</p>
       {onRetry && (

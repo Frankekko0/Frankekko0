@@ -23,6 +23,13 @@ from app.domain.enums import Condition, DealTier, RecommendedAction
 from app.opportunities import insights as ins
 from app.pricing.comparables import ItemProfile, ScoredComparable, select_comparables
 from app.pricing.comparison import market_comparison
+from app.pricing.evidence import (
+    NEW_CAP_NOTE,
+    PriceEvidence,
+    build_provenance,
+    cap_at_new_price,
+    with_evidence,
+)
 from app.pricing.market_value import (
     SOLD_ONLY_MIN,
     MarketEstimate,
@@ -121,6 +128,8 @@ class AnalysisResult:
     risk_adjusted_profit: float | None = None
     sale_probability: float | None = None
     authenticity: dict[str, Any] = field(default_factory=dict)
+    # Where every number comes from (see ``app.pricing.evidence.build_provenance``).
+    provenance: dict[str, Any] = field(default_factory=dict)
 
     def scenario(self, name: str) -> Scenario | None:
         return next((s for s in self.scenarios if s.name == name), None)
@@ -145,7 +154,10 @@ def run_analysis(
     prior: SegmentPrior | None = None,
     weights: dict[str, float] | None = None,
     calibration: Calibration | None = None,
+    evidence: PriceEvidence | None = None,
 ) -> AnalysisResult:
+    """``candidates`` are marketplace listings (they also feed demand and timing); ``evidence``
+    adds the user's own records and other marketplaces' prices to the price only."""
     # The condition the photos show when worse than the declared one: prices follow the item.
     condition = ins.effective_condition(subject.profile.condition, subject.vision)
     priced = (
@@ -153,7 +165,8 @@ def run_analysis(
         if condition == subject.profile.condition
         else replace(subject.profile, condition=condition)
     )
-    similar, comps, market = price_estimate(priced, candidates, now, prior, calibration)
+    similar, comps, market = price_estimate(priced, candidates, now, prior, calibration, evidence)
+    calibrated = bool(calibration is not None and calibration.active and market.has_value)
     pool = [c for c in similar if c.item.status in ("sold", "active")]
 
     # ---- demand & velocity (whole similar pool, not only the pricing sample) ----------------
@@ -377,6 +390,24 @@ def run_analysis(
     )
     result.headline = build_headline(result)
     result.insights = build_insights(result, similar, now, condition, p_sale, margin)
+    if velocity.sample_size:
+        days_basis = "sold"
+    elif prior is not None and prior.avg_days_to_sale:
+        days_basis = "segment"
+    else:
+        days_basis = "category_baseline"
+    result.provenance = build_provenance(
+        market,
+        evidence=evidence,
+        prior=prior,
+        calibrated=calibrated,
+        calibration_n=calibration.n if calibration is not None else 0,
+        velocity_days=velocity.estimated_days,
+        velocity_n=velocity.sample_size,
+        days_basis=days_basis,
+        p_sale=p_sale,
+        new_cap_applied=any(n.startswith(NEW_CAP_NOTE) for n in market.notes),
+    )
     return result
 
 
@@ -508,6 +539,7 @@ def price_estimate(
     now: datetime,
     prior: SegmentPrior | None,
     calibration: Calibration | None = None,
+    evidence: PriceEvidence | None = None,
 ) -> tuple[list[ScoredComparable], list[ScoredComparable], MarketEstimate]:
     """(every similar listing, comparables used for the price, market estimate).
 
@@ -516,12 +548,34 @@ def price_estimate(
     The same function runs in the retroactive check, so measured errors are the real ones.
     """
     similar = select_comparables(subject, candidates, now, max_count=10_000)
-    pool = [c for c in similar if c.item.status in ("sold", "active")]
-    comps = pricing_comparables(pool)
-    market = estimate_market_value(comps, subject.condition, now, prior)
+    comps, market = estimate_from_similar(subject, similar, now, prior, evidence)
     if calibration is not None and calibration.active and market.has_value:
         market = calibrate(market, calibration, subject)
+        if evidence is not None and evidence.gate.use_new_cap:
+            # The calibrated range replaces the capped one: the new price caps the final maximum.
+            market = replace(market, notes=[n for n in market.notes if not n.startswith(NEW_CAP_NOTE)])
+            market = cap_at_new_price(market, evidence, subject.condition)
     return similar, comps, market
+
+
+def estimate_from_similar(
+    subject: ItemProfile,
+    similar: list[ScoredComparable],
+    now: datetime,
+    prior: SegmentPrior | None,
+    evidence: PriceEvidence | None = None,
+) -> tuple[list[ScoredComparable], MarketEstimate]:
+    """The price from already scored similar listings plus the extra evidence (own records,
+    other marketplaces) under the backtest gate. Concluded sales of every source count for the
+    sold-first rule; the comparables passed in are never mutated when evidence is merged."""
+    pool = [c for c in similar if c.item.status in ("sold", "active")]
+    if evidence is not None:
+        pool = with_evidence(subject, pool, evidence, now)
+    comps = pricing_comparables(pool)
+    market = estimate_market_value(comps, subject.condition, now, prior)
+    if evidence is not None and evidence.gate.use_new_cap:
+        market = cap_at_new_price(market, evidence, subject.condition)
+    return comps, market
 
 
 def calibrate(market: MarketEstimate, cal: Calibration, subject: ItemProfile) -> MarketEstimate:

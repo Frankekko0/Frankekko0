@@ -14,6 +14,7 @@ from app.opportunities.queries import OpportunityQueries
 from app.schemas.extension import QuickEval
 
 LEVEL_RANK = {"ok": 0, "info": 0, "low": 1, "medium": 2, "high": 3}
+CARDS_PER_QUERY = 100  # the feed query's page size
 
 
 def fake_risk(signals: list[dict[str, Any]] | None) -> str:
@@ -34,40 +35,34 @@ async def quick_evaluations(
     if not listing_ids:
         return []
     ids = list(dict.fromkeys(listing_ids))
-    listings = {
-        li.id: li
-        for li in (
-            await session.execute(
-                select(
-                    Listing.id,
-                    Listing.external_id,
-                    Listing.url,
-                    Listing.title,
-                    Listing.size_normalized,
-                    Listing.price,
-                    Listing.currency,
-                    Listing.status,
-                    Listing.tracked_at,
-                    Listing.capture_level,
-                ).where(Listing.id.in_(ids))
+    # The listings with their risk signals in one round trip, the cards (user's costs) in another.
+    rows = (
+        await session.execute(
+            select(
+                Listing.id,
+                Listing.external_id,
+                Listing.url,
+                Listing.title,
+                Listing.size_normalized,
+                Listing.price,
+                Listing.currency,
+                Listing.status,
+                Listing.tracked_at,
+                Listing.capture_level,
+                Opportunity.score_breakdown["risk_signals"].label("risk_signals"),
             )
-        ).all()
-    }
+            .outerjoin(Opportunity, Opportunity.listing_id == Listing.id)
+            .where(Listing.id.in_(ids))
+        )
+    ).all()
+    listings = {li.id: li for li in rows}
+    signals = {li.id: li.risk_signals for li in rows}
     cards: dict[uuid.UUID, Any] = {}
-    for start in range(0, len(ids), 100):
+    for start in range(0, len(ids), CARDS_PER_QUERY):
         for c in await OpportunityQueries(session, user_id, econ).card_by_listing_ids(
-            ids[start : start + 100]
+            ids[start : start + CARDS_PER_QUERY]
         ):
             cards[c.listing_id] = c
-    signals = dict(
-        (
-            await session.execute(
-                select(Opportunity.listing_id, Opportunity.score_breakdown["risk_signals"]).where(
-                    Opportunity.listing_id.in_(ids)
-                )
-            )
-        ).all()
-    )
     out: list[QuickEval] = []
     for lid in ids:
         li = listings.get(lid)

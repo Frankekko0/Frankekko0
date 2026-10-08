@@ -13,6 +13,9 @@ import { Tip } from "@/components/ui/misc";
 import { ListingImage } from "./listing-image";
 import { RiskBadge, ScoreRing } from "./score";
 
+/** Cards whose photo is fetched eagerly at the top of a list (roughly the first row on screen). */
+export const EAGER_CARDS = 4;
+
 function ProfitLine({ deal }: { deal: OpportunityCard }) {
   const positive = (deal.expected_profit ?? 0) > 0;
   return (
@@ -56,6 +59,7 @@ export function DealCard({
   priority = false,
   index = 0,
   rank,
+  eagerImage = false,
   onStateChange,
 }: {
   deal: OpportunityCard;
@@ -63,6 +67,8 @@ export function DealCard({
   index?: number;
   /** Position in a ranking (1 = best), shown on the photo. */
   rank?: number;
+  /** First cards of a list: their photos are on screen at load, so they are not lazy-loaded. */
+  eagerImage?: boolean;
   /** For lists held outside the query cache (e.g. an import's results). */
   onStateChange?: (state: FavoriteState | null) => void;
 }) {
@@ -80,16 +86,16 @@ export function DealCard({
       )}
       style={{ "--i": index } as CSSProperties}
     >
-      <Link
-        href={`/deals/${deal.id}`}
-        className="relative block aspect-[4/3] overflow-hidden rounded-t-[15px]"
-        aria-label={`Open analysis: ${deal.title}`}
-      >
-        <ListingImage src={deal.image_url} alt={deal.title} className="zoom-on-hover h-full w-full" />
+      {/* The photo opens the analysis too, but only for the pointer: keyboard and screen-reader users
+          reach it through the title link, so each card has one stop instead of two identical ones. */}
+      <div className="relative aspect-[4/3] overflow-hidden rounded-t-[15px]">
+        <Link href={`/deals/${deal.id}`} tabIndex={-1} aria-hidden className="absolute inset-0 block">
+          <ListingImage src={deal.image_url} alt="" eager={priority || eagerImage} className="zoom-on-hover h-full w-full" />
+        </Link>
         {/* Scrims keep the overlaid badges legible on any photo. */}
         <span className="pointer-events-none absolute inset-x-0 top-0 h-14 bg-gradient-to-b from-black/15 to-transparent" aria-hidden />
         <span className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-black/30 to-transparent" aria-hidden />
-        <div className="absolute inset-x-0 top-0 flex items-start justify-between p-2.5">
+        <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between p-2.5">
           <div className="flex flex-col items-start gap-1.5">
             {rank !== undefined && (
               <Badge tone="dark" className="tnum">
@@ -110,7 +116,10 @@ export function DealCard({
           </div>
           {deal.data_quality === "insufficient" ? (
             <Tip content={deal.insufficient_reason ?? "Too few comparable listings for a reliable estimate"}>
-              <Badge tone="dark">Insufficient data</Badge>
+              {/* Clickable like the rest of the photo; out of the tab order like the photo link. */}
+              <Link href={`/deals/${deal.id}`} tabIndex={-1} className="pointer-events-auto">
+                <Badge tone="dark">Insufficient data</Badge>
+              </Link>
             </Tip>
           ) : (
             <div className="rounded-full bg-surface/90 p-0.5 shadow-card ring-1 ring-black/5 backdrop-blur-md">
@@ -118,13 +127,13 @@ export function DealCard({
             </div>
           )}
         </div>
-        <div className="absolute inset-x-0 bottom-0 flex items-end justify-between p-2.5">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between p-2.5">
           <Badge tone="dark">
             <Clock /> {timeAgo(deal.published_at)}
           </Badge>
           {discount !== null && discount > 0.05 && <Badge tone="dark">−{Math.round(discount * 100)}% vs market</Badge>}
         </div>
-      </Link>
+      </div>
 
       <div className="flex flex-1 flex-col gap-3 p-3.5">
         <div className="min-w-0">
@@ -160,6 +169,7 @@ export function DealCard({
           <Button asChild variant={deal.is_ultra_deal ? "ultra" : "primary"} size="sm" className="flex-1">
             <a href={deal.url} target="_blank" rel="noopener noreferrer">
               {deal.is_ultra_deal ? <Flame /> : <ExternalLink />} VIEW DEAL
+              <span className="sr-only"> on Vinted (opens in a new tab)</span>
             </a>
           </Button>
           <Tip content={saved ? "Remove from saved" : "Save deal"}>

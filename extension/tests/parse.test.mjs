@@ -1,6 +1,6 @@
 // Run with: node --test extension/tests
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -283,4 +283,151 @@ test("favourite and buy labels: the button's state is read in either direction",
   }
   for (const buy of ["Acquista", "Acquista ora", "Compra ora", "Buy now"]) assert.ok(C.patterns.buy_text.test(buy), buy);
   for (const other of ["Protezione acquisti", "Fai un'offerta", "Acquista e paga dopo con..."]) assert.ok(!C.patterns.buy_text.test(other), other);
+});
+
+// ------------------------------------------------------------------ real pages (vinted.it, October 2026)
+// Trimmed and anonymised copies of real pages, shared with the server's tests (real/expected.json).
+const REAL = JSON.parse(fixture("real/expected.json"));
+
+const REAL_PAGES = Object.keys(REAL).filter((k) => !k.startsWith("_"));
+const ACTIVE_URL = REAL["item_active_plugins.html"].url;
+const SOLD_URL = REAL["item_sold_plugins.html"].url;
+const realPage = (name) => fixture(`real/${name}`);
+const readReal = (html, url) => P.parseItem(P.collectHtml(html, C), url, NOW, C);
+/** Edits a fixture, failing loudly when the text to change isn't there. */
+function swap(html, old, replacement, count = null) {
+  assert.ok(html.includes(old), old);
+  if (count !== null) assert.equal(html.split(old).length - 1, count, old);
+  return html.split(old).join(replacement);
+}
+
+test("the real pages are all checked", () => {
+  const files = readdirSync(join(FIX, "real")).filter((f) => f.endsWith(".html"));
+  assert.deepEqual([...REAL_PAGES].sort(), files.sort());
+});
+
+test("real item pages (current layout with page sections, with and without scripts) are read like the server", async () => {
+  const money = (v) => (v === null ? null : v.toFixed(2));
+  for (const name of REAL_PAGES) {
+    const want = REAL[name];
+    const it = readReal(realPage(name), `${want.url}?referrer=catalog`);
+    const got = {
+      url: it.url,
+      title: it.title,
+      price: money(it.price),
+      currency: it.currency,
+      brand: it.brand,
+      size: it.size,
+      condition: it.condition,
+      color: it.color,
+      status: it.status,
+      status_source: it.status_source,
+      images: it.images.length,
+      favourite_count: it.favourite_count,
+      view_count: it.view_count,
+      buyer_protection_fee: money(it.buyer_protection_fee),
+      seller_member: it.member_id,
+      seller_rating: money(it.seller_rating),
+      seller_review_count: it.seller_review_count,
+      can_buy: it.can_buy,
+    };
+    assert.deepEqual(got, want, name);
+    assert.equal(it.complete, true, name);
+    // The seller leaves the browser only as the opaque key, made from the item's own seller id.
+    const payload = await P.itemPayload(it, C);
+    assert.equal(payload.seller_key, await P.sellerKey(want.seller_member), name);
+    assert.ok(!JSON.stringify(payload).includes(want.seller_member), name);
+    assert.equal(payload.status, want.status, name);
+  }
+});
+
+test("real sold page: sold by its status banner, never by can_buy alone", () => {
+  const sold = readReal(realPage("item_sold_plugins.html"), SOLD_URL);
+  assert.deepEqual([sold.status, sold.status_source, sold.can_buy], ["sold", "embedded", false]);
+  // Same page without the banner ("Venduto") in its data and in the sidebar: can_buy is still
+  // false, but that alone is never a sale (also false for your own items, signed out, reserved).
+  let html = swap(realPage("item_sold_plugins.html"), '\\"title\\":\\"Venduto\\"', '\\"title\\":\\"\\"', 1);
+  html = swap(html, "<div>Venduto</div>", "<div></div>", 1);
+  const item = readReal(html, SOLD_URL);
+  assert.equal(item.can_buy, false);
+  assert.deepEqual([item.status, item.status_source], ["active", "default"]);
+  // can_buy false on an active page: still active.
+  const active = readReal(swap(realPage("item_active_plugins.html"), '\\"can_buy\\":true', '\\"can_buy\\":false'), ACTIVE_URL);
+  assert.deepEqual([active.can_buy, active.status, active.status_source], [false, "active", "jsonld"]);
+  // A reserved item is read from its data.
+  const reserved = readReal(swap(realPage("item_active_plugins.html"), '\\"is_reserved\\":false', '\\"is_reserved\\":true'), ACTIVE_URL);
+  assert.deepEqual([reserved.status, reserved.status_source], ["reserved", "embedded"]);
+});
+
+test("real page: your favourite state comes from the item's own favourites section", () => {
+  const own = '\\"favourite_count\\":78,\\"is_favourite\\":false,\\"item_id\\":\\"9000000101\\"';
+  assert.equal(readReal(realPage("item_active_plugins.html"), ACTIVE_URL).favourite_by_me, false);
+  const mine = swap(realPage("item_active_plugins.html"), own, own.replace("false", "true"), 1);
+  assert.equal(readReal(mine, ACTIVE_URL).favourite_by_me, true);
+  // The same section of another item is never read.
+  const other = swap(realPage("item_active_plugins.html"), own, own.replace("false", "true").replace("9000000101", "9000000999"), 1);
+  assert.equal(readReal(other, ACTIVE_URL).favourite_by_me, null);
+});
+
+test("real pages: sections and badges of other items are never read", () => {
+  // The seller header and the favourites section of another item (e.g. a suggested one).
+  let html = realPage("item_active_plugins.html");
+  html = swap(
+    html,
+    '\\"follow_action_visible\\":false,\\"is_favourite\\":false,\\"item_id\\":\\"9000000101\\"',
+    '\\"follow_action_visible\\":false,\\"is_favourite\\":false,\\"item_id\\":\\"9000000999\\"',
+    1,
+  );
+  html = swap(
+    html,
+    '\\"favourite_count\\":78,\\"is_favourite\\":false,\\"item_id\\":\\"9000000101\\"',
+    '\\"favourite_count\\":999,\\"is_favourite\\":false,\\"item_id\\":\\"9000000999\\"',
+    1,
+  );
+  const item = readReal(html, ACTIVE_URL);
+  assert.deepEqual([item.seller_rating, item.seller_review_count], [null, null]);
+  assert.equal(item.member_id, "1000003"); // still the item's own seller id
+  assert.equal(item.favourite_count, 78); // the item's own favourite button, never 999
+  // A status banner of another item never makes this one sold.
+  let sold = swap(
+    realPage("item_sold_plugins.html"),
+    '\\"item_id\\":\\"9000000102\\",\\"seller_id\\":\\"1000001\\",\\"theme\\"',
+    '\\"item_id\\":\\"9000000999\\",\\"seller_id\\":\\"1000001\\",\\"theme\\"',
+    1,
+  );
+  sold = swap(sold, "<div>Venduto</div>", "<div></div>", 1);
+  assert.equal(readReal(sold, SOLD_URL).status, "active");
+  // Only the item's own badge says sold: not another item's card (even right above the
+  // summary), not a title.
+  const page = swap(realPage("item_sold_no_scripts.html"), "<div>Venduto</div>", "<div></div>", 1);
+  assert.equal(readReal(page, SOLD_URL).status, "active");
+  const card = '<div data-testid="product-item-id-9000000555"><div>Venduto</div></div>';
+  const withCard = swap(page, '<div data-testid="item-page-summary-plugin">', card + '<div data-testid="item-page-summary-plugin">', 1);
+  assert.equal(readReal(withCard, SOLD_URL).status, "active");
+  assert.equal(readReal(page.split("Polo t shirt").join("Sold out polo - venduto in negozio"), SOLD_URL).status, "active");
+  // The real badge, in the item's sidebar, does.
+  const real = readReal(realPage("item_sold_no_scripts.html"), SOLD_URL);
+  assert.deepEqual([real.status, real.status_source], ["sold", "text"]);
+});
+
+test("real wardrobe cards (as the content script collects them) are read with their status and fees", () => {
+  const raw = JSON.parse(fixture("real/wardrobe_cards.json"));
+  const { items, unreadable } = P.parseCards(raw, "https://www.vinted.it/member/1000001", C);
+  assert.equal(items.length, 15);
+  assert.equal(unreadable, 0);
+  assert.ok(items.every((it) => it.status === "active")); // this wardrobe shows no sold item
+  const first = items[0];
+  assert.deepEqual(
+    { url: first.url, price: first.price, brand: first.brand, size: first.size, condition: first.condition, fee: first.buyer_protection_fee, fav: first.favourite_count },
+    { url: "https://www.vinted.it/items/9000000201", price: 24, brand: "Polo Ralph Lauren", size: "XL", condition: "very_good", fee: 1.9, fav: 2 },
+  );
+  // The same card with Vinted's "Venduto" badge is read as sold (as a wardrobe shows sold items).
+  const sold = { ...raw[0], testids: { ...raw[0].testids, "status": "Venduto" }, texts: ["Venduto", ...raw[0].texts] };
+  assert.equal(P.parseCards([sold], "https://www.vinted.it/member/1000001", C).items[0].status, "sold");
+});
+
+test("the real heart's label says its state even without the pressed attribute", () => {
+  const label = "Aggiungi ai preferiti. Aggiunto ai preferiti da 2 utenti"; // vinted.it, signed out
+  assert.ok(C.patterns.favourite_off.test(label));
+  assert.ok(!C.patterns.favourite_on.test(label));
 });

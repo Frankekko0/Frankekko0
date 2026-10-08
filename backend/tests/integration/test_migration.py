@@ -13,7 +13,7 @@ import pytest
 from tests.conftest import ROOT, TEST_DB
 
 ADMIN_DSN = TEST_DB.replace("postgresql+asyncpg://", "postgresql://")
-MIG_DB = "flipfinder_migration_test"
+MIG_DB = ADMIN_DSN.rsplit("/", 1)[1] + "_migration"  # one per test database (parallel runs)
 MIG_DSN = ADMIN_DSN.rsplit("/", 1)[0] + f"/{MIG_DB}"
 
 

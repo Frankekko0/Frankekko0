@@ -1,6 +1,10 @@
 // End-to-end: Vinted favourite and Buy, started from FlipFinder's Analysis page, the tracking page
 // and the extension panel. Real extension in Chromium, fake Vinted pages (routed) that keep the
 // favourite on their "server" and lead to a checkout, a running FlipFinder (APP_URL).
+// Every action starts from the web app's own buttons, clicked for real: Buy opens Vinted's
+// checkout at the first click (ff:vinted-buy); only a changed price asks for a second click.
+// The bridge accepts one action per real click: the few requests sent by a page script here
+// follow a real click on the page, and only to show what is refused.
 // Fake Vinted is a local HTTPS server that the browser reaches as www.vinted.it (host mapping):
 // the tabs the extension opens itself are not covered by Playwright's routing. Test-only
 // manifest change: host permission for APP (the permission prompt can't be clicked headless).
@@ -18,10 +22,15 @@ const APP = process.env.APP_URL || "http://localhost:3001";
 const SRC = path.resolve(__dirname, "..");
 
 const ID0 = 881000100 + (Date.now() % 100000) * 10; // fresh Vinted ids on every run
-const A = ID0 + 1; // bought end to end
-const B = ID0 + 2; // its price changes
+const A = ID0 + 1; // bought end to end, checkout at the first click
+const B = ID0 + 2; // its price changes (dialog, cancelled; then the panel)
 const C = ID0 + 3; // reserved for someone else
 const D = ID0 + 4; // a page that differs from the expected one
+const E = ID0 + 5; // first-click buy with no Vinted tab open
+const F = ID0 + 6; // first click: the price changed, nothing clicked, then "Open checkout at" it
+const G = ID0 + 7; // first click: sold in the meantime
+const H = ID0 + 8; // first click with the service worker stopped
+const J = ID0 + 9; // first click in a fresh browser
 // favMode: "aria" (pressed state), "icon" (only the icon changes; state in the page data),
 // "blind" (state nowhere). buyMode: "normal", "decoy" (a look-alike button first), "dead".
 const ITEMS = {
@@ -29,6 +38,12 @@ const ITEMS = {
   [B]: { title: "Felpa Polo Ralph Lauren grigia zip", price: 30, reserved: false },
   [C]: { title: "Maglione Polo Bear Ralph Lauren", price: 45, reserved: false },
   [D]: { title: "Camicia Ralph Lauren Oxford azzurra", price: 35, reserved: false },
+  // consent: a cookie banner over the page; hydrateMs: the buttons work only that long after load.
+  [E]: { title: "Giacca Harrington Ralph Lauren blu", price: 40, reserved: false, consent: true, hydrateMs: 250 },
+  [F]: { title: "Polo Ralph Lauren piqué bianca", price: 50, reserved: false },
+  [G]: { title: "Camicia Ralph Lauren lino bianca", price: 38, reserved: false },
+  [H]: { title: "Cardigan Ralph Lauren cotone blu", price: 42, reserved: false, consent: true, hydrateMs: 250 },
+  [J]: { title: "Gilet Ralph Lauren trapuntato verde", price: 33, reserved: false, consent: true, hydrateMs: 250 },
 };
 // What Vinted's servers know: your session, your favourites, the pages served.
 const vinted = { signedIn: true, fav: new Map(), favPosts: [], checkouts: [], successes: [], decoys: 0 };
@@ -37,7 +52,7 @@ const euro = (v) => v.toFixed(2).replace(".", ",");
 function itemHtml(id) {
   const it = ITEMS[id];
   const fav = vinted.fav.get(id) === true;
-  const ld = { "@context": "https://schema.org", "@type": "Product", name: it.title, url: `https://www.vinted.it/items/${id}-x`, description: "Originale Ralph Lauren, etichetta interna presente, nessun difetto. Misure: ascella-ascella 52 cm, lunghezza 70 cm.", image: [1, 2, 3].map((n) => `https://images1.vinted.net/t/${id}/${n}.jpeg`), brand: { "@type": "Brand", name: "Ralph Lauren" }, offers: { "@type": "Offer", price: it.price.toFixed(2), priceCurrency: "EUR", availability: "https://schema.org/InStock" } };
+  const ld = { "@context": "https://schema.org", "@type": "Product", name: it.title, url: `https://www.vinted.it/items/${id}-x`, description: "Originale Ralph Lauren, etichetta interna presente, nessun difetto. Misure: ascella-ascella 52 cm, lunghezza 70 cm.", image: [1, 2, 3].map((n) => `https://images1.vinted.net/t/${id}/${n}.jpeg`), brand: { "@type": "Brand", name: "Ralph Lauren" }, offers: { "@type": "Offer", price: it.price.toFixed(2), priceCurrency: "EUR", availability: it.sold ? "https://schema.org/SoldOut" : "https://schema.org/InStock" } };
   const header = vinted.signedIn ? '<a href="/member/1-me">Il mio profilo</a>' : '<a data-testid="header--login-button" href="/member/signup/select_type">Registrati | Accedi</a>';
   return `<!doctype html><html lang="it"><head><meta charset="utf-8"><title>${it.title} | Vinted</title><link rel="canonical" href="https://www.vinted.it/items/${id}-x">
 <script type="application/ld+json">${JSON.stringify(ld)}</script></head><body><header style="height:64px;background:#09b1ba">${header}</header><main style="max-width:900px;margin:0 auto;font-family:sans-serif">
@@ -51,10 +66,12 @@ function itemHtml(id) {
 <div data-testid="item-sidebar">
   ${favButton(it.favMode || "aria", fav)}
   ${it.buyMode === "decoy" ? '<button type="button" data-testid="item-buyer-protection-button" onclick="fetch(\'/api/decoy\', { method: \'POST\' })">Protezione acquisti</button>' : ""}
-  ${it.reserved ? '<p data-testid="item-status--reserved">Riservato</p>' : `<button type="button" data-testid="${it.buyMode === "decoy" ? "item-buy-btn" : "item-buy-button"}">Acquista</button>`}
+  ${it.sold ? '<p data-testid="item-status--sold">Venduto</p>' : it.reserved ? '<p data-testid="item-status--reserved">Riservato</p>' : `<button type="button" data-testid="${it.buyMode === "decoy" ? "item-buy-btn" : "item-buy-button"}">Acquista</button>`}
 </div>
 </main>
+${it.consent ? '<div id="onetrust-banner-sdk" style="position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.6)"><button id="onetrust-accept-btn-handler">Accetta tutti</button></div>' : ""}
 <script>
+const hydrate = () => {
 const fb = document.querySelector('[data-testid="item-favourite-button"]');
 fb.addEventListener("click", async () => {
   const r = await fetch("/api/v2/items/${id}/favourite", { method: "POST" }).then((x) => x.json());
@@ -65,8 +82,10 @@ fb.addEventListener("click", async () => {
 });
 const bb = document.querySelector('[data-testid^="item-buy-b"]');
 if (bb && ${it.buyMode !== "dead"}) bb.addEventListener("click", () => { location.href = "/checkout?transaction_id=9${id}"; });
+};
+${it.hydrateMs ? `addEventListener("load", () => setTimeout(hydrate, ${it.hydrateMs}));` : "hydrate();"}
 </script>
-<script>self.__next_f.push([1,"{\\"item\\":{\\"id\\":${id},\\"favourite_count\\":21,\\"view_count\\":310,${it.favMode === "blind" ? "" : `\\"is_favourite\\":${fav},`}\\"is_reserved\\":${it.reserved},\\"is_closed\\":false,\\"user\\":{\\"feedback_reputation\\":0.96,\\"feedback_count\\":52}}}"])</script></body></html>`;
+<script>self.__next_f.push([1,"{\\"item\\":{\\"id\\":${id},\\"favourite_count\\":21,\\"view_count\\":310,${it.favMode === "blind" ? "" : `\\"is_favourite\\":${fav},`}\\"is_reserved\\":${it.reserved},\\"is_closed\\":${Boolean(it.sold)},\\"user\\":{\\"feedback_reputation\\":0.96,\\"feedback_count\\":52}}}"])</script></body></html>`;
 }
 // The favourite button: with a pressed state and label, or only an icon that changes.
 const favButton = (mode, fav) =>
@@ -90,6 +109,7 @@ const successHtml = (id) => {
 const SVG = (n) => `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="380"><rect width="300" height="380" fill="hsl(${(n * 47) % 360},45%,72%)"/></svg>`;
 
 let diagnose = async () => {};
+let current = null; // the FlipFinder page in use, for the failure screenshot
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ffext-"));
   fs.cpSync(SRC, dir, { recursive: true });
@@ -174,7 +194,7 @@ let diagnose = async () => {};
   // 1) You browse the three listings on Vinted: the extension records them in FlipFinder.
   const vintedTab = await ctx.newPage();
   const ids = {};
-  for (const id of [A, B, C, D]) {
+  for (const id of [A, B, C, D, E, F, G, H, J]) {
     await vintedTab.goto(`https://www.vinted.it/items/${id}-x`);
     ids[id] = await until(`capture ${id}`, async () => {
       const r = await capture.post("/api/v1/capture/evaluations", { data: { vinted_ids: [String(id)] } });
@@ -186,11 +206,12 @@ let diagnose = async () => {};
 
   // 2) Analysis page: the bridge is there, requests without your click are refused.
   const app = await ctx.newPage();
+  current = app;
   diagnose = async () => {
-    const toasts = await app.evaluate(() => [...document.querySelectorAll("[data-sonner-toast]")].map((t) => t.innerText)).catch(() => []);
+    const toasts = await current.evaluate(() => [...document.querySelectorAll("[data-sonner-toast]")].map((t) => t.innerText)).catch(() => []);
     const errors = await sw.evaluate(async () => (await chrome.storage.local.get("errors")).errors || []).catch(() => []);
-    console.error("toasts:", JSON.stringify(toasts), "\nextension errors:", JSON.stringify(errors).slice(0, 1500), "\ntabs:", ctx.pages().map((p) => p.url()).join(" "));
-    await app.screenshot({ path: `${OUT}/actions-failure.png` }).catch(() => {});
+    console.error("toasts:", JSON.stringify(toasts), "\nextension errors:", JSON.stringify(errors).slice(0, 1500), "\ntabs:", current.context().pages().map((p) => p.url()).join(" "));
+    await current.screenshot({ path: `${OUT}/actions-failure.png` }).catch(() => {});
   };
   await app.goto(`${APP}/deals/${ids[A].opp}`);
   const favBtn = app.getByRole("button", { name: /Vinted favourites/ });
@@ -254,21 +275,89 @@ let diagnose = async () => {};
   log("signed out → warning shown, Vinted untouched");
   vinted.signedIn = true;
 
-  // 6) Buy: availability and price checked first, then one more click opens Vinted's checkout.
-  await app.getByRole("button", { name: "Buy on Vinted" }).click();
-  await app.getByText(/Available at/).waitFor({ timeout: 30000 });
-  await app.screenshot({ path: `${OUT}/actions-buy-check.png` });
-  assert.equal(vinted.checkouts.length, 0, "the check never opens the checkout");
-  await app.getByRole("button", { name: /^Open checkout/ }).click();
-  await app.getByText(/Vinted checkout open/).waitFor({ timeout: 30000 });
-  assert.deepEqual(vinted.checkouts, [A]);
+  // 5b) One click, one action: a page script riding on one real click gets that click's single
+  // action; a second request right behind it - activation still on - is refused, Vinted untouched.
+  const neutralClick = async (page) => {
+    await page.evaluate(() => {
+      if (document.getElementById("e2e-neutral")) return;
+      const d = document.createElement("div"); // an empty spot of the page, nothing to activate
+      d.id = "e2e-neutral";
+      d.style.cssText = "position:fixed;left:0;bottom:0;width:24px;height:24px;z-index:2147483647";
+      document.body.appendChild(d);
+    });
+    await page.locator("#e2e-neutral").click();
+  };
+  // Requests posted by a page script, all at once; activeAtSend: the browser's user activation then.
+  const postRequests = (page, list) =>
+    page.evaluate(
+      (list) =>
+        Promise.all(
+          list.map(
+            ({ type, payload }) =>
+              new Promise((res) => {
+                const id = `p-${Math.random()}`;
+                const activeAtSend = navigator.userActivation.isActive;
+                const on = (e) => {
+                  if (!e.data || e.data.ff !== "response" || e.data.id !== id) return;
+                  removeEventListener("message", on);
+                  res({ activeAtSend, ...e.data.result });
+                };
+                addEventListener("message", on);
+                postMessage({ ff: "request", id, type, payload }, location.origin);
+              }),
+          ),
+        ),
+      list,
+    );
+  const item = (id, extra = {}) => ({ vid: String(id), url: `https://www.vinted.it/items/${id}-x`, ...extra });
+  const favs0 = vinted.favPosts.length;
+  const checkouts0 = vinted.checkouts.length;
+  const tabs0 = ctx.pages().length;
+  await neutralClick(app);
+  const [firstReq, secondReq] = await postRequests(app, [
+    { type: "ff:vinted-favourite", payload: item(C, { want: true }) },
+    { type: "ff:vinted-buy", payload: item(E, { expect_price: 40 }) },
+  ]);
+  log("one click, two requests:", JSON.stringify({ ok: firstReq.ok, favourite: firstReq.favourite }), "|", JSON.stringify({ code: secondReq.code, activeAtSend: secondReq.activeAtSend }));
+  assert.equal(firstReq.ok, true, JSON.stringify(firstReq));
+  assert.equal(vinted.fav.get(C), true);
+  assert.deepEqual(vinted.favPosts.slice(favs0), [C], "the click's one action, done once");
+  assert.equal(secondReq.code, "no_click");
+  assert.equal(secondReq.activeAtSend, true, "refused by the one-click-one-action rule, not by an expired activation");
+  assert.equal(vinted.checkouts.length, checkouts0, "the second request did nothing on Vinted");
+  await until("favourite tab closed", async () => ctx.pages().length === tabs0, 5000);
+
+  // The web app's Buy button; clicked, then what it shows (toast or dialog) and how long it took
+  // from the click (the page already rendered and the button enabled).
+  const buyButton = (page) => page.getByRole("button", { name: "Buy on Vinted" });
+  const clickFor = async (page, button, re, ms = 60000) => {
+    await button.waitFor({ timeout: 30000 });
+    await until("button enabled", () => button.isEnabled(), 30000);
+    await page.bringToFront(); // you click in the FlipFinder tab you are looking at
+    const t = Date.now();
+    await button.click();
+    const el = page.getByText(re).first();
+    await el.waitFor({ timeout: ms });
+    return { text: (await el.innerText()).trim().replace(/\s+/g, " "), ms: Date.now() - t };
+  };
+  const noDialog = async (page) => assert.equal(await page.getByRole("dialog").count(), 0, "no dialog: one click is enough");
+  const once = (id) => vinted.checkouts.filter((v) => v === id).length;
+
+  // 6) Buy at the first click: the extension opens the listing, finds it on sale at the analysed
+  // price and presses Acquista once; Vinted's checkout opens, no dialog in between.
+  let out = await clickFor(app, buyButton(app), /Vinted checkout open/);
+  log("first-click buy:", JSON.stringify(out.text), `${out.ms} ms`);
+  assert.match(out.text, /Vinted checkout open at €20:/);
+  await noDialog(app);
+  assert.deepEqual(vinted.checkouts, [A], "exactly one Buy click on Vinted, for this listing");
   s = await until("checkout recorded", async () => ((await state(ids[A].lid)).checkout_opened ? state(ids[A].lid) : null));
   assert.equal(Number(s.checkout_opened.price), 20);
   assert.equal(s.purchased, null, "opening the checkout is not a purchase");
   log("checkout opened at", s.checkout_opened.price, "| purchased:", s.purchased);
+  await app.screenshot({ path: `${OUT}/actions-buy-first-click.png` });
 
   // ...you confirm the payment on Vinted: FlipFinder records the purchase with the total paid.
-  const checkoutTab = await until("checkout tab", async () => ctx.pages().find((p) => p.url().includes("/checkout?")));
+  const checkoutTab = await until("checkout tab", async () => ctx.pages().find((p) => p.url().includes(`/checkout?transaction_id=9${A}`)));
   await checkoutTab.click("#pay");
   s = await until("purchase recorded", async () => ((await state(ids[A].lid)).purchased ? state(ids[A].lid) : null));
   assert.equal(Number(s.purchased.price), 25.19);
@@ -279,38 +368,42 @@ let diagnose = async () => {};
   log("purchased: paid", s.purchased.price, "| flip purchase price", flip.purchase_price, "total cost", flip.total_cost);
   await app.reload();
   await app.locator("p:visible", { hasText: /Bought .* paid/ }).waitFor({ timeout: 30000 });
+  await app.getByRole("button", { name: "Bought", exact: true, disabled: true }).waitFor(); // Buy, now disabled
+  assert.equal(await buyButton(app).count(), 0, "no second purchase of a bought listing");
   await app.screenshot({ path: `${OUT}/actions-bought.png` });
   await checkoutTab.close();
 
-  // 7) Price changed since the analysis: warned before the checkout.
+  // 7) Price changed since the analysis: nothing clicked, a dialog with the new price; Cancel.
   ITEMS[B].price = 27;
   await app.goto(`${APP}/deals/${ids[B].opp}`);
-  await app.getByRole("button", { name: "Buy on Vinted" }).click();
-  await app.getByText(/Price changed/).waitFor({ timeout: 30000 });
-  const changedText = await app.getByText(/Price changed/).textContent();
-  await app.getByRole("button", { name: /Open checkout at/ }).waitFor();
+  out = await clickFor(app, buyButton(app), /Price changed/);
+  await app.getByText(/nothing was clicked/).waitFor();
+  await app.getByRole("button", { name: "Open checkout at €27" }).waitFor();
   await app.screenshot({ path: `${OUT}/actions-price-changed.png` });
+  log("price change dialog:", JSON.stringify(out.text), `${out.ms} ms`);
+  assert.match(out.text, /€30 → €27\./);
+  assert.equal(vinted.checkouts.length, 1, "no click on Vinted at a price you did not see");
   await app.getByRole("button", { name: "Cancel" }).click();
-  log("price change warning:", changedText.trim());
-  assert.match(changedText, /30.*27/);
-  assert.equal(vinted.checkouts.length, 1, "no checkout without your second click");
+  await app.getByRole("dialog").waitFor({ state: "detached" });
+  assert.equal(vinted.checkouts.length, 1, "cancelled: no checkout");
 
-  // 8) Reserved for someone else: warned, no checkout button.
+  // 8) Reserved for someone else: a warning, no dialog, nothing clicked, its tab goes away.
   ITEMS[C].reserved = true;
   await app.goto(`${APP}/deals/${ids[C].opp}`);
-  await app.getByRole("button", { name: "Buy on Vinted" }).click();
-  await app.getByText(/reserved for another buyer/).waitFor({ timeout: 30000 });
-  assert.equal(await app.getByRole("button", { name: /^Open checkout/ }).count(), 0);
+  let tabsNow = ctx.pages().length;
+  out = await clickFor(app, buyButton(app), /reserved for another buyer/);
+  await noDialog(app);
+  assert.ok(!vinted.checkouts.includes(C));
+  await until("reserved tab closed", async () => ctx.pages().length === tabsNow, 5000);
   await app.screenshot({ path: `${OUT}/actions-reserved.png` });
-  await app.getByRole("button", { name: "Cancel" }).click();
-  log("reserved → warning, no checkout button");
+  log("reserved →", JSON.stringify(out.text));
 
-  // 9) Tracking page: the same Buy.
-  await app.goto(`${APP}/items/${B}`);
-  await app.getByRole("button", { name: "Buy on Vinted" }).click();
-  await app.getByText(/Available at|Price changed/).waitFor({ timeout: 30000 });
-  await app.getByRole("button", { name: "Cancel" }).click();
-  log("tracking page → Buy check works");
+  // 9) Tracking page: the same Buy (the reserved listing: the same answer, nothing clicked).
+  await app.goto(`${APP}/items/${C}`);
+  out = await clickFor(app, buyButton(app), /reserved for another buyer/);
+  await noDialog(app);
+  assert.ok(!vinted.checkouts.includes(C));
+  log("tracking page → Buy:", JSON.stringify(out.text));
 
   // 10a) Vinted's page differs from the expected one: never a blind or wrong click.
   ITEMS[D].favMode = "icon"; // the heart only changes its icon: checked by reading the page again
@@ -328,23 +421,18 @@ let diagnose = async () => {};
   assert.equal(vinted.fav.get(D), true);
   log("heart state unreadable → refused, no click");
   ITEMS[D].buyMode = "decoy"; // "Protezione acquisti" before the real "Acquista"
-  await app.getByRole("button", { name: "Buy on Vinted" }).click();
-  await app.getByText(/Available at/).waitFor({ timeout: 30000 });
-  await app.getByRole("button", { name: /^Open checkout/ }).click();
-  await app.getByText(/Vinted checkout open/).waitFor({ timeout: 30000 });
+  out = await clickFor(app, buyButton(app), /Vinted checkout open/);
+  await noDialog(app);
   assert.equal(vinted.decoys, 0, "the look-alike button is never clicked");
-  assert.ok(vinted.checkouts.includes(D));
-  const opened = (await state(ids[D].lid)).checkout_opened;
-  assert.ok(opened);
-  log("look-alike button next to Acquista → ignored, checkout opened");
+  assert.equal(once(D), 1, "Acquista pressed once");
+  const opened = await until("checkout D recorded", async () => (await state(ids[D].lid)).checkout_opened);
+  log("look-alike button next to Acquista → ignored, checkout opened at the first click", `${out.ms} ms`);
   for (const p of ctx.pages()) if (p.url().includes(`transaction_id=9${D}`)) await p.close();
   ITEMS[D].buyMode = "dead"; // Acquista doesn't lead to the checkout
-  await app.getByRole("button", { name: "Buy on Vinted" }).click();
-  await app.getByText(/Available at/).waitFor({ timeout: 30000 });
-  await app.getByRole("button", { name: /^Open checkout/ }).click();
-  await app.getByText(/the checkout did not open/).waitFor({ timeout: 45000 });
+  out = await clickFor(app, buyButton(app), /the checkout did not open/, 60000);
+  assert.equal(once(D), 1);
   assert.equal((await state(ids[D].lid)).checkout_opened.at, opened.at, "not recorded as opened");
-  log("Acquista without a checkout → reported, nothing recorded");
+  log("Acquista without a checkout → reported, nothing recorded:", JSON.stringify(out.text));
 
   // 10) Extension panel, on the listing you are looking at: check, warning, open the checkout.
   for (const p of ctx.pages()) if (p !== app && p !== vintedTab) await p.close();
@@ -391,7 +479,126 @@ let diagnose = async () => {};
   assert.equal((await state(ids[B].lid)).purchased, null, "abandoned checkout is never recorded as bought");
   log("abandoned checkout → not recorded as a purchase");
 
+  // 12) First-click Buy with no Vinted tab open, a cookie banner over the listing and buttons that
+  // work only a moment after load.
+  for (const p of ctx.pages()) if (p !== app) await p.close();
+  await app.goto(`${APP}/deals/${ids[E].opp}`);
+  assert.ok(!ctx.pages().some((p) => p.url().includes("vinted.it")), "no Vinted tab open");
+  out = await clickFor(app, buyButton(app), /Vinted checkout open/);
+  log("no Vinted tab → first-click buy:", JSON.stringify(out.text), `${out.ms} ms`);
+  assert.match(out.text, /at €40:/);
+  await noDialog(app);
+  assert.equal(once(E), 1, "Vinted's checkout opened once");
+  s = await until("one-click checkout recorded", async () => ((await state(ids[E].lid)).checkout_opened ? state(ids[E].lid) : null));
+  assert.equal(Number(s.checkout_opened.price), 40);
+  assert.ok(ctx.pages().some((p) => p.url().includes(`transaction_id=9${E}`)), "the checkout tab is there for your payment");
+
+  // ...the price changed since the analysis: nothing clicked, the dialog offers the new price;
+  // "Open checkout at €44" uses the tab already read.
+  ITEMS[F].price = 44;
+  await app.goto(`${APP}/deals/${ids[F].opp}`);
+  const before = vinted.checkouts.length;
+  out = await clickFor(app, buyButton(app), /Price changed/);
+  log("first click, price changed:", JSON.stringify(out.text), `${out.ms} ms`);
+  assert.match(out.text, /€50 → €44\./);
+  assert.equal(vinted.checkouts.length, before, "no click at a different price");
+  const pagesBefore = ctx.pages().length;
+  out = await clickFor(app, app.getByRole("button", { name: "Open checkout at €44" }), /Vinted checkout open/);
+  assert.deepEqual(vinted.checkouts.slice(before), [F], "one Buy click, for this listing");
+  assert.equal(ctx.pages().length, pagesBefore, "the tab already opened is reused");
+  s = await until("checkout F recorded", async () => ((await state(ids[F].lid)).checkout_opened ? state(ids[F].lid) : null));
+  assert.equal(Number(s.checkout_opened.price), 44);
+  log("→ Open checkout at €44:", JSON.stringify(out.text), `${out.ms} ms`, "| same tab, recorded at", s.checkout_opened.price);
+
+  // ...sold in the meantime: a warning, nothing clicked, the tab opened for it goes away.
+  ITEMS[G].sold = true;
+  await app.goto(`${APP}/deals/${ids[G].opp}`);
+  tabsNow = ctx.pages().length;
+  out = await clickFor(app, buyButton(app), /has been sold/);
+  log("first click, sold:", JSON.stringify(out.text));
+  await noDialog(app);
+  assert.ok(!vinted.checkouts.includes(G));
+  await until("sold tab closed", async () => ctx.pages().length === tabsNow, 5000);
+
+  // 13) The service worker stopped right before the click (the browser stops it when idle): the
+  // web app's buttons still work at the first click.
+  for (const p of ctx.pages()) if (p !== app) await p.close();
+  await app.goto(`${APP}/deals/${ids[H].opp}`);
+  await buyButton(app).waitFor({ timeout: 30000 });
+  await app.waitForFunction(() => document.documentElement.dataset.flipfinderExtension, null, { timeout: 10000 });
+  // Stopped through DevTools, as the browser does after 30 s idle: its status is followed there.
+  const cdp = await ctx.newCDPSession(app);
+  let swStatus = "running";
+  cdp.on("ServiceWorker.workerVersionUpdated", (e) => {
+    for (const v of e.versions) if (v.scriptURL.startsWith(`chrome-extension://${extId}/`)) swStatus = v.runningStatus;
+  });
+  await cdp.send("ServiceWorker.enable");
+  const stopWorker = async () => {
+    ctx.waitForEvent("serviceworker", { predicate: isExt, timeout: 60000 }).then((w) => (sw = w), () => {});
+    await cdp.send("ServiceWorker.stopAllWorkers");
+    for (const end = Date.now() + 5000; swStatus !== "stopped"; ) {
+      if (Date.now() > end) throw new Error(`service worker not stopped (${swStatus})`);
+      await new Promise((res) => setTimeout(res, 20));
+    }
+  };
+  await stopWorker();
+  let t0 = Date.now();
+  const [status] = await postRequests(app, [{ type: "ff:bridge-status", payload: {} }]); // no click needed to ask
+  log("worker stopped → bridge status:", JSON.stringify({ ok: status.ok, paired: status.paired }), `${Date.now() - t0} ms`);
+  assert.equal(status.ok, true);
+  assert.equal(status.paired, true);
+  await stopWorker();
+  out = await clickFor(app, buyButton(app), /Vinted checkout open/);
+  log("worker stopped → first-click buy:", JSON.stringify(out.text), `${out.ms} ms`);
+  await noDialog(app);
+  assert.equal(once(H), 1);
+  for (const p of ctx.pages()) if (p !== app) await p.close();
+  // ...and a FlipFinder page loaded while the worker is stopped gets its bridge.
+  await stopWorker();
+  await app.reload();
+  await app.waitForFunction(() => document.documentElement.dataset.flipfinderExtension, null, { timeout: 10000 });
+  await stopWorker();
+  const favH = vinted.favPosts.length;
+  out = await clickFor(app, app.getByRole("button", { name: "Add to Vinted favourites" }), "Added to your Vinted favourites.");
+  log("worker stopped → favourite:", JSON.stringify(out.text), `${out.ms} ms`);
+  assert.equal(vinted.fav.get(H), true);
+  assert.equal(vinted.favPosts.length, favH + 1, "exactly one click");
+  await cdp.detach();
   await ctx.close();
+
+  // 14) First click in a fresh browser: never on Vinted, FlipFinder already open when the
+  // extension gets its address and key (the bridge arrives without reloading the page).
+  const ctx2 = await chromium.launchPersistentContext(fs.mkdtempSync(path.join(os.tmpdir(), "ffprof-")), {
+    headless: false,
+    executablePath: process.env.CHROME_PATH || undefined,
+    args: [
+      "--headless=new", `--disable-extensions-except=${dir}`, `--load-extension=${dir}`, "--no-sandbox",
+      `--host-resolver-rules=MAP www.vinted.it:443 127.0.0.1:${port}, MAP images1.vinted.net:443 127.0.0.1:${port}`,
+      "--ignore-certificate-errors", "--no-proxy-server",
+    ],
+    viewport: { width: 1280, height: 900 },
+    ignoreHTTPSErrors: true,
+  });
+  await ctx2.addCookies((await api.storageState()).cookies);
+  const sw2 = ctx2.serviceWorkers().find(isExt) || (await ctx2.waitForEvent("serviceworker", { predicate: isExt }));
+  const app2 = ctx2.pages()[0] || (await ctx2.newPage());
+  current = app2;
+  await app2.goto(`${APP}/deals/${ids[J].opp}`);
+  await buyButton(app2).waitFor({ timeout: 30000 });
+  await sw2.evaluate(async ({ app, key }) => {
+    await chrome.storage.local.set({ apiKey: key });
+    await chrome.storage.sync.set({ options: { appUrl: app } });
+  }, { app: APP, key });
+  await app2.waitForFunction(() => document.documentElement.dataset.flipfinderExtension, null, { timeout: 10000 });
+  assert.ok(!ctx2.pages().some((p) => p.url().includes("vinted.it")), "never on Vinted in this browser");
+  out = await clickFor(app2, buyButton(app2), /Vinted checkout open/);
+  log("fresh browser → first-click buy:", JSON.stringify(out.text), `${out.ms} ms`);
+  await noDialog(app2);
+  assert.equal(once(J), 1);
+  out = await clickFor(app2, app2.getByRole("button", { name: "Add to Vinted favourites" }), "Added to your Vinted favourites.");
+  assert.equal(vinted.fav.get(J), true);
+  log("fresh browser → favourite:", JSON.stringify(out.text), `${out.ms} ms`);
+  await ctx2.close();
   server.close();
   console.log("OK actions e2e");
 })().catch(async (err) => {

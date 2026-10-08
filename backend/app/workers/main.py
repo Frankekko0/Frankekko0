@@ -23,6 +23,8 @@ from app.core.logging import configure_logging, get_logger
 from app.core.redis import close_redis
 from app.db.models import Brand
 from app.db.session import dispose_engine, session_scope, set_pool_limits
+from app.external.jobs import refresh_external_prices_task
+from app.market.jobs import sync_price_evidence_task
 from app.marketplace.registry import close_provider
 from app.workers import tasks
 from app.workers.queue import QUEUE_DEFAULT, QUEUE_HIGH, close_queue, redis_settings
@@ -47,6 +49,9 @@ def _functions() -> list[Any]:
         func(tasks.poll_email, keep_result=0, max_tries=1, timeout=300),
         func(tasks.clean_foreign_data_task, keep_result=0, max_tries=2, timeout=600),
         func(tasks.fit_price_calibration_task, keep_result=0, max_tries=2, timeout=900),
+        func(sync_price_evidence_task, keep_result=0, max_tries=2, timeout=900),
+        func(tasks.sync_price_evidence_full_task, keep_result=0, max_tries=2, timeout=900),
+        func(refresh_external_prices_task, keep_result=0, max_tries=1, timeout=900),
     ]
 
 
@@ -64,6 +69,14 @@ def _cron_jobs() -> list[Any]:
         cron(tasks.prune, hour=3, minute=17, second=0, timeout=300),
         cron(tasks.clean_foreign_data_task, hour=4, minute=41, second=0, run_at_startup=True, timeout=600),
         cron(tasks.fit_price_calibration_task, hour=5, minute=23, second=0, run_at_startup=True, timeout=900),
+        # Price evidence: incremental every 30 minutes and once at start (queued, the worker does
+        # not wait for it), in full every night. One run at a time (lock in the task).
+        cron(
+            sync_price_evidence_task, minute={4, 34}, second=30, run_at_startup=True, timeout=900, unique=True
+        ),
+        cron(tasks.sync_price_evidence_full_task, hour=2, minute=43, second=0, timeout=900, unique=True),
+        # External price references: hourly; the job itself keeps within the query budget.
+        cron(refresh_external_prices_task, minute=51, second=15, timeout=900, unique=True),
     ]
     if settings.marketplace_provider == "feed":  # no source configured: nothing to scan
         jobs.append(

@@ -1,6 +1,14 @@
 "use client";
 
-import { Dialog as RDialog, DropdownMenu as RMenu, Slider as RSlider, Switch as RSwitch, Tabs as RTabs, Tooltip as RTooltip } from "radix-ui";
+import {
+  Dialog as RDialog,
+  DropdownMenu as RMenu,
+  Slider as RSlider,
+  Switch as RSwitch,
+  Tabs as RTabs,
+  ToggleGroup as RToggleGroup,
+  Tooltip as RTooltip,
+} from "radix-ui";
 import { X } from "lucide-react";
 import { useState, type ComponentProps, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
@@ -92,6 +100,46 @@ export function TabsTrigger({ className, ...props }: ComponentProps<typeof RTabs
       )}
       {...props}
     />
+  );
+}
+
+/* ------------------------------------------------------- Segmented control */
+/**
+ * One choice among a few, styled like the tabs. For filters that change the content below
+ * (no tab panels): screen readers hear a group of options, arrow keys move between them, and
+ * the current choice can never be unselected.
+ */
+export function Segmented<T extends string>({
+  value,
+  onValueChange,
+  options,
+  label,
+  className,
+}: {
+  value: T;
+  onValueChange: (v: T) => void;
+  options: readonly { value: T; label: ReactNode }[];
+  label: string;
+  className?: string;
+}) {
+  return (
+    <RToggleGroup.Root
+      type="single"
+      value={value}
+      onValueChange={(v) => v && onValueChange(v as T)}
+      aria-label={label}
+      className={cn("scrollbar-none inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-xl bg-surface-2 p-1", className)}
+    >
+      {options.map((o) => (
+        <RToggleGroup.Item
+          key={o.value}
+          value={o.value}
+          className="rounded-lg px-3 py-1.5 text-[13px] font-medium whitespace-nowrap text-fg-2 transition-[background-color,color,box-shadow] duration-200 hover:text-fg data-[state=on]:bg-surface data-[state=on]:text-fg data-[state=on]:shadow-card"
+        >
+          {o.label}
+        </RToggleGroup.Item>
+      ))}
+    </RToggleGroup.Root>
   );
 }
 
@@ -195,12 +243,15 @@ export function RangeSlider({
         step={step}
         onValueChange={([v]) => setLocal(v ?? min)}
         onValueCommit={([v]) => onCommit(v ?? min)}
-        aria-label={label}
       >
         <RSlider.Track className="relative h-1.5 grow overflow-hidden rounded-full bg-surface-3">
           <RSlider.Range className="absolute h-full rounded-full bg-accent" />
         </RSlider.Track>
-        <RSlider.Thumb className="block size-[18px] rounded-full border-2 border-accent bg-surface shadow-card outline-none transition-transform duration-150 ease-[var(--ease-out)] hover:scale-110 active:scale-115 focus-visible:ring-4 focus-visible:ring-[var(--ring)]" />
+        <RSlider.Thumb
+          aria-label={label}
+          aria-valuetext={format(local)}
+          className="block size-[18px] rounded-full border-2 border-accent bg-surface shadow-card outline-none transition-transform duration-150 ease-[var(--ease-out)] hover:scale-110 active:scale-115 focus-visible:ring-4 focus-visible:ring-[var(--ring)]"
+        />
       </RSlider.Root>
     </div>
   );

@@ -15,6 +15,7 @@ from app.core.errors import install_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from app.core.redis import close_redis
+from app.core.timing import ServerTimingMiddleware
 from app.db.session import dispose_engine
 from app.marketplace.registry import close_provider
 from app.workers.queue import close_queue
@@ -58,6 +59,8 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
     install_exception_handlers(app)
+    # Innermost: times the handler of the endpoints the extension waits on (Server-Timing).
+    app.add_middleware(ServerTimingMiddleware)
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.add_middleware(
         CORSMiddleware,
@@ -65,6 +68,7 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Content-Type", "Authorization", "X-CSRF-Token", "X-Request-ID"],
+        expose_headers=["Server-Timing"],
     )
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(RequestContextMiddleware)

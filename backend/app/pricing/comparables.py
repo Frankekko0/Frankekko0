@@ -2,8 +2,10 @@
 
 The SQL layer pre-filters candidates by brand and parent category (indexed); this module
 scores each candidate against the subject on category, model, condition, size, title tokens,
-gender, color, material, market and vintage-ness, then weights it by recency and by whether it
-actually sold (realized prices beat asking prices).
+gender, color, material, market and vintage-ness, then weights it by recency and by the source of
+its price: concluded sales beat asking prices, and the user's own resales beat everything
+(``SOURCE_WEIGHTS``). Besides marketplace listings, the pool may hold the user's own purchases
+and resales and prices found on other marketplaces (``app.pricing.evidence``).
 """
 
 from __future__ import annotations
@@ -42,7 +44,21 @@ SIMILARITY_WEIGHTS: dict[str, float] = {
     "country": 0.03,
     "vintage": 0.02,
 }
-SOLD_WEIGHT_BONUS = 1.5
+# Weight of a comparable by where its price comes from (replaces a single "sold" bonus): the
+# user's resales (price really received) count most; a purchase (price really paid, but the user
+# buys below market) and a Vinted sale (last price seen) as one concluded sale; a sale reported by
+# another marketplace a little less; asking prices least, other marketplaces' asks half of
+# Vinted's. Asking prices are further scaled by the active factor in ``estimate_market_value``.
+SOURCE_WEIGHTS: dict[str, float] = {
+    "own_sale": 5.0,
+    "own_purchase": 1.5,
+    "vinted_sold": 1.5,
+    "external_sold": 1.0,
+    "vinted_asking": 1.0,
+    "external_asking": 0.5,
+}
+SALE_SOURCES = ("own_sale", "own_purchase", "vinted_sold", "external_sold")
+ASK_SOURCES = ("vinted_asking", "external_asking")
 RECENCY_DECAY_DAYS = 75.0
 MIN_SIMILARITY = 0.5
 MAX_COMPARABLES = 60
@@ -74,6 +90,12 @@ class ItemProfile:
     url: str | None = None
     favourite_count: int | None = None
     tracked: bool = False  # followed by the user (its selling time is observed first hand)
+    # Where the price comes from: "listing" (a marketplace listing, sold or on sale), "own_sale",
+    # "own_purchase", "external_sold" or "external_asking" (see ``evidence_source``).
+    source: str = "listing"
+    source_name: str | None = None  # "vinted", "tracking", "ebay.it", ...
+    ref_id: int | None = None  # sold_sales.id (own records) or external_prices.id (external rows)
+    linked_listing_id: uuid.UUID | None = None  # the listing an own purchase was bought from
 
     @property
     def is_sold(self) -> bool:
@@ -96,6 +118,13 @@ class ScoredComparable:
     @property
     def is_sold(self) -> bool:
         return self.item.is_sold
+
+
+def evidence_source(item: ItemProfile) -> str:
+    """One of ``SOURCE_WEIGHTS``: a listing is a Vinted sale when sold, an asking price otherwise."""
+    if item.source == "listing":
+        return "vinted_sold" if item.status == "sold" else "vinted_asking"
+    return item.source
 
 
 def _condition_rank(value: str) -> int | None:
@@ -240,7 +269,7 @@ def select_comparables(
         observed = cand.observed_at() or now
         age_days = max(0.0, (now - observed).total_seconds() / 86400)
         weight = (
-            sim**2 * math.exp(-age_days / RECENCY_DECAY_DAYS) * (SOLD_WEIGHT_BONUS if cand.is_sold else 1.0)
+            sim**2 * math.exp(-age_days / RECENCY_DECAY_DAYS) * SOURCE_WEIGHTS.get(evidence_source(cand), 1.0)
         )
         scored.append(
             ScoredComparable(

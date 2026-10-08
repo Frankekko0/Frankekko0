@@ -16,11 +16,19 @@ from sqlalchemy import func, select
 
 from app.acquisition.identity import listing_identity
 from app.ai.nl_search import NaturalLanguageParser
+from app.api.capture_pipeline import (
+    CapturePipeline,
+    analysis_needed,
+    changes_market,
+    inputs_before,
+    prepare_pools,
+)
 from app.api.deps import DB, CurrentUser, Economics
 from app.core.cache import NS_FEED, cache
 from app.core.errors import InsufficientDataError, NotFoundError
 from app.core.rate_limit import RateLimit
 from app.core.serialization import jsonable
+from app.core.timing import measure_analysis
 from app.db.models import Brand, Category, Listing, ListingImage, Opportunity
 from app.domain.enums import AcquisitionMode, CaptureLevel, ListingStatus
 from app.identification.engine import ListingText
@@ -224,13 +232,20 @@ def manual_to_provider(
 
 
 async def persist_observations(
-    db: DB, listings: list[ProviderListing], mode: AcquisitionMode, track: bool | None = None
+    db: DB,
+    listings: list[ProviderListing],
+    mode: AcquisitionMode,
+    track: bool | None = None,
+    reuse_recent: bool = False,
 ) -> tuple[IngestResult, list[Any]]:
     """Store observations (grouped by provider) and analyse every listing they touch.
 
     Nothing is analysed without being saved: the listing, a snapshot of what was seen and the
-    analysis with its algorithm version and acquisition mode.
+    analysis with its algorithm version and acquisition mode. ``reuse_recent`` (extension
+    captures): unchanged listings with a recent analysis keep it, and the comparables pools are
+    shared across requests (see ``app.api.capture_pipeline``).
     """
+    before = await inputs_before(db, listings) if reuse_recent else {}
     by_provider: dict[str, list[ProviderListing]] = {}
     for pl in listings:
         by_provider.setdefault(listing_identity(pl.url)[0], []).append(pl)
@@ -245,8 +260,15 @@ async def persist_observations(
         merged.enriched_ids += res.enriched_ids
         merged.status_updates |= res.status_updates
         merged.ids_by_external |= res.ids_by_external
-    ids = list(dict.fromkeys([*merged.new_ids, *merged.updated_ids]))
-    outcomes = await AnalysisPipeline(db).analyze_many(ids, mode=mode)
+    if reuse_recent:
+        shared = await prepare_pools(db, changes_market(merged, listings))
+        ids = await analysis_needed(db, merged, before)
+        pipeline: AnalysisPipeline = CapturePipeline(db, share_pools=shared)
+    else:
+        ids = list(dict.fromkeys([*merged.new_ids, *merged.updated_ids]))
+        pipeline = AnalysisPipeline(db)
+    with measure_analysis():
+        outcomes = await pipeline.analyze_many(ids, mode=mode)
     return merged, outcomes
 
 

@@ -55,6 +55,13 @@ class Case:
     optimistic: float | None
     n_used: int
     confidence: int
+    # Evidence backtest: "vinted" (a sold listing) or "own_sale" (the user's resale), and how
+    # much extra evidence entered the estimate.
+    kind: str = "vinted"
+    n_external: int = 0
+    n_own_purchase: int = 0
+    n_own_sale: int = 0
+    capped: bool = False
 
 
 @dataclass
@@ -203,18 +210,15 @@ def production_estimator(
     return price_estimate(subject, candidates, now, prior)[2]
 
 
-def run_backtest(
-    rows: list[Row],
-    catalog: Catalog,
-    estimator: Estimator = baseline_estimator,
-    max_subjects: int = 1500,
-    window_days: int = 120,
-    since: datetime | None = None,
-) -> list[Case]:
-    """Estimate every sold subject (sold after ``since``) from what was known at its publication."""
+def by_brand_index(rows: list[Row]) -> dict[int | None, list[Row]]:
     by_brand: dict[int | None, list[Row]] = defaultdict(list)
     for r in rows:
         by_brand[r.brand_id].append(r)
+    return by_brand
+
+
+def sold_subjects(rows: list[Row], max_subjects: int, since: datetime | None = None) -> list[Row]:
+    """Sold listings to re-estimate, oldest sale first, evenly sampled down to ``max_subjects``."""
     subjects = [
         r
         for r in rows
@@ -228,49 +232,95 @@ def run_backtest(
     if len(subjects) > max_subjects:
         step = len(subjects) / max_subjects
         subjects = [subjects[int(i * step)] for i in range(max_subjects)]
-    cases: list[Case] = []
+    return subjects
+
+
+def known_at(
+    by_brand: dict[int | None, list[Row]],
+    catalog: Catalog,
+    brand_id: int | None,
+    category: str | None,
+    cutoff: datetime,
+    window_days: int = 120,
+    exclude: Row | None = None,
+) -> tuple[list[ItemProfile], SegmentPrior | None]:
+    """The comparable candidates (as they looked at ``cutoff``) and the segment reference known
+    then: the same quotas of recent sold and on-sale listings as production."""
     half = CANDIDATE_LIMIT // 2
-    for s in subjects:
+    siblings = set(catalog.sibling_category_ids(category) or [])
+    horizon = cutoff - timedelta(days=window_days)
+    known: list[ItemProfile] = []
+    for c in by_brand.get(brand_id, []):
+        if c is exclude or (siblings and c.category_id not in siblings):
+            continue
+        seen = _as_of(c.profile, cutoff)
+        if seen is None:
+            continue
+        event = seen.sold_at or seen.removed_at or seen.published_at
+        if event is None or event < horizon:
+            continue
+        known.append(seen)
+    sold = sorted((k for k in known if k.status == "sold"), key=lambda k: k.sold_at or cutoff, reverse=True)[
+        :half
+    ]
+    active = sorted(
+        (k for k in known if k.status == "active"), key=lambda k: k.published_at or cutoff, reverse=True
+    )[:half]
+    prior = _prior_at([k for k in known if k.category == category])
+    return [*sold, *active], prior
+
+
+def case_of(
+    est: MarketEstimate,
+    *,
+    listing_id: Any,
+    segment: tuple[str | None, str | None],
+    condition: str | None,
+    sold_at: datetime,
+    realized: float,
+    **extra: Any,
+) -> Case:
+    return Case(
+        listing_id=listing_id,
+        segment=segment,
+        condition=condition,
+        sold_at=sold_at,
+        realized=realized,
+        expected=float(est.expected_sale_price) if est.expected_sale_price is not None else None,
+        quick=float(est.quick_sale_price) if est.quick_sale_price is not None else None,
+        optimistic=float(est.optimistic_sale_price) if est.optimistic_sale_price is not None else None,
+        n_used=est.n_used,
+        confidence=est.confidence,
+        **extra,
+    )
+
+
+def run_backtest(
+    rows: list[Row],
+    catalog: Catalog,
+    estimator: Estimator = baseline_estimator,
+    max_subjects: int = 1500,
+    window_days: int = 120,
+    since: datetime | None = None,
+) -> list[Case]:
+    """Estimate every sold subject (sold after ``since``) from what was known at its publication."""
+    by_brand = by_brand_index(rows)
+    cases: list[Case] = []
+    for s in sold_subjects(rows, max_subjects, since):
         p = s.profile
         assert p.published_at is not None and p.sold_at is not None
         cutoff: datetime = p.published_at + timedelta(hours=1)
-        siblings = set(catalog.sibling_category_ids(p.category) or [])
-        horizon = cutoff - timedelta(days=window_days)
-        known: list[ItemProfile] = []
-        for c in by_brand[s.brand_id]:
-            if c is s or (siblings and c.category_id not in siblings):
-                continue
-            seen = _as_of(c.profile, cutoff)
-            if seen is None:
-                continue
-            event = seen.sold_at or seen.removed_at or seen.published_at
-            if event is None or event < horizon:
-                continue
-            known.append(seen)
-        sold = sorted(
-            (k for k in known if k.status == "sold"), key=lambda k: k.sold_at or cutoff, reverse=True
-        )[:half]
-        active = sorted(
-            (k for k in known if k.status == "active"), key=lambda k: k.published_at or cutoff, reverse=True
-        )[:half]
-        same_cat = [k for k in known if k.category == p.category]
-        prior = _prior_at(same_cat)
+        candidates, prior = known_at(by_brand, catalog, s.brand_id, p.category, cutoff, window_days, s)
         subject = ItemProfile(**{**p.__dict__, "status": "active", "sold_at": None, "last_seen_at": cutoff})
-        est = estimator(subject, [*sold, *active], cutoff, prior)
+        est = estimator(subject, candidates, cutoff, prior)
         cases.append(
-            Case(
-                listing_id=p.id,  # type: ignore[arg-type]
+            case_of(
+                est,
+                listing_id=p.id,
                 segment=(p.brand, p.category),
                 condition=p.condition,
                 sold_at=p.sold_at,
                 realized=s.realized,  # type: ignore[arg-type]
-                expected=float(est.expected_sale_price) if est.expected_sale_price is not None else None,
-                quick=float(est.quick_sale_price) if est.quick_sale_price is not None else None,
-                optimistic=float(est.optimistic_sale_price)
-                if est.optimistic_sale_price is not None
-                else None,
-                n_used=est.n_used,
-                confidence=est.confidence,
             )
         )
     return cases

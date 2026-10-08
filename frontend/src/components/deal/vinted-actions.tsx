@@ -27,13 +27,20 @@ interface VintedState {
 
 const STATUS_LABEL: Record<string, string> = { sold: "sold", reserved: "reserved for another buyer", removed: "removed by the seller" };
 
+/** After Buy: the old extension's check (two steps), or a price that changed since the analysis. */
+interface BuyDialog {
+  kind: "checked" | "price_changed";
+  result: VintedResult;
+}
+
 export function useVintedState(listingId: string) {
   return useQuery({ queryKey: ["vinted", listingId], queryFn: () => api<VintedState>(`/listings/${listingId}/vinted`), refetchInterval: 30_000 });
 }
 
 /**
  * Vinted favourite and Buy, done by the FlipFinder extension in your Vinted session: one click,
- * one action. The payment is always confirmed by you on Vinted.
+ * one action (Buy opens Vinted's checkout when the item is still on sale at the analysed price).
+ * The payment is always confirmed by you on Vinted.
  */
 export function VintedActions({
   listingId,
@@ -53,8 +60,8 @@ export function VintedActions({
   const bridge = useExtensionBridge();
   const state = useVintedState(listingId);
   const qc = useQueryClient();
-  const [busy, setBusy] = useState<"favourite" | "check" | "open" | null>(null);
-  const [check, setCheck] = useState<VintedResult | null>(null);
+  const [busy, setBusy] = useState<"favourite" | "buy" | "open" | null>(null);
+  const [dialog, setDialog] = useState<BuyDialog | null>(null);
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ["vinted", listingId] });
     void qc.invalidateQueries({ queryKey: qk.flips });
@@ -67,38 +74,75 @@ export function VintedActions({
     toast.error(explain(r));
   }
 
-  async function onFavourite() {
-    if (notReady) return toast.error(BRIDGE_HELP[bridge.status as "absent" | "unpaired"]);
-    setBusy("favourite");
-    const r = await bridge.act("ff:vinted-favourite", { vid: vintedId!, url, want: !fav });
-    setBusy(null);
-    if (!r.ok) return warn(r);
-    toast.success(r.favourite ? "Added to your Vinted favourites." : "Removed from your Vinted favourites.");
-    refresh();
+  /** The bridge may answer late (extension asleep, loaded after the page): ask again before refusing. */
+  async function ready(): Promise<boolean> {
+    const s = await bridge.ensureReady();
+    if (s === "ready") return true;
+    toast.error(BRIDGE_HELP[s]);
+    return false;
   }
 
-  async function onCheck() {
-    if (notReady) return toast.error(BRIDGE_HELP[bridge.status as "absent" | "unpaired"]);
-    setBusy("check");
-    const r = await bridge.act("ff:vinted-buy-check", { vid: vintedId!, url });
-    setBusy(null);
-    if (!r.ok) return warn(r);
-    if (r.signedIn === false) return warn({ ok: false, code: "signed_out" });
-    setCheck(r);
+  async function onFavourite() {
+    setBusy("favourite");
+    try {
+      if (!(await ready())) return;
+      const r = await bridge.act("ff:vinted-favourite", { vid: vintedId!, url, want: !fav });
+      if (!r.ok) return warn(r);
+      toast.success(r.favourite ? "Added to your Vinted favourites." : "Removed from your Vinted favourites.");
+      refresh();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** One click: the extension opens the item, checks price and availability and presses Buy. */
+  async function onBuy() {
+    setBusy("buy");
+    try {
+      if (!(await ready())) return;
+      const out = await bridge.buy({ vid: vintedId!, url, price });
+      switch (out.kind) {
+        case "opened":
+          toast.success(
+            `Vinted checkout open${out.result.price != null ? ` at ${eur(out.result.price)}` : ""}: review it and confirm the payment yourself on Vinted.`,
+          );
+          refresh();
+          return;
+        case "price_changed":
+          setDialog({ kind: "price_changed", result: { ...out.result, price: out.price } });
+          return;
+        case "checked":
+          setDialog({ kind: "checked", result: out.result });
+          return;
+        case "unavailable":
+          warn(out.result);
+          refresh();
+          return;
+        default:
+          warn(out.result);
+      }
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function onOpen() {
     setBusy("open");
-    const r = await bridge.act("ff:vinted-buy-open", { vid: vintedId!, url });
+    // The price you are shown in the dialog: Buy is pressed only if it is still the price on Vinted.
+    const expect = dialog?.result.price ?? price;
+    const r = await bridge.act("ff:vinted-buy-open", { vid: vintedId!, url, ...(typeof expect === "number" && expect > 0 ? { expect_price: expect } : {}) });
     setBusy(null);
-    setCheck(null);
+    setDialog(null);
     if (!r.ok) return warn(r);
     toast.success("Vinted checkout open: review it and confirm the payment yourself on Vinted.");
     refresh();
   }
 
-  const unavailable = check && check.status && check.status !== "active";
-  const priceChanged = check && !unavailable && check.price != null && Math.abs(check.price - price) >= 0.01;
+  const check = dialog?.result ?? null;
+  const unavailable = dialog?.kind === "checked" && Boolean(check?.status) && check?.status !== "active";
+  const newPrice = check?.price ?? null;
+  const priceChanged =
+    dialog?.kind === "price_changed" || (dialog?.kind === "checked" && !unavailable && newPrice != null && Math.abs(newPrice - price) >= 0.01);
   const purchased = state.data?.purchased;
   const started = state.data?.checkout_opened;
 
@@ -106,11 +150,11 @@ export function VintedActions({
     <div className={cn("space-y-2", className)}>
       <div className={cn("grid gap-2", showFavourite ? "grid-cols-2" : "grid-cols-1")}>
         {showFavourite && (
-          <Button variant="outline" size="sm" onClick={onFavourite} loading={busy === "favourite"} disabled={busy !== null} aria-pressed={fav === true}>
+          <Button variant="outline" size="sm" className="h-auto min-h-8 py-1.5 leading-tight whitespace-normal" onClick={onFavourite} loading={busy === "favourite"} disabled={busy !== null} aria-pressed={fav === true}>
             <Heart className={fav ? "fill-danger text-danger" : ""} /> {fav ? "In Vinted favourites" : "Add to Vinted favourites"}
           </Button>
         )}
-        <Button size="sm" onClick={onCheck} loading={busy === "check"} disabled={busy !== null || Boolean(purchased)}>
+        <Button size="sm" className="h-auto min-h-8 py-1.5 leading-tight whitespace-normal" onClick={onBuy} loading={busy === "buy"} disabled={busy !== null || Boolean(purchased)}>
           <ShoppingCart /> {purchased ? "Bought" : "Buy on Vinted"}
         </Button>
       </div>
@@ -127,8 +171,15 @@ export function VintedActions({
         </p>
       )}
 
-      <Dialog open={check !== null} onOpenChange={(o) => !o && setCheck(null)}>
-        <DialogContent title="Buy on Vinted" description="Checked just now on the listing page, in your Vinted session.">
+      <Dialog open={dialog !== null} onOpenChange={(o) => !o && setDialog(null)}>
+        <DialogContent
+          title="Buy on Vinted"
+          description={
+            dialog?.kind === "price_changed"
+              ? "Checked just now on the listing page, in your Vinted session: nothing was clicked."
+              : "Checked just now on the listing page, in your Vinted session."
+          }
+        >
           <div className="space-y-4 px-5 py-4 text-[14px]">
             {unavailable ? (
               <p className="flex gap-2 rounded-xl bg-danger-soft p-3 text-danger">
@@ -139,20 +190,27 @@ export function VintedActions({
               <p className="flex gap-2 rounded-xl bg-warning-soft p-3 text-warning">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                 <span>
-                  Price changed: {eur(price)} → <strong>{eur(check!.price)}</strong>. The analysis was made at the old price: check the margin before buying.
+                  {newPrice != null ? (
+                    <>
+                      Price changed: {eur(price)} → <strong>{eur(newPrice)}</strong>.
+                    </>
+                  ) : (
+                    <>The price changed on Vinted.</>
+                  )}{" "}
+                  The analysis was made at {eur(price)}: check the margin before buying.
                 </span>
               </p>
             ) : (
-              <p className="rounded-xl bg-success-soft p-3 text-success">Available at {eur(check?.price ?? price)}, same price as analysed.</p>
+              <p className="rounded-xl bg-success-soft p-3 text-success">Available at {eur(newPrice ?? price)}, same price as analysed.</p>
             )}
             <p className="text-fg-2">The next click opens Vinted&apos;s checkout in the tab just opened. Nothing is paid until you confirm on Vinted.</p>
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setCheck(null)}>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="ghost" onClick={() => setDialog(null)}>
                 Cancel
               </Button>
               {!unavailable && (
                 <Button onClick={onOpen} loading={busy === "open"}>
-                  <ShoppingCart /> {priceChanged ? `Open checkout at ${eur(check!.price)}` : "Open checkout"}
+                  <ShoppingCart /> {priceChanged && newPrice != null ? `Open checkout at ${eur(newPrice)}` : "Open checkout"}
                 </Button>
               )}
             </div>

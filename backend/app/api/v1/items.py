@@ -215,7 +215,11 @@ async def item_detail(ref: str, user: CurrentUser, db: DB) -> ItemDetailOut:
         ),
         snapshots=[SnapshotOut.model_validate(s) for s in snapshots],
         attempts=[AttemptOut.model_validate(a) for a in attempts],
-        analysis=analysis_summary(opp, listing) if opp else None,
+        analysis=(
+            {**analysis_summary(opp, listing), "provenance": (opp.score_breakdown or {}).get("provenance")}
+            if opp
+            else None
+        ),
     )
 
 

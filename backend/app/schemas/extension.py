@@ -116,3 +116,48 @@ class RefreshResultIn(BaseModel):
     outcome: Literal["not_found", "blocked", "error"]
     http_status: int | None = Field(default=None, ge=100, le=599)
     message: str | None = Field(default=None, max_length=300)
+
+
+MAX_PAGE_STATS_ITEMS = 120
+
+
+class PageStatsItem(BaseModel):
+    """A card as the search page shows it (brand, size and condition labels as printed)."""
+
+    vinted_id: str = Field(pattern=r"^\d{1,20}$")
+    title: str = Field(default="", max_length=300)
+    brand: str | None = Field(default=None, max_length=120)
+    size: str | None = Field(default=None, max_length=60)
+    condition: str | None = Field(default=None, max_length=60)
+
+
+class PageStatsIn(BaseModel):
+    items: list[PageStatsItem] = Field(min_length=1, max_length=MAX_PAGE_STATS_ITEMS)
+
+
+class PageStat(BaseModel):
+    """Pre-computed price statistics of the most specific segment with data (``model_price_stats``)."""
+
+    segment: str
+    level: Literal["model_size_condition", "model_condition", "model_size", "model", "brand_category"]
+    basis: Literal["sold", "asking"]
+    median: float
+    low: float
+    high: float
+    n_sales: int
+    n_own: int
+    n_vinted_sold: int
+    n_external_sold: int
+    n_asking: int
+    days: float | None
+    sell_through: float | None
+    new_price: float | None
+    model: str | None
+    brand: str | None
+    category: str | None
+
+
+class PageStatsOut(BaseModel):
+    generated_at: datetime
+    # Vinted id -> statistics; items without data are omitted.
+    stats: dict[str, PageStat]

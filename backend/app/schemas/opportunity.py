@@ -260,6 +260,9 @@ class OpportunityDetail(Schema):
     time_online: dict[str, Any] | None = None
     # Resale range, P(sale), authenticity, demand/seller/condition detail, pillars and reason.
     insights: dict[str, Any] | None = None
+    # Where every number comes from (expected price, range, days to sell, P(sale), new price,
+    # real sales behind the estimate, external references): ``score_breakdown["provenance"]``.
+    provenance: dict[str, Any] | None = None
 
 
 class FavoriteStateIn(Schema):

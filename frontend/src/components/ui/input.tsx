@@ -34,11 +34,21 @@ export function Label({ className, ...props }: LabelHTMLAttributes<HTMLLabelElem
   return <label className={cn("mb-1.5 block text-[13px] font-medium text-fg-2", className)} {...props} />;
 }
 
+/** A labelled control. Without `htmlFor` the label wraps the control, so it is still named. */
 export function Field({ label, hint, children, htmlFor }: { label: string; hint?: string; children: React.ReactNode; htmlFor?: string }) {
   return (
     <div>
-      <Label htmlFor={htmlFor}>{label}</Label>
-      {children}
+      {htmlFor ? (
+        <>
+          <Label htmlFor={htmlFor}>{label}</Label>
+          {children}
+        </>
+      ) : (
+        <label className="block">
+          <span className="mb-1.5 block text-[13px] font-medium text-fg-2">{label}</span>
+          {children}
+        </label>
+      )}
       {hint && <p className="mt-1 text-xs text-fg-3">{hint}</p>}
     </div>
   );
@@ -47,9 +57,9 @@ export function Field({ label, hint, children, htmlFor }: { label: string; hint?
 export function InputAffix({ prefix, suffix, ...props }: InputHTMLAttributes<HTMLInputElement> & { prefix?: string; suffix?: string }) {
   return (
     <div className="relative">
-      {prefix && <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-fg-3">{prefix}</span>}
+      {prefix && <span aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-fg-3">{prefix}</span>}
       <Input {...props} className={cn(prefix && "pl-7", suffix && "pr-9", props.className)} />
-      {suffix && <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-fg-3">{suffix}</span>}
+      {suffix && <span aria-hidden className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-fg-3">{suffix}</span>}
     </div>
   );
 }

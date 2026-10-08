@@ -40,6 +40,8 @@ class SegmentPrior:
     ask_to_sale_ratio: float | None = None
     sell_through_rate: float | None = None
     avg_days_to_sale: float | None = None
+    # Which segment answered: "model" (brand x category x model) or "brand_category".
+    level: str | None = None
 
 
 @dataclass

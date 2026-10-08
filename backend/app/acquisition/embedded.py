@@ -5,8 +5,11 @@ gallery), its seller, the signed-in user (with *their* profile photo), suggested
 their photos)... Searching the page text for ``"full_size_url"`` or ``"favourite_count"`` picks
 values from any of them - that is how a profile photo ended up among an item's photos.
 
-Here the item object is located by its id and parsed; only its own fields are read. The same
-algorithm runs in the browser extension (``extension/src/parse.js``), tested on the same pages.
+Here the item object is located by its id and parsed; only its own fields are read. The current
+layout also describes the item in page sections ("plugins": seller header, favourites, status
+banner, buy actions) whose data carries the item's id: those are read only when that id matches.
+The same algorithm runs in the browser extension (``extension/src/parse.js``), tested on the
+same pages.
 
 The JSON may be nested inside JavaScript strings (Next.js flight chunks
 ``self.__next_f.push([1,"..."])``), i.e. escaped once or more: the reader decodes the flight
@@ -206,6 +209,50 @@ def find_item(
             if any(k in obj for k in [*photos_keys, *markers]):
                 return obj
     return None
+
+
+def find_plugins(
+    scripts: list[str],
+    vinted_id: str,
+    names: list[str],
+    name_keys: list[str],
+    data_keys: list[str],
+    id_keys: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Data of the page sections ("plugins") of item ``vinted_id``, by plugin name.
+
+    The current item page describes the item in sections such as
+    ``{"data": {"item_id": "...", ...}, "name": "user_info_header", ...}``. A section is read only
+    when its data carries the item's own id, so sections of other items (suggested items, other
+    members' wardrobes) are never taken. The first section of each name wins."""
+    out: dict[str, dict[str, Any]] = {}
+    if not vinted_id or not vinted_id.isdigit() or not names:
+        return out
+    alternatives = "|".join(re.escape(n) for n in names)
+    for text in payload_texts(scripts):
+        if vinted_id not in text:
+            continue
+        for name_key in name_keys:
+            rx = re.compile(r'(\\*)"' + re.escape(name_key) + r'\1"\s*:\s*\1"(' + alternatives + r')\1"')
+            for m in rx.finditer(text):
+                name = m.group(2)
+                q = len(m.group(1))
+                if name in out or (q + 1) & q:
+                    continue
+                reader = _Reader(text, q)
+                start = reader.enclosing_object(m.start())
+                if start is None:
+                    continue
+                try:
+                    obj, _ = reader.value(start)
+                except (ValueError, IndexError, RecursionError):
+                    continue
+                if not isinstance(obj, dict) or obj.get(name_key) != name:
+                    continue
+                data = next((obj[k] for k in data_keys if isinstance(obj.get(k), dict)), None)
+                if data is not None and str(pick(data, id_keys)) == vinted_id:
+                    out[name] = data
+    return out
 
 
 def profile_photo_urls(scripts: list[str], photo_keys: list[str], url_keys: list[str]) -> set[str]:

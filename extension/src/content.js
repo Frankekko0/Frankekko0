@@ -55,6 +55,40 @@
   const registered = new WeakSet();
   const pendingCards = new Map(); // vid -> payload (to send)
   const deepState = new Map(); // vid -> reading | paused | error message
+  // This page's progress (per search; what was sent is never sent again): what went to FlipFinder, what came back, and
+  // the timings exposed on <html> for measurement (data-ff-* attributes, ff:* marks).
+  const page = {
+    firstSent: false, // the best cards went out (the first, small capture request)
+    sent: new Set(), // vids sent for the full analysis
+    statsAsked: new Set(), // vids sent for the page statistics
+    stats: new Map(), // vid -> page statistics
+    visible: new Set(), // vids at least half on screen
+    order: 0, // cards registered, in page order
+    timing: { read_ms: 0, scan_ms: 0, cards: 0, requests: [] },
+  };
+  const html = document.documentElement;
+  /** What identifies a list of results: the path and the search text and filters (not paging tokens). */
+  function searchOf(href) {
+    try {
+      const u = new URL(href);
+      const keep = [...u.searchParams].filter(([k]) => !/^(time|search_id|search_session_id|referrer)$/.test(k)).sort();
+      return `${u.pathname}?${new URLSearchParams(keep)}`;
+    } catch {
+      return href;
+    }
+  }
+  page.search = searchOf(location.href);
+  const markOnce = (name) => {
+    if (html.hasAttribute(`data-ff-${name}-ms`)) return;
+    mark(name);
+    html.setAttribute(`data-ff-${name}-ms`, String(Math.round(performance.now())));
+  };
+  function addTiming(t) {
+    if (!t) return;
+    page.timing.requests.push({ ...t, at: Math.round(performance.now()) });
+    if (page.timing.requests.length > 40) page.timing.requests.shift();
+    html.setAttribute("data-ff-timing", JSON.stringify(page.timing));
+  }
 
   // ------------------------------------------------------------------ live page collection
   /** The parser's input from the live page (the same structure collectHtml builds). */
@@ -124,12 +158,7 @@
     });
     const desc = main.querySelector(S.description);
     if (desc) c.description = desc.innerText || desc.textContent || "";
-    const fav = main.querySelector(S.favourite_count);
-    if (fav) c.favourites = fav.getAttribute("aria-label") || text(fav);
-    main.querySelectorAll(S.status_badges).forEach((el) => {
-      const t = text(el);
-      if (t && t.length <= 40) c.statusTexts.push(t);
-    });
+    collectItemElements(c);
     const rating = main.querySelector(S.seller_rating);
     if (rating) c.sellerRating = rating.getAttribute("aria-label") || text(rating);
     const reviews = main.querySelector(S.seller_reviews);
@@ -139,6 +168,48 @@
       if (t) c.breadcrumbs.push(t);
     });
     return c;
+  }
+
+  /**
+   * The item's favourite button, total price and status badges on the live page, read by
+   * data-testid exactly as the server reads them from the HTML (item_dom in the configuration):
+   * never inside another item's card or the site header/nav/footer. The status badges are the
+   * item's own status element and the short texts right before the item's summary in its
+   * sidebar ("Venduto", "Riservato"); a "Venduto" elsewhere (a title, a suggested item) is no sale.
+   */
+  function collectItemElements(c) {
+    const dom = P.itemDomConfig(C);
+    const anyOf = (ids) => (ids.length ? [...document.querySelectorAll(ids.map((id) => `[data-testid="${CSS.escape(id)}"]`).join(", "))] : []);
+    const exclude = ["header", "nav", "footer", ...dom.exclude_testid_prefixes.map((p) => `[data-testid^="${CSS.escape(p)}"]`)].join(", ");
+    const own = (el) => !el.closest(exclude);
+    const max = Number(dom.badge_max_length);
+    const short = (t) => Boolean(t) && [...t].length <= max;
+    for (const el of anyOf(dom.favourite_testids).filter(own)) {
+      const label = el.getAttribute("aria-label") || "";
+      const value = /\d/.test(label) ? label : /\d/.test(text(el)) ? text(el) : null;
+      if (value !== null) {
+        c.favourites = value;
+        break;
+      }
+    }
+    const total = anyOf(dom.total_price_testids).find((el) => own(el) && text(el));
+    if (total) c.totalPrice = text(total);
+    for (const el of anyOf(dom.status_testids).filter(own)) if (short(text(el))) c.statusTexts.push(text(el));
+    const summary = anyOf(dom.summary_testids).find(own);
+    const zoneSel = [...dom.zone_tags, ...dom.zone_id_prefixes.map((p) => `[id^="${CSS.escape(p)}"]`)].join(", ");
+    const zone = summary && zoneSel && summary.parentElement ? summary.parentElement.closest(zoneSel) : null;
+    if (!zone) return;
+    const badges = [];
+    const walker = document.createTreeWalker(zone, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.parentElement && n.parentElement.closest("script, style, noscript, template, svg") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    });
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (summary.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) break; // the summary and after
+      const t = (node.textContent || "").replace(/\s+/g, " ").trim();
+      if (short(t) && node.parentElement && own(node.parentElement)) badges.push(t);
+    }
+    c.statusTexts.push(...badges.slice(-3));
   }
 
   /** Page scripts describe the first item opened; after client-side navigation only the
@@ -161,12 +232,13 @@
   const io = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
+        const vid0 = entry.target.getAttribute("data-ff-vid");
+        if (vid0) entry.isIntersecting ? page.visible.add(vid0) : page.visible.delete(vid0);
         if (!entry.isIntersecting) continue;
-        const vid = entry.target.getAttribute("data-ff-vid");
+        const vid = vid0;
         const card = vid && cards.get(vid);
         if (!card || card.captured) continue;
         card.captured = true;
-        io.unobserve(entry.target);
         idle(() => captureCard(vid, card));
       }
     },
@@ -183,7 +255,7 @@
       drawBadge(vid, { unreadable: true });
       return;
     }
-    if (!opts.captureCards) return;
+    if (!opts.captureCards || page.sent.has(vid)) return;
     pendingCards.set(vid, payload);
     if (!verdict(vid)) drawBadge(vid, null);
     card.quicked = false; // read late (lazy content): instant verdict now
@@ -193,13 +265,104 @@
 
   const quickSoon = debounce(() => quickPass(), 80);
 
-  const flushCards = debounce(() => {
+  // ------------------------------------------------------------------ full analysis, best first
+  // The value a card is sent for: its instant verdict (risk-adjusted profit), unknown ones last.
+  function valueOf(vid) {
+    const v = verdict(vid);
+    return v && !v.insufficient && typeof v.risk_adjusted_profit === "number" ? v.risk_adjusted_profit : -1e9;
+  }
+  const onScreen = (vid) => page.visible.has(vid) || (!page.visible.size && (cards.get(vid)?.order ?? 99) < 12);
+
+  /** The first request: the best instant verdicts and the cards on screen, at most 12. */
+  function firstWave(keys) {
+    const vids = [...keys]; // page order (an iterator can be walked only once)
+    const byValue = [...vids].sort((a, b) => valueOf(b) - valueOf(a));
+    const pick = new Set(byValue.filter((v) => valueOf(v) > 0).slice(0, 6));
+    for (const v of vids) if (pick.size < 12 && onScreen(v)) pick.add(v);
+    for (const v of byValue) if (pick.size < 12) pick.add(v);
+    return [...pick];
+  }
+  const restOrder = (vids) => [...vids].sort((a, b) => onScreen(b) - onScreen(a) || valueOf(b) - valueOf(a));
+
+  function postCards(vids, first) {
+    for (let i = 0; i < vids.length; i += 120) {
+      const chunk = vids.slice(i, i + 120).filter((vid) => pendingCards.has(vid));
+      if (!chunk.length) continue;
+      const cardsOut = chunk.map((vid) => ({ vid, payload: pendingCards.get(vid) }));
+      for (const vid of chunk) {
+        pendingCards.delete(vid);
+        page.sent.add(vid);
+      }
+      send({ type: "ff:cards", first, pageType: pageType === "item" ? "other" : pageType, pageUrl: location.href, cards: cardsOut }).then((r) => {
+        if (r && typeof r.queued === "number") return;
+        // Not delivered (the service worker was restarting): the cards go back in line, never lost.
+        for (const c of cardsOut) {
+          page.sent.delete(c.vid);
+          if (!pendingCards.has(c.vid)) pendingCards.set(c.vid, c.payload);
+        }
+        flushCards();
+      });
+    }
+  }
+
+  /**
+   * While the page is still arriving, the first request leaves as soon as two dozen cards are
+   * scored (its best ones and the ones on screen); the rest goes when the document is complete,
+   * best first. Cards read later (scrolling) follow in small groups.
+   */
+  function sendCards() {
     if (!pendingCards.size) return;
-    const batch = [...pendingCards.entries()].slice(0, 60);
-    for (const [vid] of batch) pendingCards.delete(vid);
-    send({ type: "ff:cards", pageType: pageType === "item" ? "other" : pageType, pageUrl: location.href, cards: batch.map(([vid, payload]) => ({ vid, payload })) });
-    if (pendingCards.size) flushCards();
-  }, 300);
+    const loading = document.readyState === "loading";
+    if (!page.firstSent) {
+      if (loading && pendingCards.size < 24) return;
+      page.firstSent = true;
+      postCards(firstWave(pendingCards.keys()), true);
+    }
+    if (!loading) postCards(restOrder(pendingCards.keys()), false);
+  }
+  const flushCards = debounce(sendCards, 300);
+
+  // ------------------------------------------------------------------ page statistics
+  // One request for the page's cards (and one per new batch when more cards load): pre-computed
+  // statistics per model / size / condition that refine the instant verdicts.
+  async function askStats() {
+    if (!paired || !opts.enabled || pageType === "item") return;
+    const items = [];
+    for (const [vid, card] of cards) {
+      if (!card.q || page.statsAsked.has(vid) || evals.has(vid)) continue;
+      page.statsAsked.add(vid);
+      items.push({ vinted_id: vid, title: card.q.title.slice(0, 300), brand: card.q.brand || null, size: card.q.size || null, condition: card.q.condition_label || card.q.condition || null });
+      if (items.length >= 120) break;
+    }
+    if (!items.length) return;
+    const r = await send({ type: "ff:page-stats", items });
+    if (!r || !r.ok) {
+      // Asked again with the next batch (the statistics are per card, not per page).
+      for (const it of items) page.statsAsked.delete(it.vinted_id);
+      return;
+    }
+    addTiming(r.timing);
+    let changed = 0;
+    for (const [vid, stat] of Object.entries(r.stats || {})) {
+      page.stats.set(vid, stat);
+      if (refine(vid)) changed += 1;
+    }
+    if (changed) updateBest();
+    markOnce("stats");
+  }
+
+  /** The instant verdict of a card from its page statistics (true when its badge changed). */
+  function refine(vid) {
+    const card = cards.get(vid);
+    const stat = page.stats.get(vid);
+    if (!card || !card.q || !stat || evals.has(vid)) return false;
+    const nv = Q.refineWithStats(card.q, stat, market);
+    if (!nv) return false;
+    nv.title = card.q.title;
+    quick.set(vid, nv);
+    if (card.root.isConnected) drawBadge(vid, nv);
+    return true;
+  }
 
   // ------------------------------------------------------------------ instant verdict
   // Every card of the page is read at once (the page you opened, nothing else) and scored by the
@@ -212,57 +375,80 @@
     return parsed && parsed.title && parsed.title.length >= 3 && parsed.price ? parsed : null;
   }
 
+  // Badges still to paint (instant verdicts), a few per frame: no long task while the page loads.
+  const paintQueue = [];
+  let painting = false;
+  function paintSlice() {
+    const t0 = performance.now();
+    while (paintQueue.length && performance.now() - t0 < 6) {
+      const vid = paintQueue.shift();
+      if (!evals.has(vid) && quick.has(vid)) drawBadge(vid, quick.get(vid));
+    }
+    if (paintQueue.length) return requestAnimationFrame(paintSlice);
+    painting = false;
+    mark("badges");
+    quickDone();
+  }
+
+  /** Every card of the complete document has its instant verdict painted. */
+  function quickDone() {
+    if (painting || paintQueue.length || document.readyState === "loading" || !page.finalPass || html.hasAttribute("data-ff-quick-ms")) return;
+    mark("cards-read");
+    markOnce("quick");
+    html.setAttribute("data-ff-timing", JSON.stringify(page.timing));
+  }
+
   function quickPass() {
     if (!paired || !opts.enabled) return;
+    const t0 = performance.now();
     mark("parse-start");
     const batch = [];
-    const titles = new Map();
     for (const [vid, card] of cards) {
       if (card.quicked || !card.root.isConnected) continue;
       card.quicked = true;
       const parsed = quickCard(vid, card);
       if (!parsed) continue; // read again when it scrolls into view (lazy content)
-      titles.set(vid, parsed.title);
-      batch.push({
+      card.q = {
         vinted_id: vid,
         title: parsed.title,
         brand: parsed.brand,
+        size: parsed.size,
+        condition_label: parsed.condition_label,
         price: parsed.price,
         condition: parsed.condition,
         buyer_protection_fee: parsed.buyer_protection_fee,
         status: parsed.status,
-      });
+      };
+      batch.push(card.q);
       // Second step, in the background: the whole card goes to FlipFinder for the full analysis.
-      const payload = opts.captureCards ? P.capturePayload(parsed, C) : null;
+      const payload = opts.captureCards && !page.sent.has(vid) ? P.capturePayload(parsed, C) : null;
       if (payload) {
         pendingCards.set(vid, payload);
         card.captured = true;
-        io.unobserve(card.root);
       }
     }
-    if (!batch.length) return;
+    page.timing.read_ms += performance.now() - t0;
+    page.timing.cards += batch.length;
+    if (!batch.length) return quickDone();
     mark("parse-end");
-    flushCards();
     // Scored right here from the stored market summary (~0.1 ms a card): no wait on the service
     // worker, which may be busy receiving full analyses. Server evaluations replace these.
     for (const c of batch) {
       const v = Q.quickEstimate(c, market);
-      v.title = titles.get(c.vinted_id);
+      v.title = c.title;
       quick.set(c.vinted_id, v);
+      if (page.stats.has(c.vinted_id)) refine(c.vinted_id);
     }
-    // The best one first, the other badges in small slices: no long task while the page loads.
+    // The best one first (progressively, as the page arrives), the other badges in slices.
     updateBest();
     mark("best");
-    const todo = batch.map((c) => c.vinted_id).filter((vid) => !evals.has(vid) && vid !== bestBox.vid);
-    const slice = () => {
-      for (const vid of todo.splice(0, 24)) if (!evals.has(vid)) drawBadge(vid, quick.get(vid));
-      if (todo.length) requestAnimationFrame(slice);
-      else {
-        mark("badges");
-        if (!document.documentElement.hasAttribute("data-ff-quick-ms")) document.documentElement.setAttribute("data-ff-quick-ms", String(Math.round(performance.now())));
-      }
-    };
-    slice();
+    sendCards();
+    for (const c of batch) if (!evals.has(c.vinted_id) && c.vinted_id !== bestBox.vid) paintQueue.push(c.vinted_id);
+    page.timing.read_ms = Math.round(page.timing.read_ms * 10) / 10;
+    if (!painting && paintQueue.length) {
+      painting = true;
+      paintSlice();
+    } else quickDone();
   }
 
   /** A newer market summary: re-score the cards that have no full analysis yet. */
@@ -276,6 +462,7 @@
       const nv = Q.quickEstimate({ ...parsed, vinted_id: vid }, market);
       nv.title = parsed.title;
       quick.set(vid, nv);
+      if (refine(vid)) continue;
       if (!evals.has(vid)) drawBadge(vid, nv);
     }
     updateBest();
@@ -311,7 +498,7 @@
     card.root.style.outline = "3px solid #16a34a";
     card.root.style.outlineOffset = "2px";
     renderBest(top);
-    if (!document.documentElement.hasAttribute("data-ff-best-ms")) document.documentElement.setAttribute("data-ff-best-ms", String(Math.round(performance.now())));
+    if (!html.hasAttribute("data-ff-best-ms")) html.setAttribute("data-ff-best-ms", String(Math.round(performance.now())));
   }
   const bestSoon = debounce(updateBest, 120);
 
@@ -370,7 +557,10 @@
     return link ? (link.getAttribute("title") || "").split(",")[0] : "";
   }
 
+  const seenLinks = new WeakSet();
   function register(link) {
+    if (seenLinks.has(link)) return;
+    seenLinks.add(link);
     const vid = linkId(link);
     if (!vid) return;
     if (pageType === "item" && vid === P.itemId(location.href, C)) return; // the item itself
@@ -380,7 +570,7 @@
     const prev = cards.get(vid);
     if (prev && prev.root.isConnected && prev.root !== root) return; // promoted + organic: first one wins
     root.setAttribute("data-ff-vid", vid);
-    cards.set(vid, { root, captured: false, badge: null });
+    cards.set(vid, { root, captured: page.sent.has(vid), badge: null, order: page.order++ });
     if (evals.has(vid)) drawBadge(vid, verdict(vid));
     io.observe(root);
   }
@@ -397,17 +587,82 @@
       if (r.matches && r.matches(C.selectors.item_link)) register(r);
       r.querySelectorAll?.(C.selectors.item_link).forEach(register);
     }
+    page.finalPass = true;
     quickPass();
-    for (const [vid, card] of cards) if (!card.badge && card.root.isConnected) known.push(vid);
-    if (known.length && paired) {
-      send({ type: "ff:get-evals", vids: known.slice(0, 300) }).then((r) => {
-        for (const ev of (r && r.evals) || []) onEval(ev);
-      });
-    }
+    sendCards();
+    askStats();
+    for (const [vid, card] of cards) if (!card.asked && !evals.has(vid) && card.root.isConnected) known.push(vid);
+    lookup(known);
   }
   const scanSoon = debounce(scanAdded, 250);
 
+  /** Server verdicts already known (the extension's cache; FlipFinder only for cards not sent for analysis). */
+  function lookup(vids) {
+    if (!vids.length || !paired) return;
+    for (const vid of vids) cards.get(vid).asked = true;
+    const remote = vids.filter((vid) => !page.sent.has(vid) && !pendingCards.has(vid));
+    send({ type: "ff:get-evals", vids: vids.slice(0, 300), remote }).then((r) => {
+      for (const ev of (r && r.evals) || []) onEval(ev);
+    });
+  }
+
+  // ------------------------------------------------------------------ while the page arrives
+  // Vinted's HTML is large (several MB) and the cards come in its first part: they are read and
+  // scored as soon as each one is complete (the one still arriving waits for the next look),
+  // the best card is highlighted and updated progressively; the pass at the end of the document
+  // reads whatever is left.
+  let streamTimer = 0;
+  let streamFrom = 0;
+  function scanStream() {
+    streamTimer = 0;
+    if (!paired || !opts.enabled || document.readyState !== "loading") return;
+    const t0 = performance.now();
+    if (!page.streamed) {
+      page.streamed = true;
+      mark("scan-start");
+    }
+    const links = document.querySelectorAll(C.selectors.item_link);
+    if (links.length <= streamFrom) return;
+    const lastVid = linkId(links[links.length - 1]);
+    const fresh = [];
+    let i = streamFrom;
+    for (; i < links.length; i += 1) {
+      const vid = linkId(links[i]);
+      if (vid && vid === lastVid) break; // still arriving
+      const before = cards.size;
+      register(links[i]);
+      if (cards.size > before) fresh.push(vid);
+    }
+    streamFrom = i;
+    page.timing.scan_ms = Math.round((page.timing.scan_ms + performance.now() - t0) * 10) / 10;
+    if (!fresh.length) return;
+    quickPass();
+    lookupSoon(fresh);
+  }
+  // Called from the mutation observer, i.e. between two chunks of the parser: a timer would wait
+  // behind the parser's own tasks (100-200 ms on Vinted). At most one look every 25 ms.
+  let streamAt = 0;
+  const streamSoon = () => {
+    const now = performance.now();
+    if (now - streamAt >= 25) {
+      streamAt = now;
+      clearTimeout(streamTimer);
+      scanStream();
+    } else if (!streamTimer) streamTimer = setTimeout(scanStream, 30);
+  };
+  let lookupWaiting = [];
+  const lookupLater = debounce(() => {
+    const vids = lookupWaiting.filter((vid) => cards.has(vid) && !cards.get(vid).asked && !evals.has(vid));
+    lookupWaiting = [];
+    lookup(vids);
+  }, 150);
+  function lookupSoon(vids) {
+    lookupWaiting.push(...vids);
+    lookupLater();
+  }
+
   const mo = new MutationObserver((mutations) => {
+    if (document.readyState === "loading") return streamSoon(); // the page is still arriving
     for (const m of mutations) {
       for (const n of m.addedNodes) if (n.nodeType === 1 && n.tagName !== "FF-BADGE" && !(n.id || "").startsWith("flipfinder")) addedRoots.add(n);
     }
@@ -461,7 +716,7 @@
     if (!ev) return { cls: "muted", html: '<span class="dot"></span>', aria: "FlipFinder: analisi in corso" };
     if (ev.unreadable) return { cls: "muted", html: "n/d", aria: "FlipFinder: scheda non leggibile" };
     if (ev.source === "local") {
-      if (ev.status && ev.status !== "active") return { cls: "muted", html: { sold: "venduto", reserved: "riservato" }[ev.status] || ev.status, aria: "FlipFinder: non in vendita" };
+      if (ev.status && ev.status !== "active") return { cls: "muted", html: { sold: "venduto", reserved: "riservato" }[ev.status] || "non in vendita", aria: "FlipFinder: non in vendita" };
       if (ev.insufficient) return { cls: "muted", html: "dati insuff.", aria: `FlipFinder: dati insufficienti (${ev.insufficient})` };
       const v = ev.risk_adjusted_profit ?? ev.net_margin;
       return {
@@ -472,7 +727,7 @@
     }
     const eye = ev.tracked ? EYE : "";
     if (ev.status && ev.status !== "active") {
-      const label = { sold: "venduto", reserved: "riservato", removed: "rimosso" }[ev.status] || ev.status;
+      const label = { sold: "venduto", reserved: "riservato", removed: "rimosso" }[ev.status] || "non in vendita";
       return { cls: "muted", html: `${eye}${label}`, aria: `FlipFinder: ${label}` };
     }
     if (ev.flip_score === null || ev.flip_score === undefined) {
@@ -520,6 +775,7 @@
       card.badge = host;
     }
     const { cls, html, aria } = badgeLabel(ev);
+    card.badge.setAttribute("data-ff-src", !ev ? "pending" : ev.unreadable ? "unreadable" : ev.source === "local" ? (ev.refined ? "stats" : "local") : "server");
     const b = card.badge.shadowRoot.querySelector(".b");
     b.className = `b ${cls}${card.hot ? " hot" : ""}`;
     b.innerHTML = html;
@@ -763,7 +1019,7 @@
       }
       const scoredItem = ev.flip_score !== null && ev.flip_score !== undefined;
       const color = !scoredItem ? "#85847e" : ev.flip_score >= opts.minScore ? "#22c55e" : ev.flip_score >= 50 ? "#f59e0b" : "#ef4444";
-      const status = ev.status !== "active" ? `<p class="muted">Stato: ${{ sold: "venduto", reserved: "riservato", removed: "rimosso" }[ev.status] || ev.status}</p>` : "";
+      const status = ev.status !== "active" ? `<p class="muted">Stato: ${{ sold: "venduto", reserved: "riservato", removed: "rimosso" }[ev.status] || "non in vendita"}</p>` : "";
       body.innerHTML = `
         <div class="score">${scoredItem ? `<span class="ring" style="--v:${ev.flip_score};--c:${color}"><span>${ev.flip_score}</span></span>` : '<span class="insuff">Dati insufficienti</span>'}<span class="reason"></span></div>
         ${scoredItem ? `<dl><dt>Costo totale</dt><dd>${K.eur(ev.total_cost)}</dd><dt>Rivendita stimata</dt><dd>${K.eur(ev.resale_expected)}</dd><dt>Margine netto</dt><dd class="${(ev.net_margin ?? 0) >= 0 ? "pos" : "neg"}">${K.eur(ev.net_margin, true)}</dd><dt>ROI</dt><dd>${ev.roi === null ? "—" : Math.round(ev.roi * 100) + "%"}</dd><dt>Confidenza</dt><dd>${ev.confidence ?? "—"}/100</dd></dl>` : `<dl><dt>Costo totale</dt><dd>${K.eur(ev.total_cost)}</dd></dl>`}
@@ -800,7 +1056,7 @@
       return rewritten ? { outcome: "error", status: res.status, message: "Non trovato su questo dominio di Vinted." } : { outcome: "not_found", status: res.status, message: "Annuncio non più disponibile." };
     }
     if (!res.ok) return { outcome: "error", status: res.status, message: `Risposta inattesa (HTTP ${res.status}).` };
-    const parsed = P.parseItem(P.collectHtml(body.slice(0, 3e6)), target, Date.now(), C);
+    const parsed = P.parseItem(P.collectHtml(body.slice(0, 3e6), C), target, Date.now(), C);
     if (!parsed.complete) {
       if (parsed.status === "removed") return { outcome: "not_found", status: 200, message: "Annuncio rimosso dal venditore." };
       return { outcome: "error", status: 200, message: `Pagina letta ma senza ${parsed.missing.join(" e ")}: va aggiornata la configurazione del parser.` };
@@ -842,15 +1098,26 @@
     return all.find((b) => b.getAttribute("data-testid") === "item-buy-button") || all.find((b) => rx && rx.test(text(b))) || null;
   }
 
+  // Vinted's buttons are in the served HTML before its scripts make them work: a click before
+  // that would be lost. Clicks wait for the page's load event (and a short settle), a few seconds at most.
+  const pageLoaded = () =>
+    Promise.race([
+      document.readyState === "complete" ? Promise.resolve() : new Promise((resolve) => addEventListener("load", resolve, { once: true })),
+      sleep(12000),
+    ]).then(() => sleep(400));
+
   const signedOut = () => Boolean(C.selectors.signed_out_marker && document.querySelector(C.selectors.signed_out_marker));
 
   async function itemSnapshot(vid) {
     // The page may still be rendering: wait for the item data (and the buttons) a few seconds.
+    // Time-bound, not count-bound: in a background tab the browser slows timers down to 1/s.
     let parsed = null;
-    for (let i = 0; i < 20; i += 1) {
+    const until = Date.now() + 10000;
+    for (;;) {
       parsed = P.parseItem(collectDocument(scriptsAreFresh()), location.href, Date.now(), C, { useScripts: scriptsAreFresh() });
       if (parsed.complete && (favouriteButton() || buyButton() || signedOut() || parsed.status !== "active")) break;
-      await sleep(400);
+      if (Date.now() > until) break;
+      await sleep(250);
     }
     const fav = favouriteButton();
     return {
@@ -874,9 +1141,23 @@
   }
 
   async function vintedAct(msg) {
+    // Asked as soon as the tab answers: the document (and the settings) first, a few seconds at most.
+    await Promise.race([Promise.all([domReady(), started]), sleep(8000)]);
+    // A tab sent to a new address answers only from the new page, never from the one it is leaving.
+    if (msg.after && performance.timeOrigin + 300 < msg.after) return null;
     if (pageType !== "item" || P.itemId(location.href, C) !== String(msg.vid)) return { ok: false, code: "wrong_page", message: "Pagina dell'annuncio non aperta." };
     const snap = await itemSnapshot(String(msg.vid));
     if (msg.action === "state") return { ok: true, ...snap };
+    if (msg.action === "buy") {
+      // Checked right before the click, on the page as it is now: never a purchase of something
+      // else than what you saw in FlipFinder.
+      if (snap.status !== "active") return { ok: false, code: snap.status, message: "L'articolo non è più acquistabile.", ...snap };
+      const expect = msg.expect_price === undefined || msg.expect_price === null ? null : Number(msg.expect_price);
+      if (expect !== null) {
+        if (typeof snap.price !== "number") return { ok: false, code: "no_price", message: "Non riesco a leggere il prezzo su Vinted: nessun clic fatto.", ...snap };
+        if (Math.abs(snap.price - expect) >= 0.01) return { ok: false, code: "price_changed", message: "Il prezzo è cambiato: nessun clic fatto.", ...snap, expected: expect };
+      }
+    }
     if (!snap.signedIn) return { ok: false, code: "signed_out", message: "Non sei collegato a Vinted in questo browser: accedi su Vinted e riprova.", ...snap };
     if (msg.action === "favourite") {
       const btn = favouriteButton();
@@ -884,8 +1165,10 @@
       // Never a blind click: if the current state can't be read, a click could undo it.
       if (snap.favourite === null) return { ok: false, code: "unknown_state", message: "Non riesco a leggere se l'annuncio è già nei tuoi preferiti: nessun clic fatto (configurazione da aggiornare).", ...snap };
       if (snap.favourite === Boolean(msg.want)) return { ok: true, changed: false, ...snap };
-      btn.click(); // one click, as you would
-      for (let i = 0; i < 15; i += 1) {
+      await pageLoaded();
+      if (favouriteState(favouriteButton()) === Boolean(msg.want)) return { ok: true, changed: false, ...snap, favourite: Boolean(msg.want) };
+      (favouriteButton() || btn).click(); // one click, as you would
+      for (const until = Date.now() + 4000; Date.now() < until; ) {
         await sleep(200);
         if (favouriteState(favouriteButton()) === Boolean(msg.want)) return { ok: true, changed: true, ...snap, favourite: Boolean(msg.want) };
         if (signedOut()) return { ok: false, code: "signed_out", message: "Vinted chiede di accedere: accedi e riprova.", ...snap };
@@ -894,11 +1177,20 @@
       return { ok: false, code: "verify", clicked: true, ...snap };
     }
     if (msg.action === "buy") {
-      if (snap.status !== "active") return { ok: false, code: snap.status, message: "L'articolo non è più acquistabile.", ...snap };
+      if (!buyButton()) return { ok: false, code: "no_button", message: "Tasto Acquista non trovato in questa pagina (configurazione da aggiornare).", ...snap };
+      await pageLoaded();
+      // The wait can be long: still this item, still on sale, still at the expected price?
+      if (pageType !== "item" || P.itemId(location.href, C) !== String(msg.vid)) return { ok: false, code: "wrong_page", message: "Pagina dell'annuncio cambiata: nessun clic fatto." };
+      const now = await itemSnapshot(String(msg.vid));
+      if (now.status !== "active") return { ok: false, code: now.status, message: "L'articolo non è più acquistabile.", ...now };
+      const expected = msg.expect_price === undefined || msg.expect_price === null ? null : Number(msg.expect_price);
+      if (expected !== null && (typeof now.price !== "number" || Math.abs(now.price - expected) >= 0.01)) {
+        return { ok: false, code: typeof now.price === "number" ? "price_changed" : "no_price", message: "Il prezzo è cambiato: nessun clic fatto.", ...now, expected };
+      }
       const btn = buyButton();
-      if (!btn) return { ok: false, code: "no_button", message: "Tasto Acquista non trovato in questa pagina (configurazione da aggiornare).", ...snap };
+      if (!btn) return { ok: false, code: "no_button", message: "Tasto Acquista non trovato in questa pagina (configurazione da aggiornare).", ...now };
       btn.click(); // opens Vinted's checkout: the payment is confirmed by you
-      return { ok: true, ...snap };
+      return { ok: true, ...now };
     }
     return { ok: false, code: "unknown", message: "Azione non supportata." };
   }
@@ -924,6 +1216,13 @@
   function onNavigate() {
     lastHref = location.href;
     pageType = P.pageType(location.pathname, C);
+    // Another search (not just the address rewritten by the page): its own first request and
+    // timings. What was sent or asked in this document is never sent again.
+    const search = searchOf(location.href);
+    if (search !== page.search) {
+      Object.assign(page, { search, firstSent: false, order: 0, finalPass: true });
+      page.timing = { read_ms: 0, scan_ms: 0, cards: 0, requests: [] };
+    }
     send({ type: "ff:hello", pageType, url: location.href });
     if (pageType === "item") {
       itemBox.closedFor = null;
@@ -950,6 +1249,11 @@
         for (const ev of msg.evals || []) {
           onEval(ev);
           if (msg.deep && msg.deep.vid === ev.vinted_id && msg.deep.mode !== "extension_item") deepState.set(ev.vinted_id, "ok");
+        }
+        addTiming(msg.timing);
+        if ((msg.evals || []).some((ev) => page.sent.has(ev.vinted_id))) {
+          markOnce("server-first");
+          if (!pendingCards.size && [...page.sent].every((vid) => evals.has(vid))) markOnce("server-all");
         }
         return false;
       case "ff:hot":
@@ -1097,30 +1401,53 @@
     send({ type: "ff:purchase-done", ...done });
   }
 
+  // The document is parsed (DOM interactive): Vinted's own deferred scripts don't need to run first.
   const domReady = () =>
-    document.readyState === "loading" ? new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true })) : Promise.resolve();
+    document.readyState === "loading"
+      ? new Promise((resolve) => {
+          const on = () => {
+            if (document.readyState === "loading") return;
+            document.removeEventListener("readystatechange", on);
+            resolve();
+          };
+          document.addEventListener("readystatechange", on);
+        })
+      : Promise.resolve();
+
+  let startDone = () => {};
+  const started = new Promise((resolve) => {
+    startDone = resolve;
+  });
 
   async function start() {
     mark("start");
     // Straight from storage (not through the service worker): options, pairing flag (never the
-    // key), parser configuration and market summary.
-    const [store, synced] = await Promise.all([
-      chrome.storage.local.get(["paired", "parserConfig", "marketCache"]).catch(() => ({})),
-      chrome.storage.sync.get("options").catch(() => ({})),
-    ]);
+    // key), parser configuration and market summary - the copy in memory (session storage) when
+    // the service worker has published it, else the stored ones.
+    const boot = await chrome.storage.session.get("boot").then((r) => r.boot || null, () => null);
+    mark(boot ? "boot" : "boot-missing");
+    const [store, synced] = boot
+      ? [boot, { options: boot.options }]
+      : await Promise.all([
+          chrome.storage.local.get(["paired", "parserConfig", "marketCache"]).catch(() => ({})),
+          chrome.storage.sync.get("options").catch(() => ({})),
+        ]);
     mark("hello");
     opts = K.normalizeOptions(synced.options);
     paired = Boolean(store.paired);
     useConfig(store.parserConfig);
     market = store.marketCache ? Q.compileMarket(store.marketCache) : null;
     pageType = P.pageType(location.pathname, C);
+    startDone();
     send({ type: "ff:hello", pageType, url: location.href }); // live panel bookkeeping
     if (!opts.enabled) return;
     // Injected at the start of the navigation: settings are read while the page loads, the
-    // cards are scored as soon as the document is parsed.
+    // cards are scored while the document arrives (see scanStream), the rest once it is parsed.
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+    if (paired) streamSoon();
     await domReady();
     mark("dom");
-    mo.observe(document.body, { childList: true, subtree: true });
+    addedRoots.clear(); // the pass below reads the whole document
     setTimeout(checkPurchase, 600); // the confirmation text may render a moment after load
     if (pageType === "item") {
       itemBox.render();

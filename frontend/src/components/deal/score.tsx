@@ -51,13 +51,13 @@ export function ScoreRing({
           className="transition-[stroke-dashoffset] duration-700 ease-[var(--ease-out)]"
         />
       </svg>
-      <span className="absolute inset-0 flex flex-col items-center justify-center leading-none">
+      <span className="absolute inset-0 flex flex-col items-center justify-center leading-none" aria-hidden>
         <span className="font-semibold tracking-tight text-fg" style={{ fontSize: size * 0.32 }}>
           {Math.round(value)}
         </span>
         {label && <span className="mt-0.5 text-[9px] font-medium uppercase tracking-wider text-fg-3">{label}</span>}
       </span>
-      <span className="sr-only">{`${label ?? "Score"} ${Math.round(value)} su 100`}</span>
+      <span className="sr-only">{`${label && /score/i.test(label) ? label : `${label ?? "Flip"} score`} ${Math.round(value)} out of 100`}</span>
     </div>
   );
 }
@@ -72,7 +72,7 @@ export function RiskBadge({ level, score, className }: { level: RiskLevel; score
     <Badge tone={RISK_TONE[level] ?? "neutral"} className={className}>
       <Icon aria-hidden />
       Risk {RISK_LABEL[level] ?? level}
-      {score !== undefined && <span className="opacity-70">· {score}</span>}
+      {score !== undefined && <span className="font-medium">· {score}</span>}
     </Badge>
   );
 }

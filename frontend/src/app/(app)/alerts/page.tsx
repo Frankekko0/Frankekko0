@@ -6,7 +6,7 @@ import { useState, type CSSProperties } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState, Skeleton } from "@/components/ui/feedback";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/misc";
+import { Segmented } from "@/components/ui/misc";
 import { timeAgo } from "@/lib/format";
 import { useAlerts, useMarkRead } from "@/lib/queries";
 import type { AlertItem } from "@/lib/types";
@@ -37,22 +37,22 @@ export default function AlertsPage() {
           <CheckCheck /> Mark all read
         </Button>
       </div>
-      <Tabs
+      <Segmented
+        label="Show alerts"
         value={tab}
         onValueChange={(v) => {
           setTab(v);
           setPage(1);
         }}
-      >
-        <TabsList>
-          <TabsTrigger value="all">All</TabsTrigger>
-          <TabsTrigger value="unread">Unread</TabsTrigger>
-          <TabsTrigger value="ultra_deal">Ultra deals</TabsTrigger>
-          <TabsTrigger value="price_drop">Price drops</TabsTrigger>
-          <TabsTrigger value="watchlist_match">Watchlists</TabsTrigger>
-          <TabsTrigger value="new_opportunity">New</TabsTrigger>
-        </TabsList>
-      </Tabs>
+        options={[
+          { value: "all", label: "All" },
+          { value: "unread", label: "Unread" },
+          { value: "ultra_deal", label: "Ultra deals" },
+          { value: "price_drop", label: "Price drops" },
+          { value: "watchlist_match", label: "Watchlists" },
+          { value: "new_opportunity", label: "New" },
+        ]}
+      />
       {alerts.isLoading ? (
         <div className="space-y-2">
           {Array.from({ length: 6 }).map((_, i) => (

@@ -4,13 +4,13 @@ import { cn } from "@/lib/utils";
 
 const variants = {
   primary:
-    "bg-accent text-accent-fg hover:bg-accent-hover shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_1px_2px_rgba(11,11,11,0.12),0_4px_12px_-4px_var(--ring)]",
+    "bg-accent-solid text-accent-fg hover:bg-accent-solid-hover shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_1px_2px_rgba(11,11,11,0.12),0_4px_12px_-4px_var(--ring)]",
   secondary: "bg-surface-2 text-fg hover:bg-surface-3",
   outline: "border border-line-strong bg-surface text-fg hover:bg-surface-2 hover:border-[var(--text-3)]/40 shadow-sm",
   ghost: "text-fg-2 hover:bg-surface-2 hover:text-fg",
-  danger: "bg-danger text-white hover:opacity-90",
+  danger: "bg-danger-solid text-white hover:opacity-90",
   ultra:
-    "sheen bg-gradient-to-r from-ultra to-ultra-2 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_6px_18px_-8px_var(--ultra)] hover:brightness-105",
+    "sheen bg-gradient-to-r from-ultra-solid to-ultra-solid-2 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_6px_18px_-8px_var(--ultra)] hover:brightness-105",
   inverted: "bg-fg text-bg hover:opacity-90",
 } as const;
 

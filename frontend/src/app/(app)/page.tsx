@@ -2,7 +2,7 @@
 
 import { ArrowRight, BellRing, Flame, Gauge, Layers, Radar, RefreshCw, ScanSearch, Sparkles, Timer, TrendingDown, TrendingUp, Wallet } from "lucide-react";
 import Link from "next/link";
-import { DealCard, DealCardSkeleton, DealRow } from "@/components/deal/deal-card";
+import { DealCard, DealCardSkeleton, DealRow, EAGER_CARDS } from "@/components/deal/deal-card";
 import { GlobalSearch, ScanStatus } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,7 +20,20 @@ const EXAMPLES = [
   "piumini basso rischio",
 ];
 
-function DealGrid({ items, loading, count = 8, sourceConfigured }: { items?: OpportunityCard[]; loading: boolean; count?: number; sourceConfigured?: boolean }) {
+function DealGrid({
+  items,
+  loading,
+  count = 8,
+  sourceConfigured,
+  eagerCount = EAGER_CARDS,
+}: {
+  items?: OpportunityCard[];
+  loading: boolean;
+  count?: number;
+  sourceConfigured?: boolean;
+  /** Photos fetched first: none when another list (the ultra deals) sits above this one. */
+  eagerCount?: number;
+}) {
   if (loading && !items) {
     return (
       <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -53,7 +66,7 @@ function DealGrid({ items, loading, count = 8, sourceConfigured }: { items?: Opp
   return (
     <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {items.map((d, i) => (
-        <DealCard key={d.id} deal={d} index={i} />
+        <DealCard key={d.id} deal={d} index={i} eagerImage={i < eagerCount} />
       ))}
     </div>
   );
@@ -225,7 +238,7 @@ export default function DashboardPage() {
           <div className="scrollbar-none -mx-4 flex snap-x gap-4 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0">
             {ultra.data!.items.map((d, i) => (
               <div key={d.id} className="w-[280px] shrink-0 snap-start py-1">
-                <DealCard deal={d} index={i} />
+                <DealCard deal={d} index={i} eagerImage={i < EAGER_CARDS} />
               </div>
             ))}
           </div>
@@ -243,7 +256,7 @@ export default function DashboardPage() {
             </Link>
           }
         />
-        <DealGrid items={topItems} loading={top.isLoading} sourceConfigured={sourceConfigured} />
+        <DealGrid items={topItems} loading={top.isLoading} sourceConfigured={sourceConfigured} eagerCount={(ultra.data?.items.length ?? 0) > 0 ? 0 : EAGER_CARDS} />
       </section>
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">

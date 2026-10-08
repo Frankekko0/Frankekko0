@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -39,6 +40,14 @@ class Listing(Base):
         Index("ix_listings_segment", "brand_id", "category_id", "status"),
         Index("ix_listings_published_at", "published_at"),
         Index("ix_listings_status_last_seen", "status", "last_seen_at"),
+        Index("ix_listings_brand_model_status", "brand_id", "model_name", "status"),
+        Index(
+            "ix_listings_sold_segment",
+            "brand_id",
+            "category_id",
+            "sold_at",
+            postgresql_where=text("status = 'sold'"),
+        ),
         Index(
             "ix_listings_title_trgm",
             "title",

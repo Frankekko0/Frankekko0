@@ -9,7 +9,7 @@ const tones = {
   warning: "bg-warning-soft text-warning",
   serious: "bg-serious-soft text-serious",
   danger: "bg-danger-soft text-danger",
-  ultra: "bg-gradient-to-r from-ultra to-ultra-2 text-white",
+  ultra: "bg-gradient-to-r from-ultra-solid to-ultra-solid-2 text-white",
   dark: "bg-black/65 text-white backdrop-blur-md",
 } as const;
 

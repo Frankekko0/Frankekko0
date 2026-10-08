@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { eur, pct } from "@/lib/format";
 import type { DataQuality, MarketComparison, PriceStats, RiskSignal, SignalLevel, TimeOnline } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { TableScroll } from "@/components/ui/table-scroll";
 
 /* --------------------------------------------------------------- data quality */
 export function DataQualityBanner({ quality, reason }: { quality: DataQuality | null | undefined; reason: string | null | undefined }) {
@@ -70,7 +71,7 @@ export function MarketComparisonView({ c }: { c: MarketComparison }) {
         <Count label="Same model" value={m.same_model ?? "—"} sub={m.same_model === null ? "model not identified" : `of ${c.used}`} />
         <Count label="Same size · condition" value={`${m.same_size ?? "—"} · ${m.same_condition}`} sub={`of ${c.used}`} />
       </div>
-      <div className="-mx-1 overflow-x-auto">
+      <TableScroll label="Comparable prices" className="-mx-1">
         <table className="w-full min-w-[520px] text-[13px]">
           <thead>
             <tr className="text-left text-xs text-fg-3">
@@ -89,7 +90,7 @@ export function MarketComparisonView({ c }: { c: MarketComparison }) {
             <StatsRow label="On sale (asking)" s={c.active_prices} />
           </tbody>
         </table>
-      </div>
+      </TableScroll>
       <p className="text-xs text-fg-3">
         Same brand and category family, ranked by model, size, condition, title, colour and material.
         {c.prices_adjusted_to_condition && " Prices are brought to this item's condition, so they compare like for like."}

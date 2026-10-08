@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, Import, LogOut, Menu as MenuIcon, Monitor, Moon, ScanSearch, Search, Sun } from "lucide-react";
+import { Bell, Import, LogOut, Monitor, Moon, ScanSearch, Search, Settings, Sun } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
@@ -96,7 +96,7 @@ function UserMenu() {
           <Import /> Import a Vinted search
         </MenuItem>
         {NAV.filter((n) => !n.mobile).map((n) => (
-          <MenuItem key={n.href} onSelect={() => router.push(n.href)} className="md:hidden">
+          <MenuItem key={n.href} onSelect={() => router.push(n.href)} className="lg:hidden">
             <n.icon /> {n.label}
           </MenuItem>
         ))}
@@ -130,7 +130,7 @@ function AlertBell() {
       {n > 0 && (
         <span
           key={n > 99 ? "99+" : n}
-          className="animate-scale-in absolute right-0.5 top-0.5 flex min-w-4 items-center justify-center rounded-full bg-ultra px-1 text-[10px] font-bold leading-4 text-white ring-2 ring-bg"
+          className="animate-scale-in absolute right-0.5 top-0.5 flex min-w-4 items-center justify-center rounded-full bg-ultra-solid px-1 text-[10px] font-bold leading-4 text-white ring-2 ring-bg"
         >
           {n > 99 ? "99+" : n}
         </span>
@@ -147,7 +147,7 @@ export function GlobalSearch({ className, autoFocus }: { className?: string; aut
     if (q.trim()) router.push(`/search?q=${encodeURIComponent(q.trim())}`);
   }
   return (
-    <form onSubmit={submit} className={cn("relative", className)} role="search">
+    <form onSubmit={submit} className={cn("relative", className)} role="search" aria-label="Quick search">
       <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-fg-3" />
       <input
         value={q}
@@ -236,6 +236,12 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-dvh">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-3 focus:z-50 focus:rounded-lg focus:bg-surface focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-fg focus:shadow-pop"
+      >
+        Skip to content
+      </a>
       <AlertsWatcher />
       <header
         ref={headerRef}
@@ -264,13 +270,13 @@ export function AppShell({ children }: { children: ReactNode }) {
               className="press hidden size-9 items-center justify-center rounded-lg text-fg-2 transition-colors hover:bg-surface-2 hover:text-fg lg:flex"
               aria-label="Settings"
             >
-              <MenuIcon className="size-[18px]" />
+              <Settings className="size-[18px]" />
             </Link>
             <UserMenu />
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-[1400px] px-4 pb-28 pt-5 sm:px-6 lg:pb-12">
+      <main id="main" tabIndex={-1} className="mx-auto max-w-[1400px] px-4 pb-28 pt-5 outline-none sm:px-6 lg:pb-12">
         {/* Re-keyed per route: a short fade-up on every navigation. */}
         <div key={pathname} className="animate-fade-up">
           {children}
@@ -290,7 +296,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "press relative flex flex-col items-center gap-0.5 py-2.5 text-[10px] font-medium transition-colors duration-200",
-                  active ? "text-accent" : "text-fg-3",
+                  active ? "text-accent" : "text-fg-2",
                 )}
               >
                 <span

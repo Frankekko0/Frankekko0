@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { DataSourcesCard } from "@/components/settings/data-sources";
 import { ErrorLogCard } from "@/components/settings/error-log";
 import { ExtensionKeysCard } from "@/components/settings/extension-keys";
+import { PriceDataCard } from "@/components/settings/price-data";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/feedback";
@@ -247,12 +248,12 @@ function PreferencesForm({ initial }: { initial: Preferences }) {
             />
           ))}
         </div>
-        <div className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-surface-2 p-3">
+        <label className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-surface-2 p-3">
           <span className="flex items-center gap-2 text-[13px] text-fg-2">
             <Sparkles className="size-4 text-accent" /> Personal Flip Score (learns from your flips and ignored deals)
           </span>
           <Switch checked={p.personalization_enabled} onCheckedChange={(v) => set({ personalization_enabled: v })} />
-        </div>
+        </label>
         <Button variant="ghost" size="sm" className="mt-2" onClick={() => set({ score_weights: null })}>
           Reset to defaults
         </Button>
@@ -449,6 +450,7 @@ export default function SettingsPage() {
       {notif.data ? <NotificationsForm initial={notif.data} /> : <Skeleton className="h-96 rounded-2xl" />}
       <ExtensionKeysCard />
       <DataSourcesCard />
+      <PriceDataCard />
       <ErrorLogCard />
       <Block icon={<LogOut />} title="Account">
         <div className="flex flex-wrap items-center justify-between gap-3">

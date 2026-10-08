@@ -92,9 +92,32 @@ services:
         BACKEND_URL: http://backend:8000
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      # FRONTEND_BIND=127.0.0.1 when the phone reaches it through Tailscale (not the home Wi-Fi).
+      - "${FRONTEND_BIND:-0.0.0.0}:3000:3000"
     depends_on:
       backend:
+        condition: service_healthy
+
+  # Daily database backups into ./backups, kept BACKUP_KEEP_DAYS days. Off unless asked for:
+  #   docker compose --profile backup up -d
+  # (production uses docker-compose.prod.yml, which always backs up).
+  backup-local:
+    image: postgres:16-alpine
+    profiles: ["backup"]
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-flipfinder}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-flipfinder}
+      PGDATABASE: ${POSTGRES_DB:-flipfinder}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      BACKUP_HOUR_UTC: ${BACKUP_HOUR_UTC:-2}
+    volumes:
+      - ./deploy/backup.sh:/backup.sh:ro
+      - ${BACKUP_DIR:-./backups}:/backups
+    command: ["sh", "-c", "sh /backup.sh once start && exec sh /backup.sh daily"]
+    depends_on:
+      postgres:
         condition: service_healthy
 
 volumes:

@@ -111,11 +111,26 @@ class ApiError extends Error {
   }
 }
 
-async function api(path, { method = "GET", body, appUrl, key } = {}) {
+/** "db;dur=12.3, analysis;dur=40, total;dur=55" -> { db: 12, analysis: 40, total: 55 }. */
+function parseServerTiming(header) {
+  const out = {};
+  for (const part of String(header || "").split(",")) {
+    const m = /^\s*([\w-]+)\s*;.*?\bdur=([\d.]+)/.exec(part);
+    if (m) out[m[1]] = Math.round(Number(m[2]));
+  }
+  return out;
+}
+
+/**
+ * A request to FlipFinder. `timing` (optional object) receives the request's duration as seen
+ * here (ms, network + server) and the server's own Server-Timing (db, analysis, total).
+ */
+async function api(path, { method = "GET", body, appUrl, key, timing } = {}) {
   const opts = await getOptions();
   const base = appUrl || opts.appUrl;
   const token = key || (await getKey());
   if (!token) throw new ApiError(0, "unpaired", "Estensione non associata a FlipFinder.");
+  const t0 = performance.now();
   let res;
   try {
     res = await fetch(`${base}/api/v1${path}`, {
@@ -128,7 +143,11 @@ async function api(path, { method = "GET", body, appUrl, key } = {}) {
   } catch {
     throw new ApiError(0, "offline", "FlipFinder non raggiungibile: controlla che sia avviato e l'indirizzo nelle opzioni.");
   }
-  if (res.ok) return res.status === 204 ? null : res.json();
+  if (res.ok) {
+    const data = res.status === 204 ? null : await res.json();
+    if (timing) Object.assign(timing, { ms: Math.round(performance.now() - t0) }, parseServerTiming(res.headers.get("server-timing")));
+    return data;
+  }
   let err = {};
   try {
     err = (await res.json()).error || {};
@@ -198,6 +217,19 @@ async function updateMarketCache() {
     }
   } catch (err) {
     await logError("mercato", `Riepilogo di mercato non aggiornato: ${err.message}`);
+  }
+}
+
+// What a Vinted page needs at its very start (pairing flag - never the key -, options, parser
+// configuration, market summary), mirrored in the memory-backed session storage: read there it
+// never waits behind the large writes of the local storage (queue, evaluations cache), which
+// can hold a page's first look at its cards for half a second.
+async function publishBoot() {
+  try {
+    const [{ paired, parserConfig, marketCache }, { options }] = await Promise.all([local.get(["paired", "parserConfig", "marketCache"]), chrome.storage.sync.get("options")]);
+    await sessionStore.set({ boot: { paired: Boolean(paired), parserConfig: parserConfig || null, marketCache: marketCache || null, options: options || null } });
+  } catch (err) {
+    await logError("avvio", err.message);
   }
 }
 
@@ -297,7 +329,7 @@ async function addToSession(tabId, evals, fresh) {
 // Favourite states read on a listing page before FlipFinder had recorded that listing.
 const favouriteSeenLater = new Map();
 
-async function onEvaluations(evals, { tabIds = [], fresh = true, deep = null } = {}) {
+async function onEvaluations(evals, { tabIds = [], fresh = true, deep = null, timing = null } = {}) {
   await cacheEvaluations(evals);
   await scanNotify(evals).catch((err) => logError("scanner", err.message));
   for (const ev of evals) {
@@ -308,7 +340,7 @@ async function onEvaluations(evals, { tabIds = [], fresh = true, deep = null } =
   }
   const opts = await getOptions();
   for (const tabId of new Set(tabIds.filter((t) => typeof t === "number"))) {
-    await sendToTab(tabId, { type: "ff:evals", evals, deep });
+    await sendToTab(tabId, { type: "ff:evals", evals, deep, timing });
     const hot = await addToSession(tabId, evals, fresh);
     sendToPanel({ type: "ff:session-update", tabId });
     if (hot.length) {
@@ -341,19 +373,28 @@ async function enqueue(kind, entries, delayMs) {
 }
 
 async function sendBatch(kind, batch) {
+  const timing = { ep: kind === "items" ? "item" : "cards", n: batch.entries.length };
   if (kind === "items") {
     const e = batch.entries[0];
     const res = await api("/capture/item", {
       method: "POST",
       body: { item: e.payload, mode: e.mode || "extension_item", track: e.track ?? null, extension_version: VERSION },
+      timing,
     });
-    return { evaluations: res.evaluation ? [res.evaluation] : [], analysis: res.analysis };
+    return { evaluations: res.evaluation ? [res.evaluation] : [], analysis: res.analysis, timing };
   }
-  return api("/capture/cards", {
+  const res = await api("/capture/cards", {
     method: "POST",
     body: { page_type: batch.pageType.split("#")[0], page_url: batch.entries[0].pageUrl || "", items: batch.entries.map((e) => e.payload), extension_version: VERSION },
+    timing,
   });
+  return { ...res, timing };
 }
+
+// Cards of a page go best first (the page sends them ordered by its instant verdict, visible
+// ones first): a small first request so the first full verdicts show at once, then larger ones.
+const FIRST_CHUNK = 12;
+const NEXT_CHUNK = 48;
 
 let flushing = false;
 let flushAgain = false;
@@ -386,8 +427,9 @@ async function flushOnce() {
     K.queuePrune(q, Date.now());
     const items = K.queueTake(q, "items", Date.now(), 1);
     const kind = items ? "items" : "cards";
-    const batch = items || K.queueTake(q, "cards", Date.now(), 40);
+    const batch = items || K.queueTake(q, "cards", Date.now(), NEXT_CHUNK);
     if (!batch) break;
+    if (kind === "cards" && batch.entries[0].first) batch.entries = batch.entries.filter((e) => e.first).slice(0, FIRST_CHUNK);
     try {
       const res = await sendBatch(kind, batch);
       await exclusive(async () => {
@@ -401,6 +443,7 @@ async function flushOnce() {
       await onEvaluations(res.evaluations || [], {
         tabIds: batch.entries.map((x) => x.tabId),
         deep: kind === "items" ? { vid: e.vid, mode: e.mode || "extension_item", analysis: res.analysis || null } : null,
+        timing: res.timing || null,
       });
     } catch (err) {
       const status = err.status || 0;
@@ -901,8 +944,26 @@ async function parserConf() {
 // Vinted session, and the content script clicks Vinted's own button once. Nothing is paid here:
 // the checkout waits for your confirmation. FlipFinder only receives what happened.
 const BUY_TTL_MS = 3 * 3600 * 1000;
-const buyTabs = new Map(); // vid -> tabId of the item page opened for a purchase
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// vid -> tabId of the item page opened for a purchase. In session storage: the service worker
+// may be stopped between the check and the checkout, the tab must still be found.
+async function buyTabOf(vid) {
+  const { buyTabs = {} } = await sessionStore.get("buyTabs");
+  const tabId = buyTabs[String(vid)];
+  if (typeof tabId !== "number") return null;
+  return chrome.tabs.get(tabId).then(() => tabId, () => null);
+}
+
+function setBuyTab(vid, tabId) {
+  // Read and written in one step: two purchases started at once never overwrite each other.
+  return exclusive(async () => {
+    const { buyTabs = {} } = await sessionStore.get("buyTabs");
+    if (tabId === null) delete buyTabs[String(vid)];
+    else buyTabs[String(vid)] = tabId;
+    await sessionStore.set({ buyTabs });
+  });
+}
 
 async function appOrigin() {
   try {
@@ -931,67 +992,58 @@ async function itemUrlOf(url, vid) {
   }
 }
 
-function tabLoaded(tabId, timeoutMs = 20000) {
-  return new Promise((resolve) => {
-    const done = (ok) => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      clearTimeout(timer);
-      resolve(ok);
-    };
-    const listener = (id, info) => id === tabId && info.status === "complete" && done(true);
-    const timer = setTimeout(() => done(false), timeoutMs);
-    chrome.tabs.onUpdated.addListener(listener);
-    chrome.tabs.get(tabId).then((t) => t.status === "complete" && done(true), () => done(false));
-  });
-}
-
-/** Reloads a tab and waits for the new page to finish loading. */
-function reloadTab(tabId, timeoutMs = 20000) {
-  return new Promise((resolve) => {
-    let started = false;
-    const done = (ok) => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      clearTimeout(timer);
-      resolve(ok);
-    };
-    const listener = (id, info) => {
-      if (id !== tabId) return;
-      if (info.status === "loading") started = true;
-      else if (info.status === "complete" && started) done(true);
-    };
-    const timer = setTimeout(() => done(false), timeoutMs);
-    chrome.tabs.onUpdated.addListener(listener);
-    chrome.tabs.reload(tabId, { bypassCache: true }).catch(() => done(false));
-  });
-}
-
 // Checkouts being opened: tab id -> resolve(true when the tab shows Vinted's checkout).
+// Listening starts before the click; the time limit counts from the click.
 const checkoutWaits = new Map();
-function waitForCheckout(tabId, timeoutMs = 15000) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      checkoutWaits.delete(tabId);
-      resolve(false);
-    }, timeoutMs);
-    checkoutWaits.set(tabId, () => {
-      clearTimeout(timer);
-      checkoutWaits.delete(tabId);
-      resolve(true);
-    });
+function watchCheckout(tabId) {
+  let resolveSeen;
+  const seen = new Promise((resolve) => {
+    resolveSeen = resolve;
   });
+  const settle = (v) => {
+    if (checkoutWaits.get(tabId) === onSeen) checkoutWaits.delete(tabId);
+    resolveSeen(v);
+  };
+  const onSeen = () => settle(true);
+  checkoutWaits.set(tabId, onSeen);
+  return {
+    wait: (timeoutMs = 15000) => Promise.race([seen, sleep(timeoutMs).then(() => false)]).then((v) => (settle(v), v)),
+    cancel: () => settle(false),
+  };
 }
 
-async function askTab(tabId, message, tries = 25) {
-  for (let i = 0; i < tries; i += 1) {
+/**
+ * Asks the content script of a tab, waiting for it to be there: a tab just opened (even in the
+ * background, even on a slow page) answers once its document exists. Time-bound, not count-bound.
+ */
+async function askTab(tabId, message, timeoutMs = 30000) {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
     try {
       const r = await chrome.tabs.sendMessage(tabId, message);
       if (r) return r;
-    } catch {
-      /* content script not ready yet */
+    } catch (err) {
+      if (/No tab with id/i.test(String(err && err.message))) return { ok: false, code: "no_page", message: "La scheda di Vinted è stata chiusa." };
+      /* content script not there yet */
     }
-    await sleep(300);
+    if (Date.now() > until) return { ok: false, code: "no_page", message: "La pagina di Vinted non risponde: riprova." };
+    await sleep(250);
   }
-  return { ok: false, code: "no_page", message: "La pagina di Vinted non risponde: riprova." };
+}
+
+/**
+ * The item page in a tab for an action: the tab already opened for that purchase (sent again to
+ * the listing, so the page is fresh) or a new one. `after`: answers only from the page loaded now.
+ */
+async function itemTab(vid, url, { active, reuse }) {
+  const after = Date.now();
+  const known = reuse ? await buyTabOf(vid) : null;
+  if (known !== null) {
+    const ok = await chrome.tabs.update(known, { url, ...(active ? { active: true } : {}) }).then(() => true, () => false);
+    if (ok) return { tabId: known, created: false, after };
+  }
+  const tab = await chrome.tabs.create({ url, active });
+  return { tabId: tab.id, created: true, after };
 }
 
 async function recordVinted(vid, body) {
@@ -1012,13 +1064,20 @@ async function vintedFavourite(msg) {
   const tab = await chrome.tabs.create({ url, active: false });
   favouriteTabs.add(tab.id);
   try {
-    await tabLoaded(tab.id);
     const want = Boolean(msg.want);
     let r = await askTab(tab.id, { type: "ff:vinted-act", action: "favourite", vid: String(msg.vid), want });
     if (r.code === "verify" && r.clicked) {
       // Clicked once; the page didn't show the result: give Vinted a moment, then read it again.
       await sleep(1500);
-      const s = (await reloadTab(tab.id)) ? await askTab(tab.id, { type: "ff:vinted-act", action: "state", vid: String(msg.vid) }) : { ok: false };
+      const reloadedAt = Date.now();
+      const reloaded = await chrome.tabs.reload(tab.id, { bypassCache: true }).then(() => true, () => false);
+      let s = reloaded ? await askTab(tab.id, { type: "ff:vinted-act", action: "state", vid: String(msg.vid), after: reloadedAt }) : { ok: false };
+      if (s.ok && typeof s.favourite === "boolean" && s.favourite !== want) {
+        // Vinted didn't get the click (the page was not ready for it): one more, on this fresh
+        // page, after reading the state again - never a click that could undo the first one.
+        const again = await askTab(tab.id, { type: "ff:vinted-act", action: "favourite", vid: String(msg.vid), want, after: reloadedAt });
+        if (again.ok) s = { ...again, favourite: want };
+      }
       if (s.ok && s.favourite === want) r = { ...s, ok: true, changed: true };
       else {
         if (s.ok && typeof s.favourite === "boolean") await recordVinted(msg.vid, { kind: "favourite", value: s.favourite, source: "page" });
@@ -1037,25 +1096,17 @@ async function vintedBuyCheck(msg) {
   const url = await itemUrlOf(msg.url, msg.vid);
   if (!url) return { ok: false, code: "bad_url", message: "Annuncio non valido." };
   // In front: if you go ahead, the checkout continues in this tab.
-  const tab = await chrome.tabs.create({ url, active: true });
-  buyTabs.set(String(msg.vid), tab.id);
-  await tabLoaded(tab.id);
-  return askTab(tab.id, { type: "ff:vinted-act", action: "state", vid: String(msg.vid) });
+  const { tabId, after } = await itemTab(String(msg.vid), url, { active: true, reuse: true });
+  await setBuyTab(msg.vid, tabId);
+  return askTab(tabId, { type: "ff:vinted-act", action: "state", vid: String(msg.vid), after });
 }
 
-async function vintedBuyOpen(msg) {
-  const vid = String(msg.vid);
-  let tabId = buyTabs.get(vid);
-  const alive = tabId !== undefined && (await chrome.tabs.get(tabId).then(() => true, () => false));
-  if (!alive) {
-    const check = await vintedBuyCheck(msg);
-    if (!check.ok) return check;
-    tabId = buyTabs.get(vid);
-  }
-  const opened = waitForCheckout(tabId); // listening before the click
-  const r = await askTab(tabId, { type: "ff:vinted-act", action: "buy", vid });
+/** One click on Acquista in the item's tab, then the checkout in front (confirmed by you on Vinted). */
+async function clickBuy(vid, tabId, extra) {
+  const checkout = watchCheckout(tabId); // listening before the click
+  const r = await askTab(tabId, { type: "ff:vinted-act", action: "buy", vid, ...extra });
   if (!r.ok) {
-    if (checkoutWaits.has(tabId)) checkoutWaits.delete(tabId);
+    checkout.cancel();
     return r;
   }
   // A purchase completed later in this tab belongs to this listing.
@@ -1063,8 +1114,45 @@ async function vintedBuyOpen(msg) {
   pendingBuys[vid] = { at: Date.now(), price: r.price, tabId };
   await local.set({ pendingBuys });
   await chrome.tabs.update(tabId, { active: true }).catch(() => {});
-  if (!(await opened)) return { ok: false, code: "checkout_not_seen", message: "Ho premuto Acquista su Vinted ma il checkout non si è aperto: controlla la scheda di Vinted.", price: r.price };
+  if (!(await checkout.wait(15000))) return { ok: false, code: "checkout_not_seen", message: "Ho premuto Acquista su Vinted ma il checkout non si è aperto: controlla la scheda di Vinted.", price: r.price };
   await recordVinted(vid, { kind: "checkout_opened", price: r.price, source: "click" });
+  return r;
+}
+
+async function vintedBuyOpen(msg) {
+  const vid = String(msg.vid);
+  let tabId = await buyTabOf(vid);
+  if (tabId === null) {
+    const check = await vintedBuyCheck(msg);
+    if (!check.ok) return check;
+    tabId = await buyTabOf(vid);
+    if (tabId === null) return { ok: false, code: "no_page", message: "La scheda di Vinted è stata chiusa." };
+  }
+  const expect = Number(msg.expect_price);
+  return clickBuy(vid, tabId, expect > 0 ? { expect_price: expect } : {});
+}
+
+/**
+ * Buy at the price you saw, in one click: the listing opens (in the background while it is read),
+ * Acquista is clicked only if it is still on sale at exactly that price, then the checkout comes
+ * to the front. Otherwise nothing is clicked and the reason comes back (price_changed with the
+ * new price, sold, reserved, removed, signed_out...).
+ */
+async function vintedBuy(msg) {
+  const vid = String(msg.vid);
+  const url = await itemUrlOf(msg.url, vid);
+  if (!url) return { ok: false, code: "bad_url", message: "Annuncio non valido." };
+  const expect = Number(msg.expect_price);
+  if (!(expect > 0)) return { ok: false, code: "bad_price", message: "Prezzo dell'analisi mancante." };
+  const { tabId, created, after } = await itemTab(vid, url, { active: false, reuse: true });
+  await setBuyTab(vid, tabId);
+  const r = await clickBuy(vid, tabId, { expect_price: expect, after });
+  if (!r.ok && r.code !== "price_changed" && r.code !== "checkout_not_seen" && created) {
+    // Nothing to do on that page: the tab you didn't open yourself goes away. With a new price it
+    // stays, ready for "open the checkout at the new price".
+    await setBuyTab(vid, null);
+    chrome.tabs.remove(tabId).catch(() => {});
+  }
   return r;
 }
 
@@ -1101,20 +1189,29 @@ async function onPurchaseDone(msg, sender) {
 // ------------------------------------------------------------------ bridge to FlipFinder's pages
 async function registerAppBridge() {
   const origin = await appOrigin();
-  try {
-    await chrome.scripting.unregisterContentScripts({ ids: ["ff-app-bridge"] });
-  } catch {
-    /* not registered yet */
+  const allowed = Boolean(origin) && (await chrome.permissions.contains({ origins: [`${origin}/*`] }).catch(() => false));
+  const want = allowed ? [`${origin}/*`] : null;
+  const [current] = await chrome.scripting.getRegisteredContentScripts({ ids: ["ff-app-bridge"] }).catch(() => []);
+  // Left as it is when nothing changed: the service worker starts often (every wake-up), and a
+  // FlipFinder page loading while the script is re-registered would miss its bridge.
+  if (!(current && want && JSON.stringify(current.matches) === JSON.stringify(want))) {
+    if (current) await chrome.scripting.unregisterContentScripts({ ids: ["ff-app-bridge"] }).catch(() => {});
+    if (!want) return;
+    await chrome.scripting
+      .registerContentScripts([{ id: "ff-app-bridge", matches: want, js: ["src/app-bridge.js"], runAt: "document_start", persistAcrossSessions: true }])
+      .catch((err) => logError("bridge", err.message));
   }
-  if (!origin || !(await chrome.permissions.contains({ origins: [`${origin}/*`] }))) return;
-  await chrome.scripting
-    .registerContentScripts([{ id: "ff-app-bridge", matches: [`${origin}/*`], js: ["src/app-bridge.js"], runAt: "document_start", persistAcrossSessions: true }])
-    .catch((err) => logError("bridge", err.message));
+  // FlipFinder pages already open (address just set, extension just installed or updated, a
+  // page loaded while the worker was restarting) get the bridge now, without a reload. Once per
+  // page: the script checks it itself.
+  const open = await chrome.tabs.query({ url: want[0] }).catch(() => []);
+  for (const tab of open) chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["src/app-bridge.js"] }).catch(() => {});
 }
 
 // ------------------------------------------------------------------ messages
 const OPENABLE = [/^\/items\/[\w-]+$/, /^\/deals\/[\w-]+$/, /^\/analyze(#import=[\w-]+)?$/, /^\/import(#batch=[\w-]+)?$/, /^\/settings(#[\w-]+)?$/, /^\/items$/];
 
+let pageStatsOffUntil = 0;
 let lookupTimer = null;
 const lookupWanted = new Map(); // vid -> Set(tabId)
 
@@ -1126,9 +1223,10 @@ function scheduleLookup() {
     const vids = [...wanted.keys()].slice(0, 200);
     if (!vids.length || !(await getKey())) return;
     try {
-      const evals = await api("/capture/evaluations", { method: "POST", body: { vinted_ids: vids } });
+      const timing = { ep: "evaluations", n: vids.length };
+      const evals = await api("/capture/evaluations", { method: "POST", body: { vinted_ids: vids }, timing });
       const tabs = new Set([...wanted.values()].flatMap((s) => [...s]));
-      await onEvaluations(evals, { tabIds: [...tabs], fresh: false });
+      await onEvaluations(evals, { tabIds: [...tabs], fresh: false, timing });
     } catch (err) {
       await logError("valutazioni", err.message);
     }
@@ -1156,6 +1254,12 @@ const HANDLERS = {
   async "ff:vinted-buy-open"(msg, sender) {
     if (!(await trustedSender(sender))) return { ok: false, code: "forbidden", message: "Richiesta non autorizzata." };
     return vintedBuyOpen(msg);
+  },
+
+  async "ff:vinted-buy"(msg, sender) {
+    if (!(await trustedSender(sender))) return { ok: false, code: "forbidden", message: "Richiesta non autorizzata." };
+    if (!(await getKey())) return { ok: false, code: "unpaired", message: "Estensione non associata a FlipFinder." };
+    return vintedBuy(msg);
   },
 
   async "ff:purchase-done"(msg, sender) {
@@ -1205,9 +1309,29 @@ const HANDLERS = {
   async "ff:cards"(msg, sender) {
     const tabId = sender.tab && sender.tab.id;
     await touchSession(tabId, msg.pageUrl, msg.pageType, (msg.cards || []).length);
-    const entries = (msg.cards || []).slice(0, 200).map((c) => ({ vid: c.vid, payload: c.payload, pageType: msg.pageType, pageUrl: String(msg.pageUrl || "").slice(0, 1000), tabId }));
-    await enqueue("cards", entries, 800);
+    const first = Boolean(msg.first);
+    const entries = (msg.cards || []).slice(0, 200).map((c) => ({ vid: c.vid, payload: c.payload, pageType: msg.pageType, pageUrl: String(msg.pageUrl || "").slice(0, 1000), tabId, ...(first ? { first } : {}) }));
+    // At once: the page groups its cards itself (best first, then the rest of the document,
+    // then cards read later in small groups).
+    await enqueue("cards", entries, 0);
     return { queued: entries.length };
+  },
+
+  async "ff:page-stats"(msg) {
+    // One request per page (and per new batch of cards): pre-computed statistics, no analysis.
+    if (Date.now() < pageStatsOffUntil || !(await getKey())) return { ok: false, off: true };
+    const items = (msg.items || []).filter((i) => i && /^\d{1,20}$/.test(String(i.vinted_id))).slice(0, 120);
+    if (!items.length) return { ok: false };
+    const timing = { ep: "page-stats", n: items.length };
+    try {
+      const res = await api("/extension/page-stats", { method: "POST", body: { items }, timing });
+      return { ok: true, stats: (res && res.stats) || {}, timing };
+    } catch (err) {
+      // An older FlipFinder without it, or switched off: not asked again for a while.
+      if (err.status === 404 || err.status === 403 || err.status === 405) pageStatsOffUntil = Date.now() + 3600 * 1000;
+      else if (err.status === 429) pageStatsOffUntil = Date.now() + (err.retryAfterMs || 60000);
+      return { ok: false, status: err.status || 0 };
+    }
   },
 
   async "ff:item"(msg, sender) {
@@ -1222,8 +1346,10 @@ const HANDLERS = {
     const found = await cachedEvaluations(vids);
     const known = new Set(found.map((e) => e.vinted_id));
     const tabId = sender.tab && sender.tab.id;
+    // Cards sent for capture get their verdict from it: no second request for them.
+    const remote = Array.isArray(msg.remote) ? new Set(msg.remote) : null;
     for (const v of vids) {
-      if (known.has(v)) continue;
+      if (known.has(v) || (remote && !remote.has(v))) continue;
       if (!lookupWanted.has(v)) lookupWanted.set(v, new Set());
       if (typeof tabId === "number") lookupWanted.get(v).add(tabId);
     }
@@ -1430,6 +1556,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.permissions.onAdded.addListener(() => registerAppBridge());
 
 chrome.storage.onChanged.addListener((changes, area) => {
+  if ((area === "sync" && changes.options) || (area === "local" && (changes.paired || changes.parserConfig || changes.marketCache))) publishBoot();
   if (area === "sync" && changes.options) {
     scheduleFlush(0);
     registerAppBridge();
@@ -1445,6 +1572,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 async function startup() {
+  // Vinted pages read their start-up data (see publishBoot) from the session storage.
+  await sessionStore.setAccessLevel?.({ accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" }).catch(() => {});
   chrome.alarms.create("ff-config", { periodInMinutes: 360, delayInMinutes: 1 });
   chrome.alarms.create("ff-market", { periodInMinutes: 180, delayInMinutes: 180 });
   chrome.alarms.create("ff-refresh", { periodInMinutes: 10, delayInMinutes: 2 });
@@ -1454,6 +1583,8 @@ async function startup() {
   const key = await getKey();
   // Pages read this flag (never the key) to know whether to score their cards.
   if (Boolean(key) !== Boolean((await local.get("paired")).paired)) await local.set({ paired: Boolean(key) });
+  const { boot } = await sessionStore.get("boot");
+  if (!boot) publishBoot();
   const q = await loadQueue();
   paintBadge(key ? { ...(await getSync()), pending: K.queueSize(q) } : { state: "unpaired" });
   if (key) {

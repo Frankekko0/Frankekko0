@@ -10,13 +10,14 @@ import { Button } from "@/components/ui/button";
 import { eur, pct } from "@/lib/format";
 import { useAccuracy, useBrandAnalytics, useBrands, useCategories, useCategoryAnalytics, useInsights, useMarketDatabase } from "@/lib/queries";
 import type { ErrorStats, SegmentStats } from "@/lib/types";
+import { TableScroll } from "@/components/ui/table-scroll";
 
 function SegmentTable({ rows, loading, kind }: { rows?: SegmentStats[]; loading: boolean; kind: "brand" | "category" }) {
   if (loading) return <Skeleton className="h-80 rounded-xl" />;
   if (!rows?.length) return <EmptyState icon={<Layers />} title="Not enough data yet" description="Analytics fill up as more listings are captured and analysed (extension, imports, email)." />;
   const max = Math.max(...rows.map((r) => r.flip_index), 1);
   return (
-    <div className="-mx-5 overflow-x-auto">
+    <TableScroll label={kind === "brand" ? "Brands" : "Categories"} className="-mx-5">
       <table className="w-full min-w-[820px] text-left text-[13px]">
         <thead>
           <tr className="border-b border-line text-xs text-fg-3">
@@ -60,7 +61,7 @@ function SegmentTable({ rows, loading, kind }: { rows?: SegmentStats[]; loading:
           ))}
         </tbody>
       </table>
-    </div>
+    </TableScroll>
   );
 }
 
@@ -99,7 +100,7 @@ function MarketDatabase() {
         <EmptyState icon={<Database />} title="No segments found" description="The market database is rebuilt every 15 minutes from observed listings." />
       ) : (
         <>
-          <div className="-mx-5 overflow-x-auto">
+          <TableScroll label="Market segments" className="-mx-5">
             <table className="w-full min-w-[860px] text-left text-[13px]">
               <thead>
                 <tr className="border-b border-line text-xs text-fg-3">
@@ -137,7 +138,7 @@ function MarketDatabase() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableScroll>
           <div className="mt-4 flex items-center justify-between text-[13px] text-fg-3">
             <span>{db.data.total.toLocaleString()} segments</span>
             <div className="flex gap-2">
@@ -243,7 +244,7 @@ function AccuracyCard() {
         ) : !m ? (
           <EmptyState title="Not measured yet" description="The check needs past sales; it runs every day and after each restart." />
         ) : (
-          <div className="overflow-x-auto">
+          <TableScroll label="Estimate accuracy">
             <table className="w-full min-w-[560px] text-left text-[13px]">
               <thead className="text-[11px] uppercase tracking-[0.06em] text-fg-3">
                 <tr>
@@ -267,7 +268,7 @@ function AccuracyCard() {
             <p className="mt-3 text-xs text-fg-3">
               Learned on {m.learn_sales} older sales{m.own_resales ? ` and ${m.own_resales} of your resales` : ""}. Bias &gt; 0 means estimates above the realized price.
             </p>
-          </div>
+          </TableScroll>
         )}
       </CardContent>
     </Card>

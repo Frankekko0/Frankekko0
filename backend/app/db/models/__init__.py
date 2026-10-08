@@ -7,6 +7,7 @@ from app.db.models.market import MarketComparable, MarketStatistic
 from app.db.models.monitoring import Alert, AlertDelivery, Watchlist
 from app.db.models.opportunity import Opportunity, OpportunityScore
 from app.db.models.portfolio import Favorite, InventoryItem, MarketplaceAction, Purchase, Sale, UserAffinity
+from app.db.models.pricing_data import ExternalPrice, ExternalSearch, ModelPriceStat, SoldSale
 from app.db.models.seller import Seller
 from app.db.models.system import AnalysisJob, SystemState
 from app.db.models.user import ApiKey, NotificationSettings, PushSubscription, User, UserPreferences
@@ -19,6 +20,8 @@ __all__ = [
     "ApiKey",
     "Brand",
     "Category",
+    "ExternalPrice",
+    "ExternalSearch",
     "Favorite",
     "InventoryItem",
     "Listing",
@@ -28,6 +31,7 @@ __all__ = [
     "MarketComparable",
     "MarketStatistic",
     "MarketplaceAction",
+    "ModelPriceStat",
     "NotificationSettings",
     "Opportunity",
     "OpportunityScore",
@@ -36,6 +40,7 @@ __all__ = [
     "PushSubscription",
     "Sale",
     "Seller",
+    "SoldSale",
     "SystemState",
     "User",
     "UserAffinity",

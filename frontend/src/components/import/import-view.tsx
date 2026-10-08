@@ -261,7 +261,7 @@ function HowTo() {
       <Card className="enter overflow-hidden" style={{ "--i": 2 } as CSSProperties}>
         <div className="border-b border-line bg-gradient-to-br from-ultra-soft via-transparent to-accent-soft px-5 py-4">
           <div className="flex items-center gap-3">
-            <span className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-ultra to-ultra-2 text-white shadow-[0_6px_18px_-8px_var(--ultra)]">
+            <span className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-ultra-solid to-ultra-solid-2 text-white shadow-[0_6px_18px_-8px_var(--ultra)]">
               <Import className="size-4" />
             </span>
             <div>

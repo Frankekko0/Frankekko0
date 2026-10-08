@@ -2,8 +2,9 @@
 
 import { Check, CircleHelp, CircleMinus, CirclePlus, Copy, Fingerprint, Gauge, Lightbulb, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { eur, pct } from "@/lib/format";
-import type { AuthEvidence, AuthVerdict, DealInsights, OpportunityDetail } from "@/lib/types";
+import { eur, pct, plural } from "@/lib/format";
+import { DAYS_BASIS_SHORT, shortBasis } from "@/lib/provenance";
+import type { AuthEvidence, AuthVerdict, DealInsights, OpportunityDetail, Provenance } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,11 +54,23 @@ function Figure({ label, value, conf, sub, tone }: { label: string; value: strin
 
 const INSUFFICIENT = "insufficient data";
 
-export function DecisionSection({ d }: { d: OpportunityDetail }) {
+/** A short "where it comes from" next to a figure, linking to the Sources section. */
+function SourceHint({ children }: { children: ReactNode }) {
+  return (
+    <a href="#sources" className="underline decoration-line-strong underline-offset-2 transition-colors hover:text-fg hover:decoration-current">
+      {children}
+    </a>
+  );
+}
+
+export function DecisionSection({ d, provenance }: { d: OpportunityDetail; provenance?: Provenance | null }) {
   const i = d.insights;
   if (!i) return null;
   const r = i.resale;
   const rap = i.risk_adjusted_profit;
+  const basis = provenance ? shortBasis(provenance) : null;
+  const daysBasis = provenance ? DAYS_BASIS_SHORT[provenance.days_to_sell.basis] : undefined;
+  const daysN = provenance?.days_to_sell.n ?? 0;
   return (
     <Section
       id="decision"
@@ -94,7 +107,7 @@ export function DecisionSection({ d }: { d: OpportunityDetail }) {
 
       <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
         <Figure label="Resale min" value={eur(r.low)} conf={r.confidence} sub={r.calibrated ? "calibrated on real sales" : undefined} />
-        <Figure label="Resale probable" value={eur(r.probable)} conf={r.confidence} />
+        <Figure label="Resale probable" value={eur(r.probable)} conf={r.confidence} sub={basis ? <SourceHint>from {basis}</SourceHint> : undefined} />
         <Figure label="Resale max" value={eur(r.high)} conf={r.confidence} />
         <Figure
           label="Net margin"
@@ -103,7 +116,12 @@ export function DecisionSection({ d }: { d: OpportunityDetail }) {
           tone={i.net_margin === null ? undefined : i.net_margin > 0 ? "success" : "danger"}
           sub="after buyer protection and shipping"
         />
-        <Figure label="Time to sell" value={i.days_to_sell !== null ? `~${Math.round(i.days_to_sell)} days` : INSUFFICIENT} conf={i.days_confidence} />
+        <Figure
+          label="Time to sell"
+          value={i.days_to_sell !== null ? `~${Math.round(i.days_to_sell)} days` : INSUFFICIENT}
+          conf={i.days_confidence}
+          sub={daysBasis ? <SourceHint>{daysBasis === DAYS_BASIS_SHORT.sold && daysN ? plural(daysN, "similar item") + " sold" : daysBasis}</SourceHint> : undefined}
+        />
         <Figure
           label="Sold within 30 days"
           value={i.p_sale.p !== null ? pct(i.p_sale.p) : INSUFFICIENT}
@@ -263,41 +281,47 @@ export function InsightDetails({ i }: { i: DealInsights }) {
         </ul>
       )}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <dl className="space-y-1.5 text-[13px]">
-          <dt className="font-semibold text-fg">Demand</dt>
-          <Row k="Favourites / day" v={dem.favourites_per_day !== null ? dem.favourites_per_day.toFixed(1) : INSUFFICIENT} />
-          <Row k="Listing age" v={dem.listing_age_days !== null ? `${dem.listing_age_days} days` : "—"} />
-          <Row k="Price drops" v={dem.price_drops.count ? `${dem.price_drops.count} (−${pct(dem.price_drops.total_pct)})` : "none seen"} />
-          <Row k="Similar items" v={share(dem.sell_share.overall, dem.sell_share.n)} />
-          <Row k={`Size ${dem.size.size ?? "—"}`} v={share(dem.size.sell_share, dem.size.n)} />
-          <Row k={`Colour ${dem.color.color ?? "—"}`} v={share(dem.color.sell_share, dem.color.n)} />
-          <Row
-            k="Seasonality"
-            v={dem.seasonality.available ? `${dem.seasonality.month} ×${dem.seasonality.factor} · best ${dem.seasonality.best_months?.join(", ")}` : INSUFFICIENT}
-          />
-          <Row k="Your tracking" v={dem.tracked_similar.n ? `${dem.tracked_similar.n} sold, median ${dem.tracked_similar.median_days_to_sell} days` : "no tracked sales yet"} />
-        </dl>
-        <dl className="space-y-1.5 text-[13px]">
-          <dt className="font-semibold text-fg">Seller</dt>
-          <Row k="Rating" v={s.rating !== null ? `${s.rating.toFixed(1)}★ · ${s.reviews} reviews` : s.reviews === 0 ? "no reviews" : "unknown"} />
-          <Row k="Account age" v={s.account_age_days !== null ? `${s.account_age_days} days` : "unknown"} />
-          <Row k="Last active" v={s.last_active_days !== null ? `${s.last_active_days} days ago` : "unknown"} />
-          <Row k="Response time" v="not shown by Vinted" />
-          <Row
-            k="Lowers prices"
-            v={lp.share !== null ? `${lp.with_drops}/${lp.listings_seen} listings${lp.avg_drop_pct !== null ? `, avg −${pct(lp.avg_drop_pct)}` : ""}` : INSUFFICIENT}
-          />
-        </dl>
-        <dl className="space-y-1.5 text-[13px]">
-          <dt className="font-semibold text-fg">Product</dt>
-          <Row k="Brand" v={id.brand ?? "not identified"} />
-          <Row k="Line / model" v={[id.line, id.model].filter(Boolean).join(" · ") || "—"} />
-          <Row k="Period" v={id.season ?? "—"} />
-          <Row k="Code" v={id.product_code ?? "—"} />
-          <Row k="List price" v={id.original_price_list !== null ? eur(id.original_price_list) : id.original_price_claimed !== null ? `${eur(id.original_price_claimed)} (stated by seller)` : "not available"} />
-          <Row k="Condition" v={c.effective === c.declared ? c.declared_label : `declared ${c.declared_label}, photos lower`} />
-          <Row k="Photo check" v={c.photos_checked ? `${c.defects.length} defects seen` : "photos not analysed"} />
-        </dl>
+        <div className="text-[13px]">
+          <h3 className="mb-1.5 font-semibold text-fg">Demand</h3>
+          <dl className="space-y-1.5">
+            <Row k="Favourites / day" v={dem.favourites_per_day !== null ? dem.favourites_per_day.toFixed(1) : INSUFFICIENT} />
+            <Row k="Listing age" v={dem.listing_age_days !== null ? `${dem.listing_age_days} days` : "—"} />
+            <Row k="Price drops" v={dem.price_drops.count ? `${dem.price_drops.count} (−${pct(dem.price_drops.total_pct)})` : "none seen"} />
+            <Row k="Similar items" v={share(dem.sell_share.overall, dem.sell_share.n)} />
+            <Row k={`Size ${dem.size.size ?? "—"}`} v={share(dem.size.sell_share, dem.size.n)} />
+            <Row k={`Colour ${dem.color.color ?? "—"}`} v={share(dem.color.sell_share, dem.color.n)} />
+            <Row
+              k="Seasonality"
+              v={dem.seasonality.available ? `${dem.seasonality.month} ×${dem.seasonality.factor} · best ${dem.seasonality.best_months?.join(", ")}` : INSUFFICIENT}
+            />
+            <Row k="Your tracking" v={dem.tracked_similar.n ? `${dem.tracked_similar.n} sold, median ${dem.tracked_similar.median_days_to_sell} days` : "no tracked sales yet"} />
+          </dl>
+        </div>
+        <div className="text-[13px]">
+          <h3 className="mb-1.5 font-semibold text-fg">Seller</h3>
+          <dl className="space-y-1.5">
+            <Row k="Rating" v={s.rating !== null ? `${s.rating.toFixed(1)}★ · ${s.reviews} reviews` : s.reviews === 0 ? "no reviews" : "unknown"} />
+            <Row k="Account age" v={s.account_age_days !== null ? `${s.account_age_days} days` : "unknown"} />
+            <Row k="Last active" v={s.last_active_days !== null ? `${s.last_active_days} days ago` : "unknown"} />
+            <Row k="Response time" v="not shown by Vinted" />
+            <Row
+              k="Lowers prices"
+              v={lp.share !== null ? `${lp.with_drops}/${lp.listings_seen} listings${lp.avg_drop_pct !== null ? `, avg −${pct(lp.avg_drop_pct)}` : ""}` : INSUFFICIENT}
+            />
+          </dl>
+        </div>
+        <div className="text-[13px]">
+          <h3 className="mb-1.5 font-semibold text-fg">Product</h3>
+          <dl className="space-y-1.5">
+            <Row k="Brand" v={id.brand ?? "not identified"} />
+            <Row k="Line / model" v={[id.line, id.model].filter(Boolean).join(" · ") || "—"} />
+            <Row k="Period" v={id.season ?? "—"} />
+            <Row k="Code" v={id.product_code ?? "—"} />
+            <Row k="List price" v={id.original_price_list !== null ? eur(id.original_price_list) : id.original_price_claimed !== null ? `${eur(id.original_price_claimed)} (stated by seller)` : "not available"} />
+            <Row k="Condition" v={c.effective === c.declared ? c.declared_label : `declared ${c.declared_label}, photos lower`} />
+            <Row k="Photo check" v={c.photos_checked ? `${c.defects.length} defects seen` : "photos not analysed"} />
+          </dl>
+        </div>
       </div>
     </Section>
   );
