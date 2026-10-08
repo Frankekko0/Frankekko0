@@ -108,7 +108,12 @@ def test_sections_of_other_items_are_never_read() -> None:
     assert item.seller_key == seller_key("1000003")  # still the item's own seller id
     assert item.favourite_count == 78  # the item's own favourite button, never 999
     # A status banner of another item never makes this one sold.
-    sold = _swap(_page("item_sold_plugins.html"), '\\"item_id\\":\\"9000000102\\",\\"seller_id\\":\\"1000001\\",\\"theme\\"', '\\"item_id\\":\\"9000000999\\",\\"seller_id\\":\\"1000001\\",\\"theme\\"', 1)
+    sold = _swap(
+        _page("item_sold_plugins.html"),
+        '\\"item_id\\":\\"9000000102\\",\\"seller_id\\":\\"1000001\\",\\"theme\\"',
+        '\\"item_id\\":\\"9000000999\\",\\"seller_id\\":\\"1000001\\",\\"theme\\"',
+        1,
+    )
     sold = _swap(sold, "<div>Venduto</div>", "<div></div>", 1)
     assert parse_item_html(sold, SOLD_URL, now=NOW).status == ListingStatus.ACTIVE
 
@@ -118,7 +123,12 @@ def test_only_the_items_own_badge_says_sold() -> None:
     assert parse_item_html(page, SOLD_URL, now=NOW).status == ListingStatus.ACTIVE
     # "Venduto" on another item's card (even right above the summary) or in a title is no sale.
     card = '<div data-testid="product-item-id-9000000555"><div>Venduto</div></div>'
-    with_card = _swap(page, '<div data-testid="item-page-summary-plugin">', card + '<div data-testid="item-page-summary-plugin">', 1)
+    with_card = _swap(
+        page,
+        '<div data-testid="item-page-summary-plugin">',
+        card + '<div data-testid="item-page-summary-plugin">',
+        1,
+    )
     assert parse_item_html(with_card, SOLD_URL, now=NOW).status == ListingStatus.ACTIVE
     titled = page.replace("Polo t shirt", "Sold out polo - venduto in negozio")
     assert parse_item_html(titled, SOLD_URL, now=NOW).status == ListingStatus.ACTIVE

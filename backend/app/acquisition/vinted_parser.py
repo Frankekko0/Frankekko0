@@ -250,7 +250,22 @@ class _Collector(HTMLParser):
 
     SKIP = frozenset({"script", "style", "noscript", "template", "svg"})
     VOID = frozenset(
-        {"meta", "link", "img", "br", "input", "hr", "source", "wbr", "area", "base", "col", "embed", "param", "track"}
+        {
+            "meta",
+            "link",
+            "img",
+            "br",
+            "input",
+            "hr",
+            "source",
+            "wbr",
+            "area",
+            "base",
+            "col",
+            "embed",
+            "param",
+            "track",
+        }
     )
     CHROME = frozenset({"header", "nav", "footer"})
 
@@ -528,7 +543,11 @@ class ParsedItem:
 def _protection_fee(total: Decimal, price: Decimal) -> Decimal | None:
     """Buyer protection = total - price, when plausible (positive, at most 20% + 5)."""
     diff = total - price
-    return diff.quantize(Decimal("0.01")) if Decimal("0") < diff <= price * Decimal("0.2") + Decimal("5") else None
+    return (
+        diff.quantize(Decimal("0.01"))
+        if Decimal("0") < diff <= price * Decimal("0.2") + Decimal("5")
+        else None
+    )
 
 
 def _first(meta: dict[str, list[str]], key: str) -> str | None:
@@ -661,10 +680,13 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
         if c.total_price and (hit := find_price(c.total_price, cfg)):
             item.buyer_protection_fee = _protection_fee(hit[0], item.price)
         for t in c.texts[:600] if item.buyer_protection_fee is None else []:
-            if cfg.patterns["protection_included"].search(t) and (hit := find_price(t, cfg)):
-                if (fee := _protection_fee(hit[0], item.price)) is not None:
-                    item.buyer_protection_fee = fee
-                    break
+            if (
+                cfg.patterns["protection_included"].search(t)
+                and (hit := find_price(t, cfg))
+                and (fee := _protection_fee(hit[0], item.price)) is not None
+            ):
+                item.buyer_protection_fee = fee
+                break
         if item.buyer_protection_fee is None and (fee := emb("service_fee")):
             item.buyer_protection_fee = parse_price(fee)
     if (ship := emb("shipping")) is not None:
