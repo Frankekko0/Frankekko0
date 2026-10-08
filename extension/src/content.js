@@ -24,7 +24,15 @@
   let paired = false;
 
   const text = (el) => (el ? (el.textContent || "").replace(/\s+/g, " ").trim() : "");
-  const send = (msg) => chrome.runtime.sendMessage(msg).catch(() => null);
+  // After the extension is updated or reloaded, tabs that were already open keep this old copy of the
+  // script: chrome.runtime then throws "Extension context invalidated" synchronously. Reload the tab.
+  const send = (msg) => {
+    try {
+      return chrome.runtime.sendMessage(msg).catch(() => null);
+    } catch {
+      return Promise.resolve(null);
+    }
+  };
   // Timing marks (visible in DevTools > Performance): where the instant verdict spends its time.
   const mark = (name) => performance.mark(`ff:${name}`);
   const idle = (fn) => (window.requestIdleCallback ? requestIdleCallback(fn, { timeout: 800 }) : setTimeout(fn, 50));
