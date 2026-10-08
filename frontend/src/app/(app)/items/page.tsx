@@ -15,6 +15,7 @@ import { CAPTURE_LABEL, MODE_LABEL, STATUS_LABEL, eur, plural, timeAgo } from "@
 import { useBrands, useItems, useTrackItem } from "@/lib/queries";
 import type { Item, ItemFilters } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { TableScroll } from "@/components/ui/table-scroll";
 
 const STATUS_TONE: Record<string, BadgeTone> = {
   active: "success",
@@ -217,7 +218,7 @@ export default function ItemsPage() {
               Updating…
             </span>
           </div>
-          <div className="overflow-x-auto">
+          <TableScroll label="Archived listings">
             <table className="w-full min-w-[980px] text-left text-[13px]">
               <thead>
                 <tr className="border-b border-line text-xs text-fg-3">
@@ -228,7 +229,9 @@ export default function ItemsPage() {
                   <th className="px-2 py-2 font-medium">Score</th>
                   <th className="px-2 py-2 text-right font-medium">Net margin</th>
                   <th className="px-2 py-2 font-medium">Checked</th>
-                  <th className="px-4 py-2" />
+                  <th className="px-4 py-2">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -301,7 +304,7 @@ export default function ItemsPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableScroll>
           <div className="flex items-center justify-between border-t border-line px-4 py-2.5 text-[13px]">
             <span className="text-fg-3">
               Page {page} of {Math.max(1, Math.ceil(data.total / PAGE_SIZE))}

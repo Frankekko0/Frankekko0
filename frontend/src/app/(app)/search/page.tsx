@@ -4,7 +4,7 @@ import { ArrowRight, Search as SearchIcon, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState, type FormEvent, type CSSProperties } from "react";
-import { DealCard, DealCardSkeleton } from "@/components/deal/deal-card";
+import { DealCard, DealCardSkeleton, EAGER_CARDS } from "@/components/deal/deal-card";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState } from "@/components/ui/feedback";
 import { errorMessage } from "@/lib/api";
@@ -50,7 +50,7 @@ function SearchInner() {
         </h1>
         <p className="enter mt-1.5 text-sm text-fg-2" style={{ "--i": 1 } as CSSProperties}>Describe what you want, in Italian or English. FlipFinder turns it into precise filters.</p>
       </div>
-      <form onSubmit={submit} className="relative" role="search">
+      <form onSubmit={submit} className="relative" role="search" aria-label="Smart search">
         <SearchIcon className="pointer-events-none absolute left-4 top-1/2 size-5 -translate-y-1/2 text-fg-3" />
         <input
           value={value}
@@ -132,7 +132,7 @@ function SearchInner() {
           ) : (
             <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {data.results.items.map((d, i) => (
-                <DealCard key={d.id} deal={d} index={i} />
+                <DealCard key={d.id} deal={d} index={i} eagerImage={i < EAGER_CARDS} />
               ))}
             </div>
           )}

@@ -358,7 +358,7 @@ export default function DealPage({ params }: { params: Promise<{ id: string }> }
         </aside>
       </div>
 
-      <div className="fixed inset-x-0 bottom-[57px] z-30 border-t border-line bg-bg/85 px-4 py-2.5 backdrop-blur-xl backdrop-saturate-150 [animation:sheet-in_0.45s_var(--ease-drawer)_0.2s_backwards] lg:hidden">
+      <div className="fixed inset-x-0 bottom-[calc(57px+env(safe-area-inset-bottom))] z-30 border-t border-line bg-bg/85 px-4 py-2.5 backdrop-blur-xl backdrop-saturate-150 [animation:sheet-in_0.45s_var(--ease-drawer)_0.2s_backwards] lg:hidden">
         <div className="mx-auto flex max-w-md items-center gap-3">
           <div className="min-w-0 flex-1">
             <p className="text-[11px] text-fg-3">

@@ -3,19 +3,20 @@
 import { ExternalLink, MoreHorizontal, Package, Plus, Receipt, Trash2, Trophy } from "lucide-react";
 import Link from "next/link";
 import { useState, type CSSProperties } from "react";
-import { MonthlyProfitChart } from "@/components/charts/monthly-bars";
+import { MonthlyProfitChart } from "@/components/charts/lazy";
 import { PurchaseDialog, SaleDialog } from "@/components/forms/flip-forms";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState, Skeleton } from "@/components/ui/feedback";
-import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger, Tabs, TabsList, TabsTrigger } from "@/components/ui/misc";
+import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger, Segmented } from "@/components/ui/misc";
 import { AnimatedNumber } from "@/components/ui/motion";
 import { StatTile } from "@/components/ui/stat";
 import { eur, pct, plural, shortDate } from "@/lib/format";
 import { useDeletePurchase, useDeleteSale, useFlips, usePortfolio, useUpdatePurchase } from "@/lib/queries";
 import type { Flip } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { TableScroll } from "@/components/ui/table-scroll";
 
 const STATUS: Record<Flip["status"], { label: string; tone: "neutral" | "accent" | "success" | "danger" }> = {
   in_stock: { label: "In stock", tone: "neutral" },
@@ -150,13 +151,16 @@ export default function FlipsPage() {
       <Card className="reveal">
         <CardHeader className="items-center">
           <CardTitle>Purchases & sales</CardTitle>
-          <Tabs value={tab} onValueChange={setTab}>
-            <TabsList>
-              <TabsTrigger value="all">All</TabsTrigger>
-              <TabsTrigger value="inventory">Inventory</TabsTrigger>
-              <TabsTrigger value="sold">Sold</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <Segmented
+            label="Show"
+            value={tab}
+            onValueChange={setTab}
+            options={[
+              { value: "all", label: "All" },
+              { value: "inventory", label: "Inventory" },
+              { value: "sold", label: "Sold" },
+            ]}
+          />
         </CardHeader>
         <CardContent>
           {flips.isLoading ? (
@@ -169,7 +173,7 @@ export default function FlipsPage() {
               className="border-0"
             />
           ) : (
-            <div className="-mx-5 overflow-x-auto">
+            <TableScroll label="Purchases and sales" className="-mx-5">
               <table className="w-full min-w-[760px] text-left text-[13px]">
                 <thead>
                   <tr className="border-b border-line text-xs text-fg-3">
@@ -181,7 +185,9 @@ export default function FlipsPage() {
                     <th className="px-2 py-2 text-right font-medium">Profit</th>
                     <th className="px-2 py-2 text-right font-medium">ROI</th>
                     <th className="px-2 py-2 text-right font-medium">Holding</th>
-                    <th className="px-5 py-2" />
+                    <th className="px-5 py-2">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -211,7 +217,7 @@ export default function FlipsPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
           )}
         </CardContent>
       </Card>

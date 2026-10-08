@@ -26,7 +26,7 @@ import { useRunAi } from "@/lib/queries";
 import type { Attribute, Comparable, CostLine, OpportunityDetail, Reason, Scenario } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { PriceDistribution } from "@/components/charts/price-distribution";
-import { PriceHistoryChart } from "@/components/charts/history-line";
+import { PriceHistoryChart } from "@/components/charts/lazy";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,6 +35,7 @@ import { Tip } from "@/components/ui/misc";
 import { MarketComparisonView, RiskChecklist, TimeOnlineView } from "./analysis-detail";
 import { ListingImage } from "./listing-image";
 import { Meter, RiskBadge, scoreColor } from "./score";
+import { TableScroll } from "@/components/ui/table-scroll";
 
 function Section({ id, title, description, icon, action, children, className }: { id: string; title: string; description?: string; icon?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
   return (
@@ -547,7 +548,7 @@ export function ComparablesSection({ items }: { items: Comparable[] }) {
           </li>
         ))}
       </ul>
-      <div className="-mx-5 hidden overflow-x-auto sm:block">
+      <TableScroll label="Comparable listings" className="-mx-5 hidden sm:block">
         <table className="w-full min-w-[720px] text-left text-[13px]">
           <thead>
             <tr className="border-b border-line text-xs text-fg-3">
@@ -591,7 +592,7 @@ export function ComparablesSection({ items }: { items: Comparable[] }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </TableScroll>
       {items.length > 12 && (
         <Button variant="ghost" size="sm" className="mt-3" onClick={() => setShowAll(!showAll)}>
           {showAll ? "Show less" : `Show all ${items.length}`}

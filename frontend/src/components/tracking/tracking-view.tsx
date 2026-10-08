@@ -17,7 +17,7 @@ import {
 import Link from "next/link";
 import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { toast } from "sonner";
-import { SnapshotChart } from "@/components/charts/snapshot-chart";
+import { SnapshotChart } from "@/components/charts/lazy";
 import { DataQualityBanner, MarketComparisonView, RiskChecklist, TimeOnlineView } from "@/components/deal/analysis-detail";
 import { ProvenanceView } from "@/components/deal/provenance";
 import { ScoreRing } from "@/components/deal/score";
@@ -34,6 +34,7 @@ import type { AnalysisSummary, ItemDetail, MarketComparison, Snapshot, TimeOnlin
 import { cn } from "@/lib/utils";
 import { VintedActions } from "@/components/deal/vinted-actions";
 import { Gallery } from "./gallery";
+import { TableScroll } from "@/components/ui/table-scroll";
 
 const STATUS_TONE: Record<string, BadgeTone> = {
   active: "success",
@@ -314,7 +315,7 @@ function HistoryPanel({ snapshots }: { snapshots: Snapshot[] }) {
           ))}
         </ol>
       )}
-      <div className="-mx-1 mt-5 overflow-x-auto">
+      <TableScroll label="History" className="-mx-1 mt-5">
         <table className="w-full min-w-[620px] text-[12px]">
           <thead>
             <tr className="text-left text-fg-3">
@@ -339,7 +340,7 @@ function HistoryPanel({ snapshots }: { snapshots: Snapshot[] }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </TableScroll>
       {snapshots.length > 8 && (
         <Button variant="ghost" size="sm" className="mt-2" onClick={() => setAll(!all)}>
           {all ? "Show fewer" : `Show all ${snapshots.length} observations`}

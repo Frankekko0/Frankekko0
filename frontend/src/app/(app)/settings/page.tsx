@@ -248,12 +248,12 @@ function PreferencesForm({ initial }: { initial: Preferences }) {
             />
           ))}
         </div>
-        <div className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-surface-2 p-3">
+        <label className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-surface-2 p-3">
           <span className="flex items-center gap-2 text-[13px] text-fg-2">
             <Sparkles className="size-4 text-accent" /> Personal Flip Score (learns from your flips and ignored deals)
           </span>
           <Switch checked={p.personalization_enabled} onCheckedChange={(v) => set({ personalization_enabled: v })} />
-        </div>
+        </label>
         <Button variant="ghost" size="sm" className="mt-2" onClick={() => set({ score_weights: null })}>
           Reset to defaults
         </Button>

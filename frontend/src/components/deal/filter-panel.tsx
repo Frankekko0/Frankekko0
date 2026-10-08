@@ -56,8 +56,8 @@ function NumberFilter({
     if (v === undefined || !Number.isNaN(v)) onChange(v);
   };
   return (
-    <div>
-      <Label>{label}</Label>
+    <label className="block">
+      <span className="mb-1.5 block text-[13px] font-medium text-fg-2">{label}</span>
       <InputAffix
         inputMode="decimal"
         prefix={prefix}
@@ -69,7 +69,7 @@ function NumberFilter({
         onKeyDown={(e) => e.key === "Enter" && commit()}
         className="h-9"
       />
-    </div>
+    </label>
   );
 }
 
@@ -105,7 +105,7 @@ export function FilterPanel({ filters, onChange }: { filters: OpportunityFilters
       </Group>
 
       <Group title="Brand">
-        <Input placeholder="Search brands" value={brandQuery} onChange={(e) => setBrandQuery(e.target.value)} className="mb-2 h-9" />
+        <Input placeholder="Search brands" aria-label="Search brands" value={brandQuery} onChange={(e) => setBrandQuery(e.target.value)} className="mb-2 h-9" />
         <div className="max-h-44 space-y-0.5 overflow-y-auto pr-1">
           {visibleBrands.map((b) => (
             <label key={b.slug} className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 hover:bg-surface-2">
@@ -173,8 +173,9 @@ export function FilterPanel({ filters, onChange }: { filters: OpportunityFilters
       <Group title="Listing">
         <div className="space-y-3">
           <div>
-            <Label>Published</Label>
+            <Label htmlFor="filter-published">Published</Label>
             <Select
+              id="filter-published"
               value={filters.published_within_hours ?? ""}
               onChange={(e) => set({ published_within_hours: e.target.value ? Number(e.target.value) : undefined })}
               className="h-9"
@@ -188,8 +189,10 @@ export function FilterPanel({ filters, onChange }: { filters: OpportunityFilters
             </Select>
           </div>
           <div>
-            <Label>Country</Label>
-            <div className="flex flex-wrap gap-1.5">
+            <p id="filter-country" className="mb-1.5 text-[13px] font-medium text-fg-2">
+              Country
+            </p>
+            <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby="filter-country">
               {COUNTRIES.map((c) => (
                 <Chip key={c} active={filters.countries?.includes(c)} onClick={() => set({ countries: toggle(filters.countries, c) })}>
                   {c}

@@ -13,7 +13,7 @@ import { EmptyState, ErrorState } from "@/components/ui/feedback";
 import { Select } from "@/components/ui/input";
 import { Chip, Dialog, DialogContent, DialogTrigger } from "@/components/ui/misc";
 import { cn } from "@/lib/utils";
-import { DealCard, DealCardSkeleton } from "./deal-card";
+import { DealCard, DealCardSkeleton, EAGER_CARDS } from "./deal-card";
 import { FilterPanel } from "./filter-panel";
 
 const PAGE_SIZE = 24;
@@ -102,7 +102,7 @@ export function DealsExplorer({
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
               <Button variant="outline" size="sm" className="lg:hidden">
-                <SlidersHorizontal /> Filters {count > 0 && <span className="rounded-full bg-accent px-1.5 text-[10px] text-white">{count}</span>}
+                <SlidersHorizontal /> Filters {count > 0 && <span className="rounded-full bg-accent-solid px-1.5 text-[10px] text-white">{count}</span>}
               </Button>
             </DialogTrigger>
             <DialogContent title="Filters" side="right">
@@ -207,7 +207,7 @@ export function DealsExplorer({
             <>
               <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 xl:grid-cols-3">
                 {items.map((d, i) => (
-                  <DealCard key={d.id} deal={d} index={i % 24} />
+                  <DealCard key={d.id} deal={d} index={i % 24} eagerImage={i < EAGER_CARDS} />
                 ))}
               </div>
               {feed.hasNextPage && (

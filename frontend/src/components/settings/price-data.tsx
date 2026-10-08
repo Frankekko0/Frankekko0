@@ -14,6 +14,7 @@ import { accuracyDelta, describeDelta, freeQueriesMonths, refreshErrorMessage, r
 import { usePricingEvidence, useRefreshPricingEvidence } from "@/lib/queries";
 import type { EvidenceMetrics, ExternalSearchStatus, PricingEvidence, SoldSaleSource } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { TableScroll } from "@/components/ui/table-scroll";
 
 const SALE_SOURCES: { key: SoldSaleSource; label: string; detail: string }[] = [
   { key: "own_sale", label: "Your sales", detail: "price received" },
@@ -202,7 +203,7 @@ function AccuracyBlock({ a }: { a: PricingEvidence["accuracy"] }) {
       </SubHeading>
       {measured ? (
         <>
-          <div className="overflow-x-auto">
+          <TableScroll label="Estimate accuracy">
             <table className="w-full min-w-[320px] text-[13px]">
               <thead>
                 <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-fg-3">
@@ -241,7 +242,7 @@ function AccuracyBlock({ a }: { a: PricingEvidence["accuracy"] }) {
                 </tr>
               </tbody>
             </table>
-          </div>
+          </TableScroll>
           {describeDelta(delta) && (
             <p className={cn("mt-2 text-[13px] font-medium", delta !== null && delta > 0.005 ? "text-warning" : "text-fg")}>{describeDelta(delta)}</p>
           )}

@@ -10,7 +10,8 @@ export function CardHeader({ className, ...props }: HTMLAttributes<HTMLDivElemen
 }
 
 export function CardTitle({ className, ...props }: HTMLAttributes<HTMLHeadingElement>) {
-  return <h3 className={cn("text-[15px] font-semibold tracking-tight text-fg", className)} {...props} />;
+  // h2: cards are the top-level sections of every page (under its h1).
+  return <h2 className={cn("text-[15px] font-semibold tracking-tight text-fg", className)} {...props} />;
 }
 
 export function CardDescription({ className, ...props }: HTMLAttributes<HTMLParagraphElement>) {

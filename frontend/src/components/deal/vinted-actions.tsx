@@ -150,11 +150,11 @@ export function VintedActions({
     <div className={cn("space-y-2", className)}>
       <div className={cn("grid gap-2", showFavourite ? "grid-cols-2" : "grid-cols-1")}>
         {showFavourite && (
-          <Button variant="outline" size="sm" onClick={onFavourite} loading={busy === "favourite"} disabled={busy !== null} aria-pressed={fav === true}>
+          <Button variant="outline" size="sm" className="h-auto min-h-8 py-1.5 leading-tight whitespace-normal" onClick={onFavourite} loading={busy === "favourite"} disabled={busy !== null} aria-pressed={fav === true}>
             <Heart className={fav ? "fill-danger text-danger" : ""} /> {fav ? "In Vinted favourites" : "Add to Vinted favourites"}
           </Button>
         )}
-        <Button size="sm" onClick={onBuy} loading={busy === "buy"} disabled={busy !== null || Boolean(purchased)}>
+        <Button size="sm" className="h-auto min-h-8 py-1.5 leading-tight whitespace-normal" onClick={onBuy} loading={busy === "buy"} disabled={busy !== null || Boolean(purchased)}>
           <ShoppingCart /> {purchased ? "Bought" : "Buy on Vinted"}
         </Button>
       </div>

@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { DealsExplorer } from "@/components/deal/explorer";
 import { EmptyState } from "@/components/ui/feedback";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/misc";
+import { Segmented } from "@/components/ui/misc";
 import type { FavoriteState } from "@/lib/types";
 
 const STATES: { id: FavoriteState; label: string }[] = [
@@ -22,15 +22,12 @@ function SavedInner() {
   const state = (params.get("tab") as FavoriteState) || "saved";
   return (
     <div className="space-y-4">
-      <Tabs value={state} onValueChange={(v) => router.replace(`/saved?tab=${v}`)}>
-        <TabsList>
-          {STATES.map((s) => (
-            <TabsTrigger key={s.id} value={s.id}>
-              {s.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+      <Segmented
+        label="Show deals"
+        value={state}
+        onValueChange={(v) => router.replace(`/saved?tab=${v}`)}
+        options={STATES.map((s) => ({ value: s.id, label: s.label }))}
+      />
       <DealsExplorer
         key={state}
         title="Your deals"
