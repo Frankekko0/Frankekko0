@@ -122,6 +122,14 @@ personale): installala su computer e telefono con lo stesso account e apri
 pensata per la rete locale (password di sviluppo); per esporla su Internet segui
 [Produzione](#produzione).
 
+**Se usi solo Tailscale** (non la rete di casa), aggiungi `FRONTEND_BIND=127.0.0.1` in `.env`: la
+porta 3000 resta raggiungibile solo dal computer stesso e da Tailscale.
+
+**Backup del database** (acquisti, vendite, storico): con questa configurazione non partono da soli.
+Attivali una volta con `docker compose --profile backup up -d`: un backup all'avvio e uno ogni
+notte in `backups/`, tenuti 14 giorni. Ripristino: `deploy/restore.sh backups/<file>.dump`. Copia
+ogni tanto la cartella `backups/` anche altrove (disco esterno, cloud).
+
 L'estensione per Vinted funziona solo sui browser desktop (Chrome, Edge, Brave): i browser del
 telefono non supportano le estensioni. Dal telefono puoi consultare deal, alert e watchlist e
 analizzare un annuncio da **Analyze a listing**: nell'app Vinted *Condividi* → *Copia link*, poi

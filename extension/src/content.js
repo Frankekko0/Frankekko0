@@ -752,7 +752,7 @@
     if (!ev) return { cls: "muted", html: '<span class="dot"></span>', aria: "FlipFinder: analisi in corso" };
     if (ev.unreadable) return { cls: "muted", html: "n/d", aria: "FlipFinder: scheda non leggibile" };
     if (ev.source === "local") {
-      if (ev.status && ev.status !== "active") return { cls: "muted", html: { sold: "venduto", reserved: "riservato" }[ev.status] || ev.status, aria: "FlipFinder: non in vendita" };
+      if (ev.status && ev.status !== "active") return { cls: "muted", html: { sold: "venduto", reserved: "riservato" }[ev.status] || "non in vendita", aria: "FlipFinder: non in vendita" };
       if (ev.insufficient) return { cls: "muted", html: "dati insuff.", aria: `FlipFinder: dati insufficienti (${ev.insufficient})` };
       const v = ev.risk_adjusted_profit ?? ev.net_margin;
       return {
@@ -763,7 +763,7 @@
     }
     const eye = ev.tracked ? EYE : "";
     if (ev.status && ev.status !== "active") {
-      const label = { sold: "venduto", reserved: "riservato", removed: "rimosso" }[ev.status] || ev.status;
+      const label = { sold: "venduto", reserved: "riservato", removed: "rimosso" }[ev.status] || "non in vendita";
       return { cls: "muted", html: `${eye}${label}`, aria: `FlipFinder: ${label}` };
     }
     if (ev.flip_score === null || ev.flip_score === undefined) {
@@ -1055,7 +1055,7 @@
       }
       const scoredItem = ev.flip_score !== null && ev.flip_score !== undefined;
       const color = !scoredItem ? "#85847e" : ev.flip_score >= opts.minScore ? "#22c55e" : ev.flip_score >= 50 ? "#f59e0b" : "#ef4444";
-      const status = ev.status !== "active" ? `<p class="muted">Stato: ${{ sold: "venduto", reserved: "riservato", removed: "rimosso" }[ev.status] || ev.status}</p>` : "";
+      const status = ev.status !== "active" ? `<p class="muted">Stato: ${{ sold: "venduto", reserved: "riservato", removed: "rimosso" }[ev.status] || "non in vendita"}</p>` : "";
       body.innerHTML = `
         <div class="score">${scoredItem ? `<span class="ring" style="--v:${ev.flip_score};--c:${color}"><span>${ev.flip_score}</span></span>` : '<span class="insuff">Dati insufficienti</span>'}<span class="reason"></span></div>
         ${scoredItem ? `<dl><dt>Costo totale</dt><dd>${K.eur(ev.total_cost)}</dd><dt>Rivendita stimata</dt><dd>${K.eur(ev.resale_expected)}</dd><dt>Margine netto</dt><dd class="${(ev.net_margin ?? 0) >= 0 ? "pos" : "neg"}">${K.eur(ev.net_margin, true)}</dd><dt>ROI</dt><dd>${ev.roi === null ? "—" : Math.round(ev.roi * 100) + "%"}</dd><dt>Confidenza</dt><dd>${ev.confidence ?? "—"}/100</dd></dl>` : `<dl><dt>Costo totale</dt><dd>${K.eur(ev.total_cost)}</dd></dl>`}
