@@ -1,5 +1,5 @@
 {
-  "_about": "Real vinted.it pages (October 2026), trimmed and anonymised: ids of people and other items replaced, seller names, e-mails and image addresses replaced. Both parsers (server and extension) must read them like this.",
+  "_about": "Real vinted.it pages (October 2026), trimmed and anonymised: ids of people and other items replaced, seller names, e-mails and image addresses replaced. Both parsers (server and extension) must read them like this. item_sold_plugins.html and item_sold_no_scripts.html are the same sold item: the first keeps the item's page data (its status banner section says 'Venduto', can_buy is false), the second has no scripts (only the 'Venduto' badge above the item's summary says it is sold). item_active_plugins.html keeps the item's real 'favourite' section. view_count: the current layout shows no view count. seller_member: the (fake) member id the opaque seller key is made from; seller_rating null when the seller has no reviews yet.",
   "item_active_plugins.html": {
     "url": "https://www.vinted.it/items/9000000101-vintage-levis-501-size-w38-l36-made-in-france",
     "title": "Vintage Levi’s 501 - Size W38 L36 - Made in France",
@@ -11,9 +11,16 @@
     "color": "Blu, Azzurro",
     "status": "active",
     "status_source": "jsonld",
-    "images": 6
+    "images": 6,
+    "favourite_count": 78,
+    "view_count": null,
+    "buyer_protection_fee": "1.60",
+    "seller_member": "1000003",
+    "seller_rating": "4.90",
+    "seller_review_count": 353,
+    "can_buy": true
   },
-  "item_active_no_jsonld.html": {
+  "item_sold_plugins.html": {
     "url": "https://www.vinted.it/items/9000000102-polo-t-shirt",
     "title": "Polo t shirt",
     "price": "10.00",
@@ -22,8 +29,35 @@
     "size": "XS",
     "condition": "new_without_tags",
     "color": "Bianco, Blu marino",
-    "status": "active",
-    "status_source": "default",
-    "images": 1
+    "status": "sold",
+    "status_source": "embedded",
+    "images": 3,
+    "favourite_count": 76,
+    "view_count": null,
+    "buyer_protection_fee": "1.20",
+    "seller_member": "1000001",
+    "seller_rating": null,
+    "seller_review_count": 0,
+    "can_buy": false
+  },
+  "item_sold_no_scripts.html": {
+    "url": "https://www.vinted.it/items/9000000102-polo-t-shirt",
+    "title": "Polo t shirt",
+    "price": "10.00",
+    "currency": "EUR",
+    "brand": "Polo Ralph Lauren",
+    "size": "XS",
+    "condition": "new_without_tags",
+    "color": "Bianco, Blu marino",
+    "status": "sold",
+    "status_source": "text",
+    "images": 1,
+    "favourite_count": 76,
+    "view_count": null,
+    "buyer_protection_fee": "1.20",
+    "seller_member": "1000001",
+    "seller_rating": null,
+    "seller_review_count": null,
+    "can_buy": null
   }
 }

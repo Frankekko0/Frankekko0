@@ -157,12 +157,7 @@
     });
     const desc = main.querySelector(S.description);
     if (desc) c.description = desc.innerText || desc.textContent || "";
-    const fav = main.querySelector(S.favourite_count);
-    if (fav) c.favourites = fav.getAttribute("aria-label") || text(fav);
-    main.querySelectorAll(S.status_badges).forEach((el) => {
-      const t = text(el);
-      if (t && t.length <= 40) c.statusTexts.push(t);
-    });
+    collectItemElements(c);
     const rating = main.querySelector(S.seller_rating);
     if (rating) c.sellerRating = rating.getAttribute("aria-label") || text(rating);
     const reviews = main.querySelector(S.seller_reviews);
@@ -172,6 +167,48 @@
       if (t) c.breadcrumbs.push(t);
     });
     return c;
+  }
+
+  /**
+   * The item's favourite button, total price and status badges on the live page, read by
+   * data-testid exactly as the server reads them from the HTML (item_dom in the configuration):
+   * never inside another item's card or the site header/nav/footer. The status badges are the
+   * item's own status element and the short texts right before the item's summary in its
+   * sidebar ("Venduto", "Riservato"); a "Venduto" elsewhere (a title, a suggested item) is no sale.
+   */
+  function collectItemElements(c) {
+    const dom = P.itemDomConfig(C);
+    const anyOf = (ids) => (ids.length ? [...document.querySelectorAll(ids.map((id) => `[data-testid="${CSS.escape(id)}"]`).join(", "))] : []);
+    const exclude = ["header", "nav", "footer", ...dom.exclude_testid_prefixes.map((p) => `[data-testid^="${CSS.escape(p)}"]`)].join(", ");
+    const own = (el) => !el.closest(exclude);
+    const max = Number(dom.badge_max_length);
+    const short = (t) => Boolean(t) && [...t].length <= max;
+    for (const el of anyOf(dom.favourite_testids).filter(own)) {
+      const label = el.getAttribute("aria-label") || "";
+      const value = /\d/.test(label) ? label : /\d/.test(text(el)) ? text(el) : null;
+      if (value !== null) {
+        c.favourites = value;
+        break;
+      }
+    }
+    const total = anyOf(dom.total_price_testids).find((el) => own(el) && text(el));
+    if (total) c.totalPrice = text(total);
+    for (const el of anyOf(dom.status_testids).filter(own)) if (short(text(el))) c.statusTexts.push(text(el));
+    const summary = anyOf(dom.summary_testids).find(own);
+    const zoneSel = [...dom.zone_tags, ...dom.zone_id_prefixes.map((p) => `[id^="${CSS.escape(p)}"]`)].join(", ");
+    const zone = summary && zoneSel && summary.parentElement ? summary.parentElement.closest(zoneSel) : null;
+    if (!zone) return;
+    const badges = [];
+    const walker = document.createTreeWalker(zone, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.parentElement && n.parentElement.closest("script, style, noscript, template, svg") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    });
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (summary.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) break; // the summary and after
+      const t = (node.textContent || "").replace(/\s+/g, " ").trim();
+      if (short(t) && node.parentElement && own(node.parentElement)) badges.push(t);
+    }
+    c.statusTexts.push(...badges.slice(-3));
   }
 
   /** Page scripts describe the first item opened; after client-side navigation only the
@@ -1043,7 +1080,7 @@
       return rewritten ? { outcome: "error", status: res.status, message: "Non trovato su questo dominio di Vinted." } : { outcome: "not_found", status: res.status, message: "Annuncio non più disponibile." };
     }
     if (!res.ok) return { outcome: "error", status: res.status, message: `Risposta inattesa (HTTP ${res.status}).` };
-    const parsed = P.parseItem(P.collectHtml(body.slice(0, 3e6)), target, Date.now(), C);
+    const parsed = P.parseItem(P.collectHtml(body.slice(0, 3e6), C), target, Date.now(), C);
     if (!parsed.complete) {
       if (parsed.status === "removed") return { outcome: "not_found", status: 200, message: "Annuncio rimosso dal venditore." };
       return { outcome: "error", status: 200, message: `Pagina letta ma senza ${parsed.missing.join(" e ")}: va aggiornata la configurazione del parser.` };

@@ -1,7 +1,7 @@
 /* Generated from backend/app/acquisition/vinted_parser.json by tools/sync-parser-config.mjs.
  * Do not edit: change the JSON (the server and the extension share it) and run the tool. */
 globalThis.FF_PARSER_CONFIG = {
-  "version": "2026.10.7-3",
+  "version": "2026.10.7-4",
   "about": "Single source of Vinted selectors, labels and patterns, shared by the FlipFinder server (Python) and the browser extension (JavaScript). Regexes use only syntax common to both languages (numbered groups, no named groups). Edit here when Vinted changes its pages; the extension downloads it from the server.",
   "domains": [
     "vinted.it",
@@ -439,7 +439,8 @@ globalThis.FF_PARSER_CONFIG = {
     "favourite_button": "[data-testid=\"item-favourite-button\"], [data-testid*=\"favourite\"] button, button[data-testid*=\"favourite\"], button[aria-label*=\"preferit\" i], button[aria-label*=\"favourite\" i], button[aria-label*=\"favorite\" i], button[aria-label*=\"favoris\" i], button[aria-label*=\"favoriten\" i]",
     "buy_button": "[data-testid=\"item-buy-button\"], button[data-testid*=\"buy\"], a[data-testid*=\"buy\"], [data-testid=\"item-sidebar\"] button[type=\"button\"]",
     "signed_out_marker": "[data-testid=\"header--login-button\"], [data-testid*=\"header\"] a[href*=\"/member/signup\"], header a[href*=\"/member/login\"], header a[href*=\"/member/signup\"]",
-    "action_scope_exclude": "[data-testid^=\"product-item-id-\"], header, nav, footer"
+    "action_scope_exclude": "[data-testid^=\"product-item-id-\"], header, nav, footer",
+    "item_sidebar": "aside, #sidebar"
   },
   "limits": {
     "title": 300,
@@ -517,6 +518,66 @@ globalThis.FF_PARSER_CONFIG = {
       "is_favourite",
       "is_favorite",
       "is_favourited"
+    ],
+    "item_seller_id": [
+      "seller_id",
+      "user_id"
+    ],
+    "can_buy": [
+      "can_buy"
+    ],
+    "plugin_name": [
+      "name"
+    ],
+    "plugin_data": [
+      "data"
+    ],
+    "plugin_item_id": [
+      "item_id"
+    ],
+    "favourite_plugins": [
+      "favourite"
+    ],
+    "seller_plugins": [
+      "user_info_header"
+    ],
+    "buy_plugins": [
+      "ask_seller",
+      "buy_actions",
+      "buy"
+    ],
+    "status_plugins": [
+      "buyer_item_status"
+    ],
+    "status_text": [
+      "title",
+      "text"
     ]
+  },
+  "item_dom": {
+    "favourite_testids": [
+      "favourite-button",
+      "item-favourite-button"
+    ],
+    "total_price_testids": [
+      "total-combined-price"
+    ],
+    "status_testids": [
+      "item-status"
+    ],
+    "summary_testids": [
+      "item-page-summary-plugin"
+    ],
+    "exclude_testid_prefixes": [
+      "product-item-id-"
+    ],
+    "zone_tags": [
+      "aside"
+    ],
+    "zone_id_prefixes": [
+      "sidebar",
+      "S:"
+    ],
+    "badge_max_length": 40
   }
 };
