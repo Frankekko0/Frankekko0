@@ -25,7 +25,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-from app.acquisition.embedded import find_item, gallery, pick, profile_photo_urls
+from app.acquisition.embedded import find_item, find_plugins, gallery, pick, profile_photo_urls
 from app.core.config import get_settings
 from app.domain.enums import CaptureLevel, ListingStatus
 from app.identification.taxonomy import fold
@@ -99,12 +99,41 @@ DEFAULT_ITEM_JSON: dict[str, list[str]] = {
     "seller_id": ["id"],
     "seller_rating": ["feedback_reputation"],
     "seller_reviews": ["feedback_count"],
+    "favourite_by_me": ["is_favourite", "is_favorite", "is_favourited"],
+    # Current layout: the item object names its seller by id; the rest is in page sections
+    # ("plugins") whose data carries the item's id.
+    "item_seller_id": ["seller_id", "user_id"],
+    "can_buy": ["can_buy"],
+    "plugin_name": ["name"],
+    "plugin_data": ["data"],
+    "plugin_item_id": ["item_id"],
+    "favourite_plugins": ["favourite"],
+    "seller_plugins": ["user_info_header"],
+    "buy_plugins": ["ask_seller", "buy_actions", "buy"],
+    "status_plugins": ["buyer_item_status"],
+    "status_text": ["title", "text"],
+}
+
+DEFAULT_ITEM_DOM: dict[str, Any] = {
+    "favourite_testids": ["favourite-button", "item-favourite-button"],
+    "total_price_testids": ["total-combined-price"],
+    "status_testids": ["item-status"],
+    "summary_testids": ["item-page-summary-plugin"],
+    "exclude_testid_prefixes": ["product-item-id-"],
+    "zone_tags": ["aside"],
+    "zone_id_prefixes": ["sidebar", "S:"],
+    "badge_max_length": 40,
 }
 
 
 def item_json_keys(cfg: ParserConfig) -> dict[str, list[str]]:
     """Key names of the embedded item object (``item_json`` in the shared configuration)."""
     return {**DEFAULT_ITEM_JSON, **(cfg.raw.get("item_json") or {})}
+
+
+def item_dom_config(cfg: ParserConfig) -> dict[str, Any]:
+    """Item-page elements read from the HTML by ``data-testid`` (``item_dom`` in the configuration)."""
+    return {**DEFAULT_ITEM_DOM, **(cfg.raw.get("item_dom") or {})}
 
 
 # ------------------------------------------------------------------ small helpers
@@ -201,14 +230,33 @@ def _unescape_json_string(s: str) -> str:
 
 
 # ------------------------------------------------------------------ HTML collection
+@dataclass(eq=False)
+class _Frame:
+    """An open element: whether it hides other items (cards) or the site chrome, where its text
+    starts (for zones), and the text being captured for an item element."""
+
+    tag: str
+    excluded: bool
+    zone_start: int | None = None
+    capture: str | None = None
+    buf: list[str] | None = None
+
+
 class _Collector(HTMLParser):
     """Collects what the parser needs from a page: JSON-LD blocks, scripts, meta tags, canonical
-    link, member links, the first heading and the visible text in document order."""
+    link, member links, the first heading and the visible text in document order; and, by
+    ``data-testid`` (``item_dom``), the item's favourite button, its total price and its status
+    badges - never inside another item's card or the site header/nav/footer."""
 
     SKIP = frozenset({"script", "style", "noscript", "template", "svg"})
+    VOID = frozenset(
+        {"meta", "link", "img", "br", "input", "hr", "source", "wbr", "area", "base", "col", "embed", "param", "track"}
+    )
+    CHROME = frozenset({"header", "nav", "footer"})
 
-    def __init__(self) -> None:
+    def __init__(self, dom: dict[str, Any] | None = None) -> None:
         super().__init__(convert_charrefs=True)
+        dom = {**DEFAULT_ITEM_DOM, **(dom or {})}
         self.jsonld: list[str] = []
         self.scripts: list[str] = []
         self.meta: dict[str, list[str]] = {}
@@ -216,14 +264,79 @@ class _Collector(HTMLParser):
         self.member_links: list[str] = []
         self.texts: list[str] = []
         self.heading: str | None = None
+        self.favourites: str | None = None
+        self.total_price: str | None = None
+        self.status_texts: list[str] = []
         self._stack: list[str] = []
+        self._frames: list[_Frame] = []
+        self._capturing: list[_Frame] = []
+        self._excluded_texts: set[int] = set()
         self._script_kind: str | None = None
         self._buf: list[str] = []
         self._in_h1 = False
         self._h1: list[str] = []
+        self._summary_seen = False
+        self._fav_ids = frozenset(dom["favourite_testids"])
+        self._total_ids = frozenset(dom["total_price_testids"])
+        self._status_ids = frozenset(dom["status_testids"])
+        self._summary_ids = frozenset(dom["summary_testids"])
+        self._exclude_prefixes = tuple(dom["exclude_testid_prefixes"])
+        self._zone_tags = frozenset(dom["zone_tags"])
+        self._zone_ids = tuple(dom["zone_id_prefixes"])
+        self._badge_max = int(dom["badge_max_length"])
+
+    def _badges_before_summary(self) -> None:
+        """Short texts right before the item's summary in its sidebar: the status banner
+        ("Venduto", "Riservato") of the current layout. Taken once, from the innermost zone."""
+        self._summary_seen = True
+        zone = next((f for f in reversed(self._frames) if f.zone_start is not None), None)
+        if zone is None or zone.zone_start is None:
+            return
+        own = [
+            t
+            for i, t in enumerate(self.texts[zone.zone_start :], zone.zone_start)
+            if i not in self._excluded_texts and len(t) <= self._badge_max
+        ]
+        self.status_texts.extend(own[-3:])
+
+    def _item_element(self, testid: str, a: dict[str, str], frame: _Frame) -> None:
+        if testid in self._fav_ids and self.favourites is None:
+            label = a.get("aria-label", "")
+            if re.search(r"\d", label):
+                self.favourites = label
+            else:
+                frame.capture, frame.buf = "favourites", []
+        elif testid in self._total_ids and self.total_price is None:
+            frame.capture, frame.buf = "total_price", []
+        elif testid in self._status_ids:
+            frame.capture, frame.buf = "status", []
+        if testid in self._summary_ids and not self._summary_seen:
+            self._badges_before_summary()
+
+    def _close(self, frame: _Frame) -> None:
+        if frame.capture is None or frame.buf is None:
+            return
+        text = " ".join("".join(frame.buf).split())
+        if frame.capture == "favourites" and self.favourites is None and re.search(r"\d", text):
+            self.favourites = text
+        elif frame.capture == "total_price" and self.total_price is None and text:
+            self.total_price = text
+        elif frame.capture == "status" and text and len(text) <= self._badge_max:
+            self.status_texts.append(text)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         a = {k: (v or "") for k, v in attrs}
+        testid = a.get("data-testid", "")
+        excluded = (
+            (bool(self._frames) and self._frames[-1].excluded)
+            or tag in self.CHROME
+            or (bool(testid) and testid.startswith(self._exclude_prefixes))
+        )
+        frame = _Frame(tag, excluded)
+        if tag in self._zone_tags or a.get("id", "").startswith(self._zone_ids):
+            frame.zone_start = len(self.texts)
+        if testid and not excluded:
+            self._item_element(testid, a, frame)
         if tag == "script":
             self._script_kind = "jsonld" if "ld+json" in a.get("type", "") else "script"
             self._buf = []
@@ -242,8 +355,11 @@ class _Collector(HTMLParser):
             self.member_links.append(a["href"])
         elif tag == "h1" and self.heading is None:
             self._in_h1 = True
-        if tag not in ("meta", "link", "img", "br", "input", "hr"):
+        if tag not in self.VOID:
             self._stack.append(tag)
+            self._frames.append(frame)
+            if frame.capture is not None:
+                self._capturing.append(frame)
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "script" and self._script_kind:
@@ -253,8 +369,16 @@ class _Collector(HTMLParser):
         if tag == "h1" and self._in_h1:
             self._in_h1 = False
             self.heading = " ".join("".join(self._h1).split()) or None
-        if self._stack and self._stack[-1] == tag:
-            self._stack.pop()
+        # Close up to the matching open element (tolerates an unclosed child).
+        for depth in range(len(self._stack) - 1, -1, -1):
+            if self._stack[depth] == tag:
+                while len(self._stack) > depth:
+                    self._stack.pop()
+                    frame = self._frames.pop()
+                    if frame.capture is not None:
+                        self._capturing.remove(frame)
+                        self._close(frame)
+                break
 
     def handle_data(self, data: str) -> None:
         if self._script_kind:
@@ -264,8 +388,13 @@ class _Collector(HTMLParser):
             return
         if self._in_h1:
             self._h1.append(data)
+        for frame in self._capturing:
+            if frame.buf is not None:
+                frame.buf.append(data)
         text = " ".join(data.split())
         if text:
+            if self._frames and self._frames[-1].excluded:
+                self._excluded_texts.add(len(self.texts))
             self.texts.append(text)
 
 
@@ -333,6 +462,9 @@ class ParsedItem:
     status_source: str = "default"
     buyer_protection_fee: Decimal | None = None
     shipping_fee: Decimal | None = None
+    # Whether the page offers the item for sale to the visitor. Informational only: it is also
+    # false for your own items, when signed out or reserved - never a sign of a sale.
+    can_buy: bool | None = None
     images: list[str] = field(default_factory=list)
     # Where the photos come from: item_json (the item's gallery) is authoritative.
     images_source: str = "none"
@@ -393,6 +525,12 @@ class ParsedItem:
         )
 
 
+def _protection_fee(total: Decimal, price: Decimal) -> Decimal | None:
+    """Buyer protection = total - price, when plausible (positive, at most 20% + 5)."""
+    diff = total - price
+    return diff.quantize(Decimal("0.01")) if Decimal("0") < diff <= price * Decimal("0.2") + Decimal("5") else None
+
+
 def _first(meta: dict[str, list[str]], key: str) -> str | None:
     values = meta.get(key) or []
     return values[0] if values else None
@@ -415,7 +553,7 @@ def _label_pairs(texts: list[str], cfg: ParserConfig) -> dict[str, str]:
 def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedItem:
     cfg = load_config()
     now = now or datetime.now(UTC)
-    c = _Collector()
+    c = _Collector(item_dom_config(cfg))
     c.feed(html)
     c.close()
     id_rx = cfg.patterns["item_id"]
@@ -433,12 +571,28 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
     obj = find_item(c.scripts, item.vinted_id or "", keys["photos"], keys["markers"])
     if obj is not None:
         item.sources.append("item_json")
+    # Current layout: the item's page sections (seller header, favourites, status banner, buy
+    # actions), each read only when its data carries the item's id.
+    groups = ("favourite_plugins", "seller_plugins", "buy_plugins", "status_plugins")
+    found = find_plugins(
+        c.scripts,
+        item.vinted_id or "",
+        [n for g in groups for n in keys[g]],
+        keys["plugin_name"],
+        keys["plugin_data"],
+        keys["plugin_item_id"],
+    )
+    plugin = {g: next((found[n] for n in keys[g] if n in found), None) for g in groups}
+    if found:
+        item.sources.append("plugins")
 
-    def emb(name: str) -> str | None:
-        v = pick(obj, keys[name])
-        if v is None or isinstance(v, dict | list):
-            return None
-        return str(v).lower() if isinstance(v, bool) else str(v)
+    def emb(name: str, *sources: dict[str, Any] | None) -> str | None:
+        """First scalar value of ``name``'s keys in the item object (or the given sections)."""
+        for src in sources or (obj,):
+            v = pick(src, keys[name])
+            if v is not None and not isinstance(v, dict | list):
+                return str(v).lower() if isinstance(v, bool) else str(v)
+        return None
 
     # Title, price, currency.
     title = (product or {}).get("name") or c.heading or _first(c.meta, "og:title") or ""
@@ -477,7 +631,14 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
     item.category_path = _breadcrumbs(c.jsonld)
 
     # Demand signals.
-    fav = emb("favourites") or re.sub(r"\D", "", pairs.get("favourites", "")) or None
+    # Favourites: the item object, else the item's favourites section, else the label pair
+    # (older pages) or the item's own favourite button ("Aggiunto ai preferiti da 78 utenti").
+    fav = (
+        emb("favourites", obj, plugin["favourite_plugins"])
+        or re.sub(r"\D", "", pairs.get("favourites", ""))
+        or re.sub(r"\D", "", c.favourites or "")
+        or None
+    )
     views = emb("views") or re.sub(r"\D", "", pairs.get("views", "")) or None
     item.favourite_count = int(fav) if fav else None
     item.view_count = int(views) if views else None
@@ -494,33 +655,38 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
     if item.published_at is None:
         item.published_at = relative_time(pairs.get("uploaded"), now, cfg)
 
-    # Fees: "€19,60 include la Protezione acquisti" -> protection = total - price.
+    # Fees: protection = total - price. The item's total price element ("19,60 €" next to
+    # "incl. la commissione Vinted"), else a text like "€19,60 include la Protezione acquisti".
     if item.price:
-        for t in c.texts[:600]:
+        if c.total_price and (hit := find_price(c.total_price, cfg)):
+            item.buyer_protection_fee = _protection_fee(hit[0], item.price)
+        for t in c.texts[:600] if item.buyer_protection_fee is None else []:
             if cfg.patterns["protection_included"].search(t) and (hit := find_price(t, cfg)):
-                total = hit[0]
-                diff = total - item.price
-                if Decimal("0") < diff <= item.price * Decimal("0.2") + Decimal("5"):
-                    item.buyer_protection_fee = diff.quantize(Decimal("0.01"))
+                if (fee := _protection_fee(hit[0], item.price)) is not None:
+                    item.buyer_protection_fee = fee
                     break
         if item.buyer_protection_fee is None and (fee := emb("service_fee")):
             item.buyer_protection_fee = parse_price(fee)
     if (ship := emb("shipping")) is not None:
         item.shipping_fee = parse_price(ship)
 
-    # Status: embedded flags, schema.org availability, then visible badges.
-    action, closed, reserved = (
-        emb("closing_action"),
-        emb("closed"),
-        emb("reserved"),
-    )
+    # Status: embedded flags (older pages: is_closed / item_closing_action; current pages: the
+    # item's status banner section, e.g. "Venduto"), schema.org availability, then the item's
+    # own status badge. "can_buy" is never read as a sale: it is also false for your own items,
+    # when signed out or reserved, and a false sale would corrupt the concluded sales.
+    action, closed = emb("closing_action"), emb("closed")
+    reserved = emb("reserved", obj, plugin["buy_plugins"])
+    banner = emb("status_text", plugin["status_plugins"]) or ""
+    badges = " | ".join(c.status_texts)
     availability = str(offer.get("availability") or "")
     page_text = " ".join(c.texts[:250])
     if action == "sold" or (closed == "true" and action in (None, "sold")):
         item.status, item.status_source = ListingStatus.SOLD, "embedded"
     elif closed == "true":
         item.status, item.status_source = ListingStatus.REMOVED, "embedded"
-    elif reserved == "true":
+    elif cfg.patterns["status_sold"].search(banner):
+        item.status, item.status_source = ListingStatus.SOLD, "embedded"
+    elif reserved == "true" or cfg.patterns["status_reserved"].search(banner):
         item.status, item.status_source = ListingStatus.RESERVED, "embedded"
     elif "SoldOut" in availability:
         item.status, item.status_source = ListingStatus.SOLD, "jsonld"
@@ -528,10 +694,12 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
         item.status, item.status_source = ListingStatus.REMOVED, "text"
     elif closed == "false" or "InStock" in availability:
         item.status, item.status_source = ListingStatus.ACTIVE, "embedded" if closed else "jsonld"
-    elif cfg.patterns["status_sold"].search(" ".join(c.texts[:60])):
+    elif cfg.patterns["status_sold"].search(badges):
         item.status, item.status_source = ListingStatus.SOLD, "text"
-    elif cfg.patterns["status_reserved"].search(" ".join(c.texts[:60])):
+    elif cfg.patterns["status_reserved"].search(badges):
         item.status, item.status_source = ListingStatus.RESERVED, "text"
+    can_buy = emb("can_buy", obj, plugin["buy_plugins"])
+    item.can_buy = {"true": True, "false": False}.get(can_buy or "")
 
     # Photos: only the item's gallery, in its order. Structured data of the item first; the
     # product's JSON-LD or its preview image only when the page has no gallery object. Profile
@@ -553,12 +721,20 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
         dict.fromkeys(u for u in images if u.startswith(("http://", "https://")) and u not in avatars)
     )[:20]
 
-    # Seller: opaque key, rating, review count. Nothing else. From the item's own seller object;
-    # a member link in the page body only when the page has no structured data.
+    # Seller: opaque key, rating, review count. Nothing else. From the item's own seller object
+    # (older pages), else the item's seller id and its seller header section (current pages); a
+    # member link in the page body only when the page has no structured data.
     seller = pick(obj, keys["seller"])
     seller = seller if isinstance(seller, dict) else None
+    header = plugin["seller_plugins"]
     member = str(pick(seller, keys["seller_id"]) or "") or None
-    if member is None and obj is None:
+    if member is None:
+        member = emb("item_seller_id", obj, header)
+    if seller is None and header is not None:
+        header_id = pick(header, keys["item_seller_id"])
+        if header_id is None or member is None or str(header_id) == member:
+            seller = header
+    if member is None and obj is None and not found:
         member = next(
             (mm.group(1) for href in c.member_links if (mm := cfg.patterns["member_id"].search(href))), None
         )
@@ -568,15 +744,15 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
         v = pick(seller, keys[name])
         return None if v is None or isinstance(v, dict | list | bool) else str(v)
 
+    count = semb("seller_reviews")
+    item.seller_review_count = int(count) if count and count.isdigit() else None
     rep = semb("seller_rating")
-    if rep:
+    if rep and item.seller_review_count != 0:  # no reviews yet: no rating (Vinted says 0)
         try:
             value = Decimal(rep)
             item.seller_rating = (value * 5 if value <= 1 else value).quantize(Decimal("0.01"))
         except InvalidOperation:
             pass
-    count = semb("seller_reviews")
-    item.seller_review_count = int(count) if count else None
     item.title = unescape(item.title)
     return item
 
