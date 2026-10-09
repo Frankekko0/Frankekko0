@@ -231,6 +231,7 @@ def build_blocks(listing: Any, result: Any, values: dict[str, Any]) -> dict[str,
             "suggested_offer",
             "risk_adjusted_profit",
         ),
+        "evaluation": (v.get("score_breakdown") or {}).get("economics"),
         "scenarios": {
             name: {"profit": v.get(f"{name_key}_profit"), "roi": v.get(f"{name_key}_roi")}
             for name, name_key in (

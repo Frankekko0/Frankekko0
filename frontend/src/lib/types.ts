@@ -198,6 +198,35 @@ export interface CostLine {
   amount: number;
 }
 
+export type CostStatus = "confirmed" | "estimated" | "unknown";
+
+export interface EvaluatedCost {
+  key: string;
+  label: string;
+  amount: number;
+  status: CostStatus;
+  source: string;
+  side: "acquisition" | "sale";
+}
+
+/** Response of POST /profit/calculate. ROI = profit / total cost; margin = profit / resale price. */
+export interface ProfitCalculation {
+  total_acquisition_cost: number;
+  net_sale_revenue: number;
+  net_profit: number;
+  roi: number;
+  max_buy_price: number | null;
+  margin_on_sale: number | null;
+  break_even_price: number | null;
+  capital_tied_up: number | null;
+  cost_status: CostStatus;
+  unknown_costs: string[];
+  gross_of_unknown_costs: boolean;
+  lines: EvaluatedCost[];
+  taxes_included: boolean;
+  taxes_note: string;
+}
+
 export interface Scenario {
   name: "conservative" | "expected" | "optimistic";
   sale_price: number;

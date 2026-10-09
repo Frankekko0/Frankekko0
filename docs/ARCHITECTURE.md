@@ -23,7 +23,7 @@ Business: `purchases` `sales` `inventory`. Avvisi: `alerts` `alert_deliveries`. 
 
 ## Punti di integrazione (dove si innesta il prompt v3)
 - Pipeline per annuncio: `opportunities/pipeline.py::analyze` → `engine.py`. Stadi S0–S5 e dossier si innestano qui; **nessun secondo pipeline**.
-- Calcolo esatto: `profit/calculator.py` (`CostProfile`, `profit_for`, `max_buy_price`) = futuro tool `finance_calc`.
+- Calcolo esatto: `profit/calculator.py` (formule, una sola copia) + `profit/evaluation.py` (`evaluate_deal`: stati dei costi, margine, pareggio) = futuro tool `finance_calc`.
 - Prove di prezzo: `pricing/evidence.py` + `sold_sales`/`model_price_stats` (oggi fondono ancora i tipi di prezzo: D1 del PIANO, v3 Fase 3).
 - AI: `ai/llm.py` (`LLMClient.structured`), `vision/analyzer.py`, `workers/vision_queue.py` → qui tetto di spesa, cache per hash, routing per tier.
 - Job: `workers/tasks.py` + `workers/main.py` (`_functions`, `_cron_jobs`) per orchestratore, monitor, learner.
@@ -40,7 +40,7 @@ Parser Vinted per ID (niente foto profilo/suggeriti) · verdetto rapido locale `
 | 0 Audit | fatta | questo file, `DECISIONS.md`, `LIMITATIONS.md` |
 | 1 Core data | **fatta** | PIANO Fase 2 (osservazioni, `last_verified_at`, `to_verify`, `analyses`, dedup, CSV) + `marketplace/capabilities.py` |
 | conformità §2 (estensione solo su ciò che l'utente vede) | da fare | PIANO Fase 3: rimuovere scanner/letture automatiche/lettura server/clic programmatici (Q1, già deciso) |
-| 2 Financial engine | da fare | PIANO 4.1: cost_status, ripristino, margine, pareggio, test 26/44/18/69,23% |
+| 2 Financial engine | **fatta** | PIANO 4.1: `profit/evaluation.py` (stati dei costi, ripristino, riserva, margine, pareggio, capitale), `/profit/calculate`, blocco economico delle analisi; test 26/44/18/69,23%, casi E e H |
 | 3 Market intelligence | parziale | PIANO 4.2–4.4: `data_quality` esiste; D1 (tipi di prezzo fusi), taglie, test G |
 | 4/4b Vision e dossier | da fare | PIANO Fase 5; serve Q8 (modello + tetto di spesa) e foto dal browser (Q3-B) |
 | 5/6 Decisione e agente | da fare | PIANO Fase 6 + loop agente con tool, budget, trace (nuovo in v3) |

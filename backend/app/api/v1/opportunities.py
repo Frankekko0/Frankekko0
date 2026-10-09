@@ -16,9 +16,16 @@ from app.core.cache import NS_FEED, cache
 from app.core.errors import NotFoundError
 from app.db.models import Favorite, Opportunity
 from app.opportunities.queries import OpportunityQueries, acquisition_lines, sale_lines
-from app.profit.calculator import max_buy_price, profit_for
+from app.profit.evaluation import (
+    TAX_NOTE,
+    CostStatus,
+    Restoration,
+    evaluate_deal,
+    recommended_max_buy_price,
+)
 from app.schemas.common import Message, Page
 from app.schemas.opportunity import (
+    EvaluatedCostOut,
     FavoriteOut,
     FavoriteStateIn,
     OpportunityCard,
@@ -153,7 +160,21 @@ async def list_favorites(user: CurrentUser, db: DB, state: str | None = None) ->
 @router.post("/profit/calculate", response_model=ProfitCalcOut, tags=["profit"])
 async def calculate_profit(body: ProfitCalcIn, user: CurrentUser, econ: Economics) -> ProfitCalcOut:
     """Profit calculator with your configured costs (what-if purchase/sale prices)."""
-    r = profit_for(body.purchase_price, body.sale_price, econ.costs, body.shipping_fee)
+    restoration = (
+        Restoration(body.restoration_cost, CostStatus.ESTIMATED)
+        if body.restoration_cost is not None
+        else None
+    )
+    ev = evaluate_deal(
+        body.purchase_price,
+        body.sale_price,
+        econ.costs,
+        listing_shipping=body.shipping_fee,
+        restoration=restoration,
+        contingency_pct=body.contingency_pct,
+        profile_saved=econ.profile_saved,
+    )
+    r = ev.result
     return ProfitCalcOut(
         total_acquisition_cost=r.acquisition.total,
         net_sale_revenue=r.sale.net,
@@ -161,7 +182,27 @@ async def calculate_profit(body: ProfitCalcIn, user: CurrentUser, econ: Economic
         roi=r.roi,
         acquisition_breakdown=acquisition_lines(r.acquisition),
         sale_breakdown=sale_lines(r.sale),
-        max_buy_price=max_buy_price(
-            body.sale_price, econ.costs, econ.targets.min_profit, econ.targets.min_roi, body.shipping_fee
+        max_buy_price=recommended_max_buy_price(
+            body.sale_price,
+            econ.costs,
+            econ.targets.min_profit,
+            econ.targets.min_roi,
+            listing_shipping=body.shipping_fee,
+            restoration=r.acquisition.restoration,
+            contingency_pct=body.contingency_pct,
         ),
+        margin_on_sale=ev.margin_on_sale,
+        break_even_price=ev.break_even_price,
+        capital_tied_up=ev.capital_tied_up,
+        cost_status=ev.cost_status.value,
+        unknown_costs=list(ev.unknown_costs),
+        gross_of_unknown_costs=ev.gross_of_unknown_costs,
+        lines=[
+            EvaluatedCostOut(
+                key=c.key, label=c.label, amount=c.amount, status=c.status.value, source=c.source, side=c.side
+            )
+            for c in ev.lines
+        ],
+        taxes_included=False,
+        taxes_note=TAX_NOTE,
     )

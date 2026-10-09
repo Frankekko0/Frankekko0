@@ -105,6 +105,8 @@ class UserEconomics:
     costs: CostProfile
     targets: EconomicTargets
     preferences: UserPreferences | None
+    # The user saved their own cost figures (otherwise the defaults are estimates).
+    profile_saved: bool = False
 
 
 def economics_for(prefs: UserPreferences | None) -> UserEconomics:
@@ -114,7 +116,7 @@ def economics_for(prefs: UserPreferences | None) -> UserEconomics:
         return UserEconomics(default_cost_profile(), default_targets(), None)
     costs = CostProfile.model_validate(prefs.cost_profile or {})
     targets = EconomicTargets(min_profit=Decimal(prefs.min_profit), min_roi=Decimal(prefs.min_roi))
-    return UserEconomics(costs, targets, prefs)
+    return UserEconomics(costs, targets, prefs, profile_saved=bool(prefs.cost_profile))
 
 
 async def get_user_economics(user: CurrentUser) -> UserEconomics:

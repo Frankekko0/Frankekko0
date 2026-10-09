@@ -23,7 +23,7 @@ import { useState, type ReactNode } from "react";
 import { api, errorMessage } from "@/lib/api";
 import { ACTION_LABEL, CONDITION_LABEL, DEMAND_LABEL, days, eur, pct, shortDate, timeAgo } from "@/lib/format";
 import { useRunAi } from "@/lib/queries";
-import type { Attribute, Comparable, CostLine, OpportunityDetail, Reason, Scenario } from "@/lib/types";
+import type { Attribute, Comparable, CostLine, CostStatus, OpportunityDetail, ProfitCalculation, Reason, Scenario } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { PriceDistribution } from "@/components/charts/price-distribution";
 import { PriceHistoryChart } from "@/components/charts/lazy";
@@ -310,10 +310,17 @@ export function ScenariosSection({ d }: { d: OpportunityDetail }) {
   );
 }
 
+const COST_STATUS_LABEL: Record<CostStatus, string> = {
+  confirmed: "All confirmed",
+  estimated: "Some estimated",
+  unknown: "Some unknown",
+};
+
 function ProfitCalculator({ d }: { d: OpportunityDetail }) {
   const [buy, setBuy] = useState(String(d.card.listing_price));
   const [sell, setSell] = useState(String(d.card.expected_sale_price ?? ""));
-  const [result, setResult] = useState<{ net_profit: number; roi: number; total_acquisition_cost: number; net_sale_revenue: number; max_buy_price: number | null } | null>(null);
+  const [repair, setRepair] = useState("");
+  const [result, setResult] = useState<ProfitCalculation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   async function calc() {
@@ -323,7 +330,12 @@ function ProfitCalculator({ d }: { d: OpportunityDetail }) {
       setResult(
         await api("/profit/calculate", {
           method: "POST",
-          body: { purchase_price: Number(buy.replace(",", ".")), sale_price: Number(sell.replace(",", ".")), shipping_fee: d.listing.shipping_fee },
+          body: {
+            purchase_price: Number(buy.replace(",", ".")),
+            sale_price: Number(sell.replace(",", ".")),
+            shipping_fee: d.listing.shipping_fee,
+            ...(repair.trim() ? { restoration_cost: Number(repair.replace(",", ".")) } : {}),
+          },
         }),
       );
     } catch (e) {
@@ -335,7 +347,7 @@ function ProfitCalculator({ d }: { d: OpportunityDetail }) {
   return (
     <div className="mt-5 rounded-xl bg-surface-2 p-4">
       <p className="mb-3 text-[13px] font-semibold text-fg">What-if calculator</p>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-end">
         <div>
           <Label htmlFor="calc-buy">If I pay</Label>
           <InputAffix id="calc-buy" prefix="€" inputMode="decimal" value={buy} onChange={(e) => setBuy(e.target.value)} />
@@ -343,6 +355,10 @@ function ProfitCalculator({ d }: { d: OpportunityDetail }) {
         <div>
           <Label htmlFor="calc-sell">and sell at</Label>
           <InputAffix id="calc-sell" prefix="€" inputMode="decimal" value={sell} onChange={(e) => setSell(e.target.value)} />
+        </div>
+        <div>
+          <Label htmlFor="calc-repair">Cleaning / repair (optional)</Label>
+          <InputAffix id="calc-repair" prefix="€" inputMode="decimal" value={repair} onChange={(e) => setRepair(e.target.value)} />
         </div>
         <Button onClick={calc} loading={loading} className="col-span-2 sm:col-span-1">
           Calculate
@@ -355,7 +371,16 @@ function ProfitCalculator({ d }: { d: OpportunityDetail }) {
           <KV label="Net revenue" value={eur(result.net_sale_revenue)} />
           <KV label="Net profit" value={<span className={result.net_profit >= 0 ? "text-success" : "text-danger"}>{eur(result.net_profit, { sign: true })}</span>} />
           <KV label="ROI" value={<span className={result.roi >= 0 ? "text-success" : "text-danger"}>{pct(result.roi)}</span>} sub={result.max_buy_price ? `max buy ${eur(result.max_buy_price)}` : undefined} />
+          <KV label="Margin on sale" value={result.margin_on_sale === null ? "—" : pct(result.margin_on_sale)} sub="profit ÷ resale price" />
+          <KV label="Break-even resale" value={result.break_even_price === null ? "—" : eur(result.break_even_price)} sub="no loss at or above" />
+          <KV label="Capital tied up" value={result.capital_tied_up === null ? "—" : eur(result.capital_tied_up)} sub="until sold" />
+          <KV label="Costs" value={COST_STATUS_LABEL[result.cost_status]} sub={result.taxes_included ? undefined : "taxes not included"} />
         </div>
+      )}
+      {result?.gross_of_unknown_costs && (
+        <p className="mt-2 text-[13px] text-warning" role="status">
+          Profit is before costs you have not set: {result.unknown_costs.join(", ")}. Set them in Settings → Costs.
+        </p>
       )}
     </div>
   );

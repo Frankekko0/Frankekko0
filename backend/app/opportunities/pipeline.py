@@ -1027,6 +1027,7 @@ def opportunity_values(
             "risk_signals": [s.as_dict() for s in r.risk_signals],
             "headline": r.headline,
             "provenance": r.provenance,
+            "economics": r.economics,
         },
         "explanation": r.explanation,
         "risk_factors": r.risk.as_list(),

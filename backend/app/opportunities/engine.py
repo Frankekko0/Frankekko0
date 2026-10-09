@@ -38,6 +38,7 @@ from app.pricing.market_value import (
     estimate_market_value,
 )
 from app.profit.calculator import CostProfile, Scenario, acquisition_cost, max_buy_price, profit_scenarios
+from app.profit.evaluation import evaluate_deal
 from app.profit.offers import OfferPlan, build_offer_plan
 from app.scoring.confidence import ConfidenceInput, ConfidenceResult, compute_confidence
 from app.scoring.explain import DEMAND_LABELS, ExplanationContext, build_explanation
@@ -128,6 +129,8 @@ class AnalysisResult:
     authenticity: dict[str, Any] = field(default_factory=dict)
     # Where every number comes from (see ``app.pricing.evidence.build_provenance``).
     provenance: dict[str, Any] = field(default_factory=dict)
+    # The expected scenario with cost statuses, margin on sale, break-even (``profit.evaluation``).
+    economics: dict[str, Any] = field(default_factory=dict)
 
     def scenario(self, name: str) -> Scenario | None:
         return next((s for s in self.scenarios if s.name == name), None)
@@ -387,6 +390,17 @@ def run_analysis(
     )
     result.headline = build_headline(result)
     result.insights = build_insights(result, similar, now, condition, p_sale, margin)
+    if market.has_value and market.expected_sale_price is not None:
+        # Stored analyses use the default cost profile: every default is shown as an estimate.
+        evaluation = evaluate_deal(
+            price,
+            market.expected_sale_price,
+            costs,
+            listing_shipping=subject.shipping_fee,
+            listing_buyer_protection=subject.buyer_protection_fee,
+            profile_saved=False,
+        )
+        result.economics = {**evaluation.as_dict(), "basis": "default_cost_profile"}
     if velocity.sample_size:
         days_basis = "sold"
     elif prior is not None and prior.avg_days_to_sale:

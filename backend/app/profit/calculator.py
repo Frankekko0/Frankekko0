@@ -3,8 +3,9 @@
 All money is ``Decimal``. Formulas (configurable cost profile):
 
     Total Acquisition Cost = purchase price + buyer protection + shipping + other acquisition costs
+                             + restoration (cleaning, repair; optional)
     Net Sale Revenue       = sale price - selling fees - advertising - packaging - payment fees
-                             - outbound shipping - other sale costs
+                             - outbound shipping - other sale costs - contingency reserve (optional)
     Net Profit             = Net Sale Revenue - Total Acquisition Cost
     ROI                    = Net Profit / Total Acquisition Cost
 
@@ -17,7 +18,7 @@ constraints, rounded *down* so the targets are always met.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -63,6 +64,8 @@ class AcquisitionCost:
     shipping: Decimal
     other: Decimal
     total: Decimal
+    # Added later and last: defaults keep every existing construction valid.
+    restoration: Decimal = ZERO
 
 
 @dataclass(frozen=True)
@@ -75,6 +78,7 @@ class SaleRevenue:
     shipping: Decimal
     other: Decimal
     net: Decimal
+    contingency: Decimal = ZERO
 
     @property
     def total_costs(self) -> Decimal:
@@ -102,6 +106,7 @@ def acquisition_cost(
     profile: CostProfile,
     listing_shipping: Decimal | None = None,
     listing_buyer_protection: Decimal | None = None,
+    restoration: Decimal = ZERO,
 ) -> AcquisitionCost:
     bp = money(
         listing_buyer_protection
@@ -111,10 +116,11 @@ def acquisition_cost(
     shipping = money(profile.shipping(listing_shipping))
     other = money(profile.other_acquisition)
     price = money(purchase_price)
-    return AcquisitionCost(price, bp, shipping, other, price + bp + shipping + other)
+    fix = money(restoration)
+    return AcquisitionCost(price, bp, shipping, other, price + bp + shipping + other + fix, fix)
 
 
-def sale_revenue(sale_price: Decimal, profile: CostProfile) -> SaleRevenue:
+def sale_revenue(sale_price: Decimal, profile: CostProfile, contingency_pct: Decimal = ZERO) -> SaleRevenue:
     price = money(sale_price)
     selling = money(profile.selling_fee_fixed + profile.selling_fee_pct * price)
     payment = money(profile.payment_fee_fixed + profile.payment_fee_pct * price)
@@ -122,8 +128,9 @@ def sale_revenue(sale_price: Decimal, profile: CostProfile) -> SaleRevenue:
     packaging = money(profile.packaging)
     shipping = money(profile.shipping_out)
     other = money(profile.other_sale)
-    net = price - selling - payment - advertising - packaging - shipping - other
-    return SaleRevenue(price, selling, advertising, packaging, payment, shipping, other, net)
+    reserve = money(contingency_pct * price)
+    net = price - selling - payment - advertising - packaging - shipping - other - reserve
+    return SaleRevenue(price, selling, advertising, packaging, payment, shipping, other, net, reserve)
 
 
 def compute_profit(acquisition: AcquisitionCost, sale: SaleRevenue) -> ProfitResult:
@@ -138,10 +145,12 @@ def profit_for(
     profile: CostProfile,
     listing_shipping: Decimal | None = None,
     listing_buyer_protection: Decimal | None = None,
+    restoration: Decimal = ZERO,
+    contingency_pct: Decimal = ZERO,
 ) -> ProfitResult:
     return compute_profit(
-        acquisition_cost(purchase_price, profile, listing_shipping, listing_buyer_protection),
-        sale_revenue(sale_price, profile),
+        acquisition_cost(purchase_price, profile, listing_shipping, listing_buyer_protection, restoration),
+        sale_revenue(sale_price, profile, contingency_pct),
     )
 
 
@@ -187,26 +196,79 @@ def max_buy_price(
     min_profit: Decimal,
     min_roi: Decimal,
     listing_shipping: Decimal | None = None,
+    restoration: Decimal = ZERO,
+    contingency_pct: Decimal = ZERO,
 ) -> Decimal | None:
     """Highest purchase price that still meets BOTH min profit and min ROI at ``sale_price``.
 
-    TAC(p) = p * (1 + bp_pct) + F,  F = bp_fixed + shipping + other_acquisition
+    TAC(p) = p * (1 + bp_pct) + F,  F = bp_fixed + shipping + other_acquisition + restoration
     profit >= min_profit  <=>  TAC <= NSR - min_profit
     ROI >= min_roi        <=>  TAC <= NSR / (1 + min_roi)
     """
     if sale_price is None:
         return None
-    nsr = sale_revenue(sale_price, profile).net
+    nsr = sale_revenue(sale_price, profile, contingency_pct).net
     tac_max = min(nsr - min_profit, nsr / (D(1) + min_roi))
-    fixed = money(profile.acquisition_fixed(listing_shipping))
+    fixed = money(profile.acquisition_fixed(listing_shipping)) + money(restoration)
     p = (tac_max - fixed) / (D(1) + profile.buyer_protection_pct)
     if p <= 0:
         return None
     candidate = floor_money(p)
     # Guard against cent rounding of the buyer-protection fee pushing us over the limits.
     while candidate > 0:
-        r = profit_for(candidate, sale_price, profile, listing_shipping)
+        r = profit_for(
+            candidate,
+            sale_price,
+            profile,
+            listing_shipping,
+            restoration=restoration,
+            contingency_pct=contingency_pct,
+        )
         if r.net_profit >= min_profit and r.roi >= min_roi:
             return candidate
         candidate -= CENT
     return None
+
+
+def break_even_resale_price(
+    purchase_price: Decimal,
+    profile: CostProfile,
+    listing_shipping: Decimal | None = None,
+    listing_buyer_protection: Decimal | None = None,
+    restoration: Decimal = ZERO,
+    contingency_pct: Decimal = ZERO,
+) -> Decimal | None:
+    """Lowest resale price at which net profit is not negative (0.00 profit or a few cents more).
+
+    NSR(p) = p * (1 - pct) - F_sale  with pct = fee% + payment% + contingency%, so
+    p = (TAC + F_sale) / (1 - pct), rounded up to the cent and then fixed by checking the
+    cent-rounded real formula. ``None`` when the percentage costs eat the whole price.
+    """
+    pct = profile.selling_fee_pct + profile.payment_fee_pct + contingency_pct
+    if pct >= 1:
+        return None
+    tac = acquisition_cost(
+        purchase_price, profile, listing_shipping, listing_buyer_protection, restoration
+    ).total
+    fixed_sale = (
+        money(profile.selling_fee_fixed)
+        + money(profile.payment_fee_fixed)
+        + money(profile.advertising)
+        + money(profile.packaging)
+        + money(profile.shipping_out)
+        + money(profile.other_sale)
+    )
+    price = ((tac + fixed_sale) / (D(1) - pct) / CENT).to_integral_value(rounding=ROUND_CEILING) * CENT
+
+    def profit_at(p: Decimal) -> Decimal:
+        return sale_revenue(p, profile, contingency_pct).net - tac
+
+    for _ in range(200):  # per-line cent rounding can leave us a few cents short
+        if profit_at(price) >= 0:
+            break
+        price += CENT
+    else:  # pragma: no cover - cannot happen for pct < 1
+        return None
+    while price > 0 and profit_at(price - CENT) >= 0:
+        price -= CENT
+    return price

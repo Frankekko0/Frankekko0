@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import Field
@@ -278,6 +279,19 @@ class ProfitCalcIn(Schema):
     purchase_price: Money = Field(ge=0, le=100_000)
     sale_price: Money = Field(ge=0, le=100_000)
     shipping_fee: Money | None = Field(default=None, ge=0, le=1000)
+    # Cleaning/repair before resale; counted in the cost and the capital tied up.
+    restoration_cost: Money | None = Field(default=None, ge=0, le=10_000)
+    # Share of the resale price kept aside for returns, disputes, lost parcels.
+    contingency_pct: Ratio = Field(default=Decimal("0"), ge=0, le=Decimal("0.5"))
+
+
+class EvaluatedCostOut(Schema):
+    key: str
+    label: str
+    amount: Money
+    status: Literal["confirmed", "estimated", "unknown"]
+    source: str
+    side: Literal["acquisition", "sale"]
 
 
 class ProfitCalcOut(Schema):
@@ -288,3 +302,15 @@ class ProfitCalcOut(Schema):
     acquisition_breakdown: list[CostLine]
     sale_breakdown: list[CostLine]
     max_buy_price: Money | None
+    # ROI = profit / total cost; margin = profit / resale price.
+    margin_on_sale: Ratio | None = None
+    break_even_price: Money | None = None
+    capital_tied_up: Money | None = None
+    # confirmed (all read or set by you) | estimated (some default/formula) | unknown (a needed cost is missing).
+    cost_status: Literal["confirmed", "estimated", "unknown"] = "estimated"
+    unknown_costs: list[str] = Field(default_factory=list)
+    # True when the profit is before costs that are still unknown.
+    gross_of_unknown_costs: bool = False
+    lines: list[EvaluatedCostOut] = Field(default_factory=list)
+    taxes_included: bool = False
+    taxes_note: str = ""

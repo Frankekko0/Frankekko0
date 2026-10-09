@@ -747,16 +747,19 @@ class OpportunityQueries:
 
 
 def acquisition_lines(a: AcquisitionCost) -> list[CostLine]:
-    return [
+    lines = [
         CostLine(label="Prezzo d'acquisto", amount=a.purchase_price),
         CostLine(label="Protezione acquisti", amount=a.buyer_protection),
         CostLine(label="Spedizione", amount=a.shipping),
         CostLine(label="Altri costi d'acquisto", amount=a.other),
     ]
+    if a.restoration:
+        lines.append(CostLine(label="Ripristino", amount=a.restoration))
+    return lines
 
 
 def sale_lines(s: SaleRevenue) -> list[CostLine]:
-    return [
+    lines = [
         CostLine(label="Commissioni di vendita", amount=s.selling_fees),
         CostLine(label="Promozione / advertising", amount=s.advertising),
         CostLine(label="Imballaggio", amount=s.packaging),
@@ -764,6 +767,9 @@ def sale_lines(s: SaleRevenue) -> list[CostLine]:
         CostLine(label="Spedizione a tuo carico", amount=s.shipping),
         CostLine(label="Altri costi di vendita", amount=s.other),
     ]
+    if s.contingency:
+        lines.append(CostLine(label="Riserva per imprevisti", amount=s.contingency))
+    return lines
 
 
 def _escape_like(value: str) -> str:
