@@ -3,6 +3,8 @@
 import httpx
 from sqlalchemy import select
 
+from app.core.config import get_settings
+from app.core.seller_key import protect
 from app.db.models import Listing, ListingImage, Seller
 from app.db.session import session_scope
 from app.media.cleanup import clean_foreign_data
@@ -10,6 +12,11 @@ from tests.api.test_api import API, seed_deal
 
 MY_AVATAR = "https://images1.vinted.net/t/AVATAR_ME/f800/1.jpeg"
 BASE = {"brand": "Ralph Lauren", "size": "M", "condition": "Ottime condizioni", "price": 15}
+
+
+def stored_key(seller: int) -> str:
+    """The key as stored: the extension's hash wrapped by the server (app.core.seller_key)."""
+    return protect(f"h:{seller:024x}", get_settings().seller_key_secret_bytes())
 
 
 def item(vid: int, seller: int, **extra) -> dict:
@@ -74,8 +81,8 @@ async def test_saved_analyses_lose_foreign_photos_and_copied_seller_profiles(
         sellers = {
             s_.external_id: (s_.rating, s_.review_count) for s_ in (await s.execute(select(Seller))).scalars()
         }
-        assert sellers[f"h:{500:024x}"] == (None, 0)  # unknown again, never invented
-        assert float(sellers[f"h:{900:024x}"][0]) == 4.7
+        assert sellers[stored_key(500)] == (None, 0)  # unknown again, never invented
+        assert float(sellers[stored_key(900)][0]) == 4.7
         photo_counts = dict(
             (
                 await s.execute(

@@ -546,10 +546,6 @@ class OpportunityQueries:
             seller=SellerOut(
                 rating=float(seller.rating) if seller.rating is not None else None,
                 review_count=seller.review_count,
-                account_created_at=seller.account_created_at,
-                item_count=seller.item_count,
-                sold_count=seller.sold_count,
-                country=seller.country,
                 reliability_score=o.seller_score,
                 reliability=breakdown.get("seller"),
             )

@@ -241,9 +241,6 @@ def seller_profile(seller: Seller | None, anomalies: tuple[str, ...] = ()) -> Se
     return SellerProfile(
         rating=seller.rating,
         review_count=seller.review_count,
-        account_created_at=seller.account_created_at,
-        item_count=seller.item_count,
-        sold_count=seller.sold_count,
         anomalies=anomalies,
     )
 
@@ -645,16 +642,10 @@ class AnalysisPipeline:
             identification=ident,
             identification_confidence=listing.identification_confidence or 0,
             seller=seller_profile(seller, anomalies),
-            seller_account_age_days=(now - seller.account_created_at).days
-            if seller and seller.account_created_at
-            else None,
             is_repost=listing.duplicate_of_id is not None,
             vision=ident.get("vision"),
             description=listing.description or "",
             buyer_protection_fee=listing.buyer_protection_fee,
-            seller_last_active_days=(now - seller.last_active_at).total_seconds() / 86400
-            if seller and seller.last_active_at
-            else None,
         )
 
     # ---------------------------------------------------------------- analysis

@@ -168,7 +168,6 @@ def subject(**kw) -> SubjectContext:
         identification={},
         identification_confidence=80,
         seller=SellerProfile(D("4.9"), 50),
-        seller_account_age_days=None,
         description="Polo originale taglia M, cotone, nessun difetto, misure spalle 45 cm.",
         **kw,
     )

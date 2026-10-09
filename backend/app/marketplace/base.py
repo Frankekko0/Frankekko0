@@ -30,17 +30,12 @@ class ProviderImage(BaseModel):
 
 
 class ProviderSeller(BaseModel):
-    """Seller data kept by FlipFinder. Real sources supply only an opaque id (a one-way hash),
-    the rating and the review count: no username or other personal data."""
+    """Seller data kept by FlipFinder: an opaque id (a one-way hash, protected again by the server
+    before it is stored), the average rating and the number of reviews. Nothing else."""
 
     external_id: str
     rating: Decimal | None = Field(default=None, ge=0, le=5)
     review_count: int = Field(default=0, ge=0)
-    account_created_at: datetime | None = None
-    item_count: int | None = Field(default=None, ge=0)
-    sold_count: int | None = Field(default=None, ge=0)
-    country: str | None = None
-    last_active_at: datetime | None = None
 
 
 class ProviderListing(BaseModel):
@@ -139,10 +134,9 @@ class ManualListingInput(BaseModel):
     color: str | None = Field(default=None, max_length=60)
     description: str = Field(default="", max_length=5000)
     image_urls: list[HttpUrl] = Field(default_factory=list, max_length=20)
-    # Opaque seller key (the extension sends a one-way hash of the member id). A username, if
-    # sent by an old client, is hashed on arrival and never stored.
+    # Opaque seller key (the extension sends a one-way hash of the member id). A username sent by
+    # an old client is ignored: it is not part of this model and is never read or stored.
     seller_key: str | None = Field(default=None, max_length=80)
-    seller_username: str | None = Field(default=None, max_length=120)
     seller_rating: Decimal | None = Field(default=None, ge=0, le=5)
     seller_review_count: int | None = Field(default=None, ge=0)
     country: str | None = Field(default=None, min_length=2, max_length=2)

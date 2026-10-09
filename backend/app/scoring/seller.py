@@ -20,9 +20,6 @@ PRIOR_WEIGHT = 5
 class SellerProfile:
     rating: Decimal | float | None
     review_count: int
-    account_created_at: datetime | None = None
-    item_count: int | None = None
-    sold_count: int | None = None
     anomalies: tuple[str, ...] = ()
 
 
@@ -50,12 +47,11 @@ def seller_reliability(seller: SellerProfile | None, now: datetime) -> SellerSco
     smoothed = (rating * n + PRIOR_RATING * PRIOR_WEIGHT) / (n + PRIOR_WEIGHT)
     rating_c = min(1.0, max(0.0, (smoothed - 3.5) / 1.5))
     volume_c = min(1.0, math.log10(n + 1) / math.log10(500))
-    age_days = (now - seller.account_created_at).days if seller.account_created_at else None
-    age_c = min(1.0, age_days / 365) if age_days is not None else 0.3
-    sold_c = min(1.0, math.log10((seller.sold_count or 0) + 1) / math.log10(300))
 
     factors: list[dict[str, object]] = []
-    score = 15 + 55 * rating_c + 15 * volume_c + 10 * age_c + 5 * sold_c
+    # Only rating and review count are known. (The constant is the old 15 plus the neutral 3 points
+    # that the never-collected account age used to contribute: scores are unchanged.)
+    score = 18 + 55 * rating_c + 15 * volume_c
     if n == 0:
         factors.append(
             {"label": "Nessuna recensione: poco storico, non necessariamente un problema", "impact": 0}
@@ -67,15 +63,13 @@ def seller_reliability(seller: SellerProfile | None, now: datetime) -> SellerSco
     if n >= 10 and smoothed < 4.2:
         score -= 15
         factors.append({"label": "Molte recensioni negative", "impact": -15})
-    if age_days is not None and age_days < 30:
-        factors.append({"label": f"Account creato {age_days} giorni fa", "impact": round(10 * age_c - 10)})
     anomaly_penalty = min(25, 10 * len(seller.anomalies))
     if anomaly_penalty:
         score -= anomaly_penalty
         for a in seller.anomalies:
             factors.append({"label": a, "impact": -10})
     score_i = max(0, min(100, round(score)))
-    if n < 3 and (age_days is None or age_days < 60):
+    if n < 3:
         level = "new"
     elif score_i >= 75:
         level = "high"

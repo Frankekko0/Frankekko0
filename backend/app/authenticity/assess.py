@@ -79,7 +79,6 @@ class AuthInput:
     suspicious_terms: list[str] = field(default_factory=list)
     seller_reviews: int | None = None
     seller_rating: float | None = None
-    seller_account_age_days: int | None = None
     seller_multi_size_same_item: bool = False
     photos_reused_by_other_seller: bool = False
     reused_photos: list[int] = field(default_factory=list)  # which photos (when known)
@@ -183,13 +182,7 @@ def assess(inp: AuthInput, rules: dict[str, Any] | None = None) -> AuthAssessmen
     # ---- seller (weak signals, never decisive on their own) -------------------------------------
     if inp.seller_multi_size_same_item:
         add("-", "Lo stesso articolo nuovo in più taglie dallo stesso venditore", lr["multi_size_same_item"])
-    new_profile = inp.seller_account_age_days is not None and inp.seller_account_age_days < 30
-    no_reviews = inp.seller_reviews == 0
-    if new_profile and no_reviews:
-        add(
-            "-", "Profilo nuovo e senza recensioni (da solo non indica un falso)", lr["new_seller_no_reviews"]
-        )
-    elif inp.seller_reviews is not None and inp.seller_reviews >= 50 and (inp.seller_rating or 0) >= 4.7:
+    if inp.seller_reviews is not None and inp.seller_reviews >= 50 and (inp.seller_rating or 0) >= 4.7:
         add(
             "+",
             f"Venditore con {inp.seller_reviews} recensioni, {inp.seller_rating:.1f}★",

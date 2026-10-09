@@ -181,12 +181,10 @@ def _hash(value: str) -> str:
 
 def seller_for(body: ManualListingInput, url: str) -> ProviderSeller | None:
     """Only rating and review count are kept. The key is opaque: the extension sends a one-way
-    hash; a username sent by an old client is hashed here and dropped."""
+    hash (protected again when stored, see ``IngestionService``)."""
     if body.seller_key:
         key = SELLER_KEY.sub("", body.seller_key)[:64]
         key = key if key.startswith("h:") else _hash(key)
-    elif body.seller_username:
-        key = _hash(body.seller_username.strip().lower())
     elif body.seller_rating is not None or body.seller_review_count is not None:
         key = _hash("listing:" + url)  # unknown seller: rating/reviews of this listing's seller
     else:
@@ -415,7 +413,6 @@ async def analyze_adhoc(
         identification=ident.as_dict(),
         identification_confidence=ident.confidence,
         seller=seller,
-        seller_account_age_days=None,
         description=pl.description,
         buyer_protection_fee=pl.buyer_protection_fee,
     )

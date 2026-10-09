@@ -300,10 +300,6 @@ export interface AiAnalysis {
 export interface Seller {
   rating: number | null;
   review_count: number;
-  account_created_at: string | null;
-  item_count: number | null;
-  sold_count: number | null;
-  country: string | null;
   reliability_score: number | null;
   reliability: { score: number; level: string; smoothed_rating: number | null; factors: { label: string; impact: number }[] } | null;
 }

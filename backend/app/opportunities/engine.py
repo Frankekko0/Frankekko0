@@ -74,7 +74,6 @@ class SubjectContext:
     identification: dict[str, Any]
     identification_confidence: int
     seller: SellerProfile | None
-    seller_account_age_days: int | None
     is_repost: bool = False
     vision: dict[str, Any] | None = None
     description: str = ""
@@ -83,7 +82,6 @@ class SubjectContext:
     price_history: list[tuple[datetime, Decimal]] = field(default_factory=list)
     # Price behaviour of the seller's other listings (see ``AnalysisPipeline.seller_habits``).
     seller_habits: dict[str, Any] | None = None
-    seller_last_active_days: float | None = None
 
     @property
     def suspicious_terms(self) -> list[str]:
@@ -258,7 +256,6 @@ def run_analysis(
             fair_market_value=fmv,
             brand_counterfeit_risk=subject.brand_counterfeit_risk,
             seller=subject.seller,
-            seller_account_age_days=subject.seller_account_age_days,
             photo_count=subject.photo_count,
             description_length=subject.description_length,
             suspicious_terms=tuple(subject.suspicious_terms),
@@ -442,7 +439,6 @@ def assess_authenticity(subject: SubjectContext, price: Decimal, fmv: Decimal | 
             suspicious_terms=subject.suspicious_terms,
             seller_reviews=seller.review_count if seller else None,
             seller_rating=float(seller.rating) if seller and seller.rating is not None else None,
-            seller_account_age_days=subject.seller_account_age_days,
             seller_multi_size_same_item=bool(seller and SAME_ITEM_ANOMALY in seller.anomalies),
             photos_reused_by_other_seller=bool(subject.identification.get("photos_reused_by_other_seller")),
             **photos,
@@ -480,8 +476,6 @@ def build_insights(
         price_history=s.price_history,
         seller_rating=float(seller.rating) if seller and seller.rating is not None else None,
         seller_reviews=seller.review_count if seller else None,
-        seller_account_age_days=s.seller_account_age_days,
-        seller_last_active_days=s.seller_last_active_days,
         seller_habits=s.seller_habits,
         identification=s.identification,
         vision=s.vision,

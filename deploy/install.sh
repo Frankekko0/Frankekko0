@@ -31,6 +31,7 @@ if [ ! -f .env.production ]; then
   cp .env.production.example .env.production
   sed -i "s|^DOMAIN=.*|DOMAIN=${DOMAIN}|" .env.production
   sed -i "s|^JWT_SECRET=.*|JWT_SECRET=$(secret)|" .env.production
+  sed -i "s|^SELLER_KEY_SECRET=.*|SELLER_KEY_SECRET=$(secret)|" .env.production
   sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(secret)|" .env.production
   chmod 600 .env.production
   echo ".env.production creato (segreti generati)."

@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     # --- Security ------------------------------------------------------------------------
     jwt_secret: SecretStr = SecretStr("dev-only-change-me-dev-only-change-me")
     jwt_algorithm: str = "HS256"
+    # Wraps the extension's seller hash (see app.core.seller_key). Unset: derived from JWT_SECRET.
+    seller_key_secret: SecretStr | None = None
     access_token_ttl_minutes: int = 60 * 12
     cookie_secure: bool = False
     cookie_domain: str | None = None
@@ -187,6 +189,13 @@ class Settings(BaseSettings):
             raise RuntimeError("COOKIE_SECURE must be true in production")
         if ":flipfinder@" in self.database_url:
             raise RuntimeError("DATABASE_URL uses the development password; set POSTGRES_PASSWORD")
+
+    def seller_key_secret_bytes(self) -> bytes:
+        from app.core.seller_key import derived_secret
+
+        if self.seller_key_secret is not None and self.seller_key_secret.get_secret_value():
+            return self.seller_key_secret.get_secret_value().encode()
+        return derived_secret(self.jwt_secret.get_secret_value())
 
 
 @lru_cache

@@ -148,10 +148,6 @@ class SellerOut(Schema):
 
     rating: float | None
     review_count: int
-    account_created_at: datetime | None
-    item_count: int | None
-    sold_count: int | None
-    country: str | None
     reliability_score: int | None
     reliability: dict[str, Any] | None
 

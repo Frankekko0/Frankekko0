@@ -551,7 +551,7 @@ Q1–Q10 e C1–C5 (§2) · formula del Flip Score da farti vedere prima di fiss
 - [x] 2.2 Osservazioni (migrazione 0011: snapshot tipizzati con motivo, versioni di estensione e parser, serie foto; una riga solo se cambia qualcosa o dopo 6 h; `last_verified_at`; `listing_price_history` ora è una vista sugli snapshot, nessun prezzo perso)
 - [x] 2.3 Immagini (migrazione 0012: chiave stabile, prima/ultima vista, `removed_at`, origine; niente cancella-e-reinserisci, copie e hash sopravvivono; SHA-256 e dHash alla copia; riannuncio visivo con prova in `duplicate_evidence`; il fingerprint delle foto entra negli input di rianalisi)
 - [x] 2.4 "Da verificare" (migrazione 0013: stato `to_verify` con funzione pura testata e job ogni 15 min; soglie 48 h attivi / 24 h riservati in `STALE_ACTIVE_HOURS` / `STALE_RESERVED_HOURS`; `last_verified_at` esposto nelle API; mai `is_active`, torna a ciò che la pagina dice alla prima nuova osservazione; `lifecycle_stale_hours`, che non era usato, è stato rimosso)
-- [ ] 2.5 Venditore
+- [x] 2.5 Venditore (migrazione 0014: chiavi `s2:` = HMAC con `SELLER_KEY_SECRET` (altrimenti derivato da `JWT_SECRET`), migrate sul posto; tolte le 5 colonne mai riempite, i campi relativi nei motori di rischio/autenticità e `seller_username`; punteggio di affidabilità invariato)
 - [ ] 2.6 Analisi immutabili a blocchi
 - [ ] 2.7 Tabella prezzi venduti
 - [ ] 2.8 Esportazioni CSV

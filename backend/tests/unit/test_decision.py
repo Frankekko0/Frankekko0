@@ -200,7 +200,7 @@ def test_no_photo_check_means_not_verifiable_never_authentic() -> None:
 
 
 def test_new_seller_alone_is_not_a_counterfeit() -> None:
-    a = assess(base_input(seller_reviews=0, seller_account_age_days=3))
+    a = assess(base_input(seller_reviews=0))
     assert a.verdict != "counterfeit_risk"
 
 

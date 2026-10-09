@@ -15,7 +15,6 @@ class RiskInput:
     fair_market_value: Decimal | None
     brand_counterfeit_risk: float
     seller: SellerProfile | None
-    seller_account_age_days: int | None
     photo_count: int
     description_length: int
     suspicious_terms: tuple[str, ...] = ()
@@ -124,8 +123,6 @@ def assess_risk(inp: RiskInput) -> RiskResult:
                 add("seller_bad_rating", f"Valutazione venditore bassa ({rating:.1f}★)", 15)
             elif rating < 4.5:
                 add("seller_mixed_rating", f"Valutazione venditore nella media bassa ({rating:.1f}★)", 6)
-        if inp.seller_account_age_days is not None and inp.seller_account_age_days < 30:
-            add("seller_new_account", f"Account creato da {inp.seller_account_age_days} giorni", 4)
         for anomaly in s.anomalies:
             add("seller_anomaly", anomaly, 10)
 

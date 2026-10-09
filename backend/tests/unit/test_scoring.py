@@ -1,6 +1,6 @@
 """Flip Score, Confidence, Risk, Seller reliability, demand/velocity, offers, explanations."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal as D
 
 import pytest
@@ -140,8 +140,7 @@ def risk_input(**overrides: object) -> RiskInput:
         price=D("30"),
         fair_market_value=D("40"),
         brand_counterfeit_risk=0.05,
-        seller=SellerProfile(D("4.9"), 200, NOW - timedelta(days=900)),
-        seller_account_age_days=900,
+        seller=SellerProfile(D("4.9"), 200),
         photo_count=5,
         description_length=150,
         identification_confidence=85,
@@ -177,8 +176,8 @@ def test_counterfeit_signals_raise_risk_with_reasons() -> None:
 
 
 def test_new_seller_is_not_treated_as_scammer() -> None:
-    new = SellerProfile(None, 0, NOW - timedelta(days=10))
-    r = assess_risk(risk_input(seller=new, seller_account_age_days=10))
+    new = SellerProfile(None, 0)
+    r = assess_risk(risk_input(seller=new))
     assert r.score <= 20
     assert any("non necessariamente" in f.label for f in r.factors)
     s = seller_reliability(new, NOW)
@@ -187,9 +186,10 @@ def test_new_seller_is_not_treated_as_scammer() -> None:
 
 
 def test_seller_reliability_ranks_evidence() -> None:
-    veteran = seller_reliability(SellerProfile(D("4.95"), 400, NOW - timedelta(days=1500), 50, 420), NOW)
-    bad = seller_reliability(SellerProfile(D("3.6"), 80, NOW - timedelta(days=800), 20, 70), NOW)
-    assert veteran.score > 85
+    veteran = seller_reliability(SellerProfile(D("4.95"), 400), NOW)
+    bad = seller_reliability(SellerProfile(D("3.6"), 80), NOW)
+    # Rating and reviews are all that is known (account age and sales are not collected).
+    assert veteran.score >= 85 and veteran.level == "high"
     assert bad.score < 45
     assert seller_reliability(None, NOW).level == "unknown"
 

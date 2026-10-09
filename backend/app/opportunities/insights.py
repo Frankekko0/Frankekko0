@@ -51,8 +51,6 @@ class InsightInput:
     price_history: list[tuple[datetime, Decimal]] = field(default_factory=list)
     seller_rating: float | None = None
     seller_reviews: int | None = None
-    seller_account_age_days: int | None = None
-    seller_last_active_days: float | None = None
     seller_habits: dict[str, Any] | None = None
     identification: dict[str, Any] = field(default_factory=dict)
     vision: dict[str, Any] | None = None
@@ -183,8 +181,6 @@ def seller_detail(inp: InsightInput) -> dict[str, Any]:
     return {
         "rating": inp.seller_rating,
         "reviews": inp.seller_reviews,
-        "account_age_days": inp.seller_account_age_days,
-        "last_active_days": _r(inp.seller_last_active_days, 1),
         # Vinted does not show the response time on the item page: never estimated.
         "response_time": None,
         "lowers_prices": {

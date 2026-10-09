@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.seller_key import protect as protect_seller_key
 from app.db.models import Listing, ListingImage, ListingSnapshot, Product, Seller
 from app.domain.enums import CAPTURE_RANK, AcquisitionMode, CaptureLevel, Condition, ListingStatus
 from app.identification.engine import IdentificationEngine, IdentificationResult, ListingText
@@ -566,23 +567,30 @@ class IngestionService:
         return out
 
     async def _upsert_sellers(self, sellers: list[ProviderSeller], now: datetime) -> dict[str, uuid.UUID]:
+        """Store each seller's rating and review count under a server-protected key.
+
+        Returns ``{key as received: seller id}``; the stored ``external_id`` is the received key
+        wrapped in an HMAC (``app.core.seller_key``), so the database alone cannot be turned back
+        into member ids.
+        """
         if not sellers:
             return {}
+        secret = get_settings().seller_key_secret_bytes()
+        protected = {s.external_id: protect_seller_key(s.external_id, secret) for s in sellers}
         # Sorted by key so concurrent upserts lock rows in the same order (no deadlocks).
-        unique = {s.external_id: s for s in sorted(sellers, key=lambda s: s.external_id)}
+        unique = {
+            protected[s.external_id]: s for s in sorted(sellers, key=lambda s: protected[s.external_id])
+        }
         rows = []
-        for s in unique.values():
+        for key, s in unique.items():
             score = seller_reliability(SellerProfile(s.rating, s.review_count), now)
             rows.append(
                 {
                     "id": uuid.uuid4(),
                     "provider": self.provider,
-                    "external_id": s.external_id,
+                    "external_id": key,
                     "rating": s.rating,
                     "review_count": s.review_count,
-                    **dict.fromkeys(
-                        ("account_created_at", "item_count", "sold_count", "country", "last_active_at")
-                    ),
                     "reliability_score": score.score,
                     "reliability_details": score.as_dict(),
                     "updated_at": now,
@@ -593,24 +601,14 @@ class IngestionService:
             index_elements=["provider", "external_id"],
             set_={
                 c: getattr(stmt.excluded, c)
-                for c in (
-                    "rating",
-                    "review_count",
-                    "item_count",
-                    "sold_count",
-                    "country",
-                    "last_active_at",
-                    "reliability_score",
-                    "reliability_details",
-                    "updated_at",
-                )
+                for c in ("rating", "review_count", "reliability_score", "reliability_details", "updated_at")
             },
         ).returning(Seller.__table__.c.id, Seller.__table__.c.external_id)
-        out: dict[str, uuid.UUID] = {}
+        stored: dict[str, uuid.UUID] = {}
         for chunk_start in range(0, len(rows), 500):
             res = await self.session.execute(stmt, rows[chunk_start : chunk_start + 500])
-            out.update({r.external_id: r.id for r in res.all()})
-        return out
+            stored.update({r.external_id: r.id for r in res.all()})
+        return {raw: stored[key] for raw, key in protected.items()}
 
     async def _upsert_products(self, specs: list[dict[str, Any]]) -> dict[str, uuid.UUID]:
         await self.session.execute(
