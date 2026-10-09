@@ -20,6 +20,7 @@ import { DataQualityBanner } from "@/components/deal/analysis-detail";
 import { AuthenticitySection, DecisionSection, InsightDetails } from "@/components/deal/decision";
 import { DossierSection } from "@/components/deal/dossier";
 import { IntelligenceSection } from "@/components/deal/intelligence";
+import { NegotiationCard } from "@/components/deal/negotiation";
 import { VerdictSection } from "@/components/deal/verdict";
 import { ProvenanceSection } from "@/components/deal/provenance";
 import { ListingImage } from "@/components/deal/listing-image";
@@ -340,6 +341,7 @@ export default function DealPage({ params }: { params: Promise<{ id: string }> }
           {d.insights && <InsightDetails i={d.insights} />}
           <ExplanationSection d={d} />
           <OfferCard d={d} />
+          <NegotiationCard opportunityId={d.card.id} />
           <MarketSection d={d} />
           <ScenariosSection d={d} />
           <ComparablesSection items={d.comparables} />
