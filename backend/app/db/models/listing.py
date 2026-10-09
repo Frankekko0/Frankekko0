@@ -119,6 +119,8 @@ class Listing(Base):
     # records and unreachable checks do not count.
     last_verified_at: Mapped[datetime | None] = mapped_column()
     status_changed_at: Mapped[datetime | None] = mapped_column()
+    # What it was read as before it went stale (active / reserved), shown as "last known state".
+    status_before_verify: Mapped[str | None] = mapped_column(String(16))
     # Sale: estimated moment (midpoint of the window below), first observation of "sold",
     # last price seen while open, days from publication to the estimated sale.
     sold_at: Mapped[datetime | None] = mapped_column()

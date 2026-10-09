@@ -348,6 +348,18 @@ async def deliver_alert_task(ctx: dict[str, Any], alert_id: str, channel: str) -
         log.error("alerts.delivery_gave_up", channel=channel, alert_id=alert_id, attempts=job_try)
 
 
+async def mark_stale_listings_task(ctx: dict[str, Any]) -> int:
+    """Listings not confirmed for too long become "da verificare" (never shown as buyable)."""
+    from app.tracking.verification import mark_stale_listings
+
+    async with session_scope() as s:
+        ids = await mark_stale_listings(s)
+    if ids:
+        log.info("lifecycle.marked_to_verify", count=len(ids))
+        await cache.bump(NS_FEED)
+    return len(ids)
+
+
 async def recompute_market_statistics_task(ctx: dict[str, Any]) -> int:
     async with session_scope() as s:
         n = await recompute_market_statistics(s, get_settings().market_stats_window_days)

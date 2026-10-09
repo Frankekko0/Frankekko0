@@ -30,7 +30,7 @@ from app.tracking.summary import analysis_summary
 
 router = APIRouter(prefix="/items", tags=["items"])
 
-StatusParam = Query(None, pattern="^(active|reserved|sold|removed|unknown)$")
+StatusParam = Query(None, pattern="^(active|reserved|sold|removed|unknown|to_verify)$")
 
 
 def filters(
@@ -201,6 +201,8 @@ async def item_detail(ref: str, user: CurrentUser, db: DB) -> ItemDetailOut:
             tracked=listing.tracked_at is not None,
             tracked_at=listing.tracked_at,
             last_checked_at=listing.last_checked_at,
+            last_verified_at=listing.last_verified_at,
+            status_before_verify=listing.status_before_verify,
             next_check_at=listing.next_check_at,
             check_failures=listing.check_failures,
             status=listing.status,

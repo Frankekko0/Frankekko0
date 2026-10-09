@@ -135,6 +135,7 @@ def row_dict(r: Any) -> dict[str, Any]:
         "tracked": li.tracked_at is not None,
         "first_seen_at": li.first_seen_at,
         "last_checked_at": li.last_checked_at,
+        "last_verified_at": li.last_verified_at,
         "next_check_at": li.next_check_at,
         "sold_at": li.sold_at,
         "days_to_sell": li.days_to_sell,

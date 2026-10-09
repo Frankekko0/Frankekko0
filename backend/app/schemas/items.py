@@ -28,6 +28,7 @@ class ItemOut(Schema):
     tracked: bool
     first_seen_at: datetime
     last_checked_at: datetime | None
+    last_verified_at: datetime | None = None
     next_check_at: datetime | None
     sold_at: datetime | None
     days_to_sell: float | None
@@ -78,6 +79,9 @@ class TrackingOut(Schema):
     tracked: bool
     tracked_at: datetime | None
     last_checked_at: datetime | None
+    # Last time a capture confirmed the state; the basis of "da verificare".
+    last_verified_at: datetime | None = None
+    status_before_verify: str | None = None
     next_check_at: datetime | None
     check_failures: int
     status: str

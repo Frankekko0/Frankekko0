@@ -706,7 +706,7 @@ export interface ManualListingInput {
   source?: "manual_form" | "extension_item" | "bookmarklet";
 }
 
-export type ListingStatus = "active" | "reserved" | "sold" | "removed" | "unknown";
+export type ListingStatus = "active" | "reserved" | "sold" | "removed" | "unknown" | "to_verify";
 export type AcquisitionMode =
   | "provider_scan"
   | "extension_item"

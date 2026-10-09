@@ -36,7 +36,7 @@ function el(tag, attrs = {}, ...children) {
 
 const scored = (ev) => ev && ev.flip_score !== null && ev.flip_score !== undefined;
 const pct = (v) => (v === null || v === undefined ? "—" : `${Math.round(v * 100)}%`);
-const STATUS = { sold: "venduto", reserved: "riservato", removed: "rimosso", active: "attivo", unknown: "sconosciuto" };
+const STATUS = { sold: "venduto", reserved: "riservato", removed: "rimosso", active: "attivo", unknown: "sconosciuto", to_verify: "da verificare" };
 
 // ------------------------------------------------------------------ data
 // A Vinted tab can be pinned with ?tabId= (panel opened in its own window).

@@ -42,6 +42,7 @@ def _functions() -> list[Any]:
         func(tasks.scan_new_listings, keep_result=0, max_tries=3, timeout=600),
         func(tasks.recompute_market_statistics_task, keep_result=0, max_tries=2, timeout=600),
         func(tasks.refresh_listings, keep_result=0, max_tries=2, timeout=600),
+        func(tasks.mark_stale_listings_task, keep_result=0, max_tries=2, timeout=120),
         func(tasks.recompute_learning, keep_result=0, max_tries=2, timeout=300),
         func(tasks.prune, keep_result=0, max_tries=1, timeout=300),
         func(tasks.refresh_tracked_public, keep_result=0, max_tries=1, timeout=90),
@@ -65,6 +66,7 @@ def _cron_jobs() -> list[Any]:
     jobs = [
         cron(tasks.recompute_market_statistics_task, minute={0, 15, 30, 45}, second=5, timeout=600),
         cron(tasks.refresh_listings, minute={2, 12, 22, 32, 42, 52}, second=10, timeout=600),
+        cron(tasks.mark_stale_listings_task, minute={5, 20, 35, 50}, second=30, timeout=120, unique=True),
         cron(tasks.recompute_learning, minute={7, 37}, second=20, timeout=300),
         cron(tasks.prune, hour=3, minute=17, second=0, timeout=300),
         cron(tasks.clean_foreign_data_task, hour=4, minute=41, second=0, run_at_startup=True, timeout=600),

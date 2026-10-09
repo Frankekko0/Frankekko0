@@ -63,6 +63,7 @@ export const CONDITION_LABEL: Record<string, string> = {
   good: "Good",
   satisfactory: "Satisfactory",
   unknown: "Unknown",
+  to_verify: "To verify",
 };
 
 export const DEMAND_LABEL: Record<string, string> = {

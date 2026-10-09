@@ -44,9 +44,14 @@ class ListingStatus(StrEnum):
     SOLD = "sold"
     REMOVED = "removed"
     UNKNOWN = "unknown"
+    # Last read as available too long ago to say so: never shown as buyable, back to what the
+    # page says the next time it is seen. Set only by ``app.tracking.verification``.
+    TO_VERIFY = "to_verify"
 
 
-OPEN_STATUSES = frozenset({ListingStatus.ACTIVE, ListingStatus.RESERVED, ListingStatus.UNKNOWN})
+OPEN_STATUSES = frozenset(
+    {ListingStatus.ACTIVE, ListingStatus.RESERVED, ListingStatus.UNKNOWN, ListingStatus.TO_VERIFY}
+)
 CLOSED_STATUSES = frozenset({ListingStatus.SOLD, ListingStatus.REMOVED})
 
 

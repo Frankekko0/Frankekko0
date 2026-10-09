@@ -42,6 +42,7 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   sold: "accent",
   removed: "neutral",
   unknown: "outline",
+  to_verify: "warning",
 };
 
 function dateTime(iso: string | null | undefined): string {

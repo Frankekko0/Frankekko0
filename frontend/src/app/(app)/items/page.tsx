@@ -23,6 +23,7 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   sold: "accent",
   removed: "neutral",
   unknown: "outline",
+  to_verify: "warning",
 };
 
 const PAGE_SIZE = 50;

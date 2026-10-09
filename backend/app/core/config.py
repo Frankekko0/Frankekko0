@@ -70,7 +70,9 @@ class Settings(BaseSettings):
     analysis_high_priority_prescore: float = 0.35
     market_stats_window_days: int = 90
     comparables_window_days: int = 120
-    lifecycle_stale_hours: int = 6
+    # Not read for this long, a listing claiming to be available becomes "to verify".
+    stale_active_hours: int = Field(default=48, ge=1, le=720)
+    stale_reserved_hours: int = Field(default=24, ge=1, le=720)
     # A listing seen again unchanged adds a history row only after this long (a "heartbeat").
     snapshot_heartbeat_hours: int = Field(default=6, ge=1, le=168)
     algorithm_version: str = "2026.10-2"

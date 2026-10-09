@@ -81,7 +81,7 @@ async def list_listings(
     q: str | None = Query(None, max_length=120),
     brand: str | None = None,
     category: str | None = None,
-    status: str | None = Query(None, pattern="^(active|reserved|sold|removed|unknown)$"),
+    status: str | None = Query(None, pattern="^(active|reserved|sold|removed|unknown|to_verify)$"),
     min_price: float | None = Query(None, ge=0),
     max_price: float | None = Query(None, ge=0),
     page: int = Query(1, ge=1),
