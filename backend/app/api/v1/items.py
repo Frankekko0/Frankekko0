@@ -28,6 +28,7 @@ from app.schemas.items import (
     TrackingOut,
 )
 from app.tracking.actions import set_tracked
+from app.tracking.exports import export_analyses, export_observations
 from app.tracking.queries import ItemFilters, ItemQueries, build_query, export_csv, row_dict
 from app.tracking.summary import analysis_summary
 
@@ -137,6 +138,62 @@ async def export_items(
         export_csv(db, f, ";" if delimiter == "semicolon" else ","),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="flipfinder-articoli-{stamp}.csv"'},
+    )
+
+
+def _csv_response(chunks: Any, name: str) -> StreamingResponse:
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
+    return StreamingResponse(
+        chunks,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="flipfinder-{name}-{stamp}.csv"'},
+    )
+
+
+@router.get("/export-observations.csv")
+async def export_item_observations(
+    user: CurrentUser,
+    db: DB,
+    ref: str | None = Query(None, max_length=80, description="Internal id or Vinted ID of one item"),
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    delimiter: Literal["comma", "semicolon"] = "comma",
+) -> StreamingResponse:
+    """The append-only history of what was seen (price, status, favourites, photos), one row per
+    recorded observation, each traceable to its listing by internal id, Vinted ID and URL."""
+    listing_id = (await _listing(db, ref)).id if ref else None
+    return _csv_response(
+        export_observations(
+            db,
+            listing_id=listing_id,
+            since=date_from,
+            until=date_to,
+            delimiter=";" if delimiter == "semicolon" else ",",
+        ),
+        "osservazioni",
+    )
+
+
+@router.get("/export-analyses.csv")
+async def export_item_analyses(
+    user: CurrentUser,
+    db: DB,
+    ref: str | None = Query(None, max_length=80, description="Internal id or Vinted ID of one item"),
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    delimiter: Literal["comma", "semicolon"] = "comma",
+) -> StreamingResponse:
+    """Every stored analysis with its headline numbers, the versions that produced it and why it ran."""
+    listing_id = (await _listing(db, ref)).id if ref else None
+    return _csv_response(
+        export_analyses(
+            db,
+            listing_id=listing_id,
+            since=date_from,
+            until=date_to,
+            delimiter=";" if delimiter == "semicolon" else ",",
+        ),
+        "analisi",
     )
 
 

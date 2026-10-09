@@ -65,3 +65,41 @@ async def test_sold_prices_endpoint_and_csv(auth_client: httpx.AsyncClient, make
     assert "Ultimo prezzo richiesto: mediana" in csv_response.text
     filtered = await auth_client.get(f"{API}/pricing/sold-prices?q=zzz-no-such-model")
     assert filtered.json() == {"models": []}
+
+
+async def test_observation_and_analysis_csv_exports(auth_client: httpx.AsyncClient, make_listing) -> None:
+    import csv
+    import io
+
+    await seed_deal(make_listing)
+    payload = {
+        **PAYLOAD,
+        "url": "https://www.vinted.it/items/751-polo",
+        "title": '=HYPERLINK("x") Polo Ralph Lauren',
+    }
+    await auth_client.post(f"{API}/analyze", json=payload)
+    await auth_client.post(f"{API}/analyze", json={**payload, "price": 8})
+
+    def rows(text: str) -> list[dict[str, str]]:
+        return list(csv.DictReader(io.StringIO(text.lstrip("﻿"))))
+
+    obs = await auth_client.get(f"{API}/items/export-observations.csv?ref=751")
+    assert obs.status_code == 200 and obs.headers["content-type"].startswith("text/csv")
+    o = rows(obs.text)
+    assert [r["Prezzo"] for r in o] == ["11.00", "8.00"] or [r["Prezzo"] for r in o] == ["11", "8"]
+    assert all(r["ID Vinted"] == "751" and r["URL originale"].endswith("/items/751-polo") for r in o)
+    assert all(r["ID interno"] and r["Osservato il"] and r["Fonte"] for r in o)
+    assert [r["Motivo della riga"] for r in o] == ["first", "price"]
+    assert o[0]["Titolo"].startswith("'=")  # third-party text cannot run as a formula
+
+    ana = await auth_client.get(f"{API}/items/export-analyses.csv?ref=751&delimiter=semicolon")
+    a = list(csv.DictReader(io.StringIO(ana.text.lstrip("﻿")), delimiter=";"))
+    assert [r["Motivo"] for r in a] == ["new", "price_change"]
+    assert [r["Corrente"] for r in a] == ["no", "sì"]
+    assert all(r["ID analisi"] and r["Versione algoritmo"] and r["Versione schema"] == "1" for r in a)
+
+    # Everything, and a date range that excludes it.
+    assert len(rows((await auth_client.get(f"{API}/items/export-observations.csv")).text)) >= 2
+    none = await auth_client.get(f"{API}/items/export-analyses.csv?date_to=2000-01-01T00:00:00Z")
+    assert rows(none.text) == []
+    assert (await auth_client.get(f"{API}/items/export-analyses.csv?ref=nope")).status_code == 404

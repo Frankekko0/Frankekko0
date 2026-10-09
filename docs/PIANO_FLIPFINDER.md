@@ -554,7 +554,7 @@ Q1–Q10 e C1–C5 (§2) · formula del Flip Score da farti vedere prima di fiss
 - [x] 2.5 Venditore (migrazione 0014: chiavi `s2:` = HMAC con `SELLER_KEY_SECRET` (altrimenti derivato da `JWT_SECRET`), migrate sul posto; tolte le 5 colonne mai riempite, i campi relativi nei motori di rischio/autenticità e `seller_username`; punteggio di affidabilità invariato)
 - [x] 2.6 Analisi immutabili a blocchi (migrazione 0015: tabella `analyses` con ID interno/Vinted, URL, fonte, data, versione schema e algoritmo, motivo, hash di input e risultato e i cinque blocchi; un trigger del database vieta le modifiche; `opportunities.analysis_id` punta all'ultima; rianalizzare con stessi input e risultati non crea righe; `GET /items/{ref}/analyses[/{id}]`)
 - [x] 2.7 Tabella prezzi venduti (migrazione 0016: `asking_price` e `realized_price` separate con vincolo, finestra della data di vendita, giorni osservati; `GET /pricing/sold-prices[/export.csv]` con prezzi reali, richiesti e riportati mai fusi; sotto 3 vendite «insufficiente». **Non toccato**: `model_price_stats` fonde ancora i tipi di prezzo in una mediana: è la Fase 4 (D1))
-- [ ] 2.8 Esportazioni CSV
+- [x] 2.8 Esportazioni CSV (osservazioni `/items/export-observations.csv`, analisi `/items/export-analyses.csv`, prezzi venduti `/pricing/sold-prices/export.csv`, accanto a quella degli articoli; ogni riga ha ID interno, ID Vinted, URL; testi di terzi neutralizzati contro le formule; voci nel menu «Export CSV» di Archivio)
 - [ ] 2.9 Migrazione e prove
 
 ---

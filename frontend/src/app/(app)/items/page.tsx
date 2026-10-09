@@ -107,6 +107,21 @@ export default function ItemsPage() {
                 CSV for Excel (semicolon)
               </a>
             </MenuItem>
+            <MenuItem asChild>
+              <a href="/api/v1/items/export-observations.csv?delimiter=semicolon" download>
+                History of observations (Excel)
+              </a>
+            </MenuItem>
+            <MenuItem asChild>
+              <a href="/api/v1/items/export-analyses.csv?delimiter=semicolon" download>
+                Stored analyses (Excel)
+              </a>
+            </MenuItem>
+            <MenuItem asChild>
+              <a href="/api/v1/pricing/sold-prices/export.csv?delimiter=semicolon" download>
+                Sold prices per model (Excel)
+              </a>
+            </MenuItem>
           </MenuContent>
         </Menu>
       </div>
