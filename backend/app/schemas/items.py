@@ -25,6 +25,8 @@ class ItemOut(Schema):
     image_url: str | None
     acquisition_mode: str
     capture_level: str
+    # "visto" (light record) or "analizzato" (full item page analysed).
+    record_level: str = "visto"
     tracked: bool
     first_seen_at: datetime
     last_checked_at: datetime | None

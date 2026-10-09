@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| **Stato** | Fase 1 completata il 2026-10-09. **Fase 2 in corso** dal 2026-10-09 (OK ricevuto, Q1–Q3 "come consigliato"). |
+| **Stato** | Fasi 1 e 2 completate il 2026-10-09. **In attesa del tuo OK per la Fase 3** (e delle risposte a Q4–Q7). |
 | **Branch** | `claude/sweet-curie-9xyxzg` |
 | **Codice analizzato** | commit `7655293` (2026-10-08). Il checkout di partenza era 72 commit indietro: l'ho riallineato con un fast-forward (nessuna modifica mia) prima di leggere. |
 | **Codice toccato in Fase 1** | **Nessuno.** Unico file aggiunto: questo. |
@@ -507,7 +507,7 @@ Probabilità e impatto sono mie stime qualitative, non misure.
 ### 11.1 Checklist delle fasi
 
 - [x] **Fase 1** — Audit e piano (2026-10-09)
-- [ ] **Fase 2** — Dati, tracciabilità e stato di vendita *(in corso: blocchi 2.1–2.9, vedi §11.5)*
+- [x] **Fase 2** — Dati, tracciabilità e stato di vendita *(completata il 2026-10-09; in attesa del tuo OK per la Fase 3, vedi §11.6)*
 - [ ] **Fase 3** — Estensione
 - [ ] **Fase 4** — Valore di mercato e profitto
 - [ ] **Fase 5** — Immagini, condizioni ed etichette
@@ -533,7 +533,13 @@ Dipendenze: 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10. Hidden Gems (6) 
 | 2026-10-09 | **Q3 come consigliato.** Foto caricate dall'estensione (B), tutte per gli analizzati e solo la copertina per i visti; conservate per sempre se tracciati/acquistati, 90 giorni le altre. Il caricamento dall'estensione è Fase 3: in Fase 2 si prepara solo il modello dati (blocco 2.3) e il server **non** scarica più nuove foto da Vinted dopo la Fase 3. | Tua risposta |
 | 2026-10-09 | Le skill citate (impeccable, apple-design, emil-design-eng, animate, dataviz, ui-ux-pro-max, ponytail, caveman) si useranno dalle fasi con interfaccia (7–8); `claude-api` dalla Fase 5. In Fase 2 non c'è interfaccia nuova. | Tua richiesta |
 
-*(Restano da dare Q4–Q10 e C1–C5: valgono le conferme rapide se non rispondi.)*
+| 2026-10-09 | **C1 applicata** come conferma rapida: «da verificare» dopo 48 h (attivi) / 24 h (riservati), configurabili (`STALE_ACTIVE_HOURS`, `STALE_RESERVED_HOURS`) | Conferma rapida C1 |
+| 2026-10-09 | Una riga di storico solo se cambia qualcosa o dopo 6 h («battito», `SNAPSHOT_HEARTBEAT_HOURS`); le visualizzazioni non contano come cambiamento | Scelta tecnica di Fase 2 (modificabile) |
+| 2026-10-09 | Date di pubblicazione uguali al primo avvistamento (dedotte dal vecchio codice) azzerate in migrazione: l'istante resta in `first_seen_at`, nessuna informazione persa; `days_to_sell` calcolato su quelle date azzerato (restano i giorni osservati) | Principio «mai inventare», D6 |
+| 2026-10-09 | `listing_price_history` diventa vista sugli snapshot (prima era una seconda copia); `lifecycle_stale_hours`, mai usato, rimosso | Regola 4 (niente duplicati) |
+| 2026-10-09 | Etichette nuove dell'interfaccia in inglese come il resto della pagina, in attesa di Q5 | Coerenza con l'esistente |
+
+*(Restano da dare Q4–Q10 e C2–C5: valgono le conferme rapide se non rispondi.)*
 
 ### 11.3 Punti aperti
 
@@ -543,6 +549,7 @@ Q1–Q10 e C1–C5 (§2) · formula del Flip Score da farti vedere prima di fiss
 
 | Data | Cosa |
 |---|---|
+| 2026-10-09 | Fase 2 (blocchi 2.1–2.9): provenienza delle date, osservazioni tipizzate, foto nel tempo, «da verificare», venditori minimi con chiave protetta, analisi immutabili a blocchi, tabella dei prezzi venduti, CSV, migrazioni 0010–0016 provate anche su 30.000 annunci |
 | 2026-10-08/09 | Fase 1. Lettura di backend, estensione, frontend, documentazione e test; esecuzione della suite (486 + 46 + 46); lettura dei Termini di Vinted e del listino Anthropic; scoperto e corretto il ritardo del checkout (72 commit); scrittura del piano |
 
 ### 11.5 Avanzamento Fase 2
@@ -555,7 +562,49 @@ Q1–Q10 e C1–C5 (§2) · formula del Flip Score da farti vedere prima di fiss
 - [x] 2.6 Analisi immutabili a blocchi (migrazione 0015: tabella `analyses` con ID interno/Vinted, URL, fonte, data, versione schema e algoritmo, motivo, hash di input e risultato e i cinque blocchi; un trigger del database vieta le modifiche; `opportunities.analysis_id` punta all'ultima; rianalizzare con stessi input e risultati non crea righe; `GET /items/{ref}/analyses[/{id}]`)
 - [x] 2.7 Tabella prezzi venduti (migrazione 0016: `asking_price` e `realized_price` separate con vincolo, finestra della data di vendita, giorni osservati; `GET /pricing/sold-prices[/export.csv]` con prezzi reali, richiesti e riportati mai fusi; sotto 3 vendite «insufficiente». **Non toccato**: `model_price_stats` fonde ancora i tipi di prezzo in una mediana: è la Fase 4 (D1))
 - [x] 2.8 Esportazioni CSV (osservazioni `/items/export-observations.csv`, analisi `/items/export-analyses.csv`, prezzi venduti `/pricing/sold-prices/export.csv`, accanto a quella degli articoli; ogni riga ha ID interno, ID Vinted, URL; testi di terzi neutralizzati contro le formule; voci nel menu «Export CSV» di Archivio)
-- [ ] 2.9 Migrazione e prove
+- [x] 2.9 Migrazione e prove (test su 120 annunci in tutti gli stati con conteggi prima/dopo; prova di scala su 30.000 annunci / 90.000 foto: 14 s in avanti, 3 s all'indietro; `record_level` visto/analizzato; `docs/DATI.md`)
+
+### 11.6 Report di fine Fase 2
+
+**Commit** (branch `claude/sweet-curie-9xyxzg`): 2.1 `21aea46` · 2.2 `cd72ac3` · 2.3 `4d973f8` · 2.4 `565a608` · 2.5 `2087e72` ·
+2.6 `67e9a9c` · 2.7 `eabdf61` · 2.8 `4c48b7e` · 2.9 (questo commit).
+
+**Criteri di accettazione della Fase 2**
+
+| Criterio | Esito | Prova |
+|---|---|---|
+| Rianalizzare lo stesso articolo non crea duplicati | Superato | `tests/api/test_phase2_acceptance.py` (4 catture identiche: 1 annuncio, 1 analisi, 1 osservazione); `test_phase2_analyses.py` |
+| Un cambio di prezzo genera una nuova riga di storico e un ricalcolo | Superato | stesso test: +1 osservazione (`reason = price`), +1 analisi (`trigger = price_change`), storico prezzi `[14, 11]` |
+| Un articolo venduto compare nella tabella dei prezzi venduti | Superato | stesso test + `test_phase2_sold_prices.py` (prezzo richiesto separato dal reale, finestra e giorni) |
+| Nessun record senza URL e data | Superato | vincoli CHECK in `listings` e `analyses`; controllo su tutte le tabelle nel test di accettazione e nella migrazione |
+| Migrazione dei dati esistenti senza perdite | Superato | `test_phase2_migration.py` (conteggi prima/dopo, andata e ritorno) + prova di scala |
+| Esportazione CSV | Superato | articoli, osservazioni, analisi, prezzi venduti |
+
+**Test:** backend 558 (erano 486), estensione 46, frontend 46 — tutti verdi; `ruff`, `tsc`, `eslint` puliti.
+
+**Verifica a mano (tua)**
+1. `deploy/backup.sh`, poi `alembic upgrade head` sulla **copia** del tuo database; confronta i conteggi di `listings`, `listing_images`,
+   `listing_snapshots`, `opportunities`, `sold_sales` prima e dopo (devono coincidere; `listing_snapshots` può crescere per i prezzi storici migrati).
+2. Imposta `SELLER_KEY_SECRET` (e conservalo) **prima** di migrare: altrimenti viene derivato da `JWT_SECRET`.
+3. Apri un articolo tracciato: storico prezzi con le date vere di osservazione; `GET /api/v1/items/<id>/analyses` mostra le analisi con il motivo.
+4. Porta `STALE_ACTIVE_HOURS=1` e riavvia il worker: gli articoli non rivisti da un'ora passano a «To verify» e spariscono dalle opportunità attive.
+5. Scarica i CSV dal menu «Export CSV» della pagina Archivio.
+
+**Limiti noti e cose che NON sono state fatte in questa fase**
+* Le funzioni fuori dai limiti (Q1: scanner automatico, letture automatiche, lettura dal server, clic programmatici su Preferiti e Acquista, misure su Vinted reale) **sono ancora nel codice**: la loro rimozione/sostituzione è la Fase 3 (nessuna logica nuova di questa fase ne dipende).
+* Le foto vengono ancora scaricate dal **server** dal CDN di Vinted (Q3-A). Il passaggio al caricamento dall'estensione (Q3-B) è la Fase 3; in Fase 2 è pronto solo il modello dati (chiavi, hash, storico).
+* La deduplica visiva (dHash) scatta **dopo** la copia locale delle foto (non alla cattura, perché l'estensione non invia hash). Finché l'archivio di un annuncio non è fatto, il riannuncio con foto uguali e titolo diverso non è riconosciuto.
+* Provenienza per valore: oggi a livello di cattura (card/pagina), non di parte della pagina; arriva con le fonti per campo del parser (Fase 3).
+* `model_price_stats` (le statistiche per modello usate dall'analisi) **fonde ancora** prezzi richiesti, reali e riportati in una sola mediana: la nuova tabella `sold-prices` li tiene separati, ma l'analisi non è stata ancora ricollegata. È la Fase 4 (D1).
+* La calibrazione notturna che cambia i parametri da sola (D13) e le curve/default non tarati (D5) non sono toccati: Fasi 4, 6, 9.
+* L'interfaccia è ancora in gran parte in inglese: i soli ritocchi sono le etichette di «To verify» e le voci di esportazione. La lingua si decide con Q5.
+* Il confronto «prima/dopo» sulle statistiche dopo la rimozione di `account_created_at`/`sold_count` dai punteggi del venditore: i punteggi sono invariati perché quei campi non venivano mai valorizzati (verificato dai test).
+
+### 11.7 Domande aperte per la Fase 3
+
+Q4 (pagine reali per i test), Q5 (lingua dell'interfaccia), Q6/Q7 (Fase 4) restano da te. Per iniziare la Fase 3 mi serve **solo il tuo OK**:
+senza Q4 comincio dai blocchi che non dipendono dalle pagine reali (rimozione di L1–L7 secondo Q1, azioni «Apri su Vinted», foto dal browser,
+coda e «Ricollega») e rimando la verifica di Preferiti, armadio e «riservato» finché non mi dai le pagine.
 
 ---
 

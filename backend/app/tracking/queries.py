@@ -114,6 +114,13 @@ def build_query(f: ItemFilters) -> Select[Any]:
     return stmt.order_by(*order, Listing.id)
 
 
+def record_level(analysis_depth: str | None) -> str:
+    """The two levels of what the system holds about a listing: "visto" (a light record: seen on a
+    card, a link, or analysed only from its card) and "analizzato" (the full item page was read and
+    analysed). One rule, used by the API and the exports."""
+    return "analizzato" if analysis_depth == "full" else "visto"
+
+
 def row_dict(r: Any) -> dict[str, Any]:
     li: Listing = r.Listing
     return {
@@ -151,6 +158,7 @@ def row_dict(r: Any) -> dict[str, Any]:
         "analyzed_at": r.analyzed_at,
         "algorithm_version": r.algorithm_version,
         "analysis_depth": r.analysis_depth,
+        "record_level": record_level(r.analysis_depth),
     }
 
 
@@ -197,6 +205,7 @@ CSV_COLUMNS = [
     ("tracked", "Tracciato"),
     ("acquisition_mode", "Modalità di acquisizione"),
     ("capture_level", "Livello dati"),
+    ("record_level", "Livello record"),
     ("first_seen_at", "Visto la prima volta"),
     ("last_checked_at", "Ultimo controllo"),
     ("sold_at", "Venduto il (stima)"),

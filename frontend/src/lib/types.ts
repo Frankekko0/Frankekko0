@@ -737,6 +737,8 @@ export interface Item {
   image_url: string | null;
   acquisition_mode: AcquisitionMode;
   capture_level: CaptureLevel;
+  /** "visto" (light record) or "analizzato" (full item page analysed). */
+  record_level?: "visto" | "analizzato";
   tracked: boolean;
   first_seen_at: string;
   last_checked_at: string | null;
