@@ -11,10 +11,11 @@ from decimal import Decimal
 from typing import Any
 
 from app.demand.analysis import DemandResult, VelocityResult
-from app.domain.enums import DemandLevel
+from app.domain.enums import CONDITION_LABELS_IT, DemandLevel
 from app.scoring.flip import FlipResult
 from app.scoring.seller import SellerScore
 
+_CONDITION_LABEL = {c.value: label for c, label in CONDITION_LABELS_IT.items()}
 DEMAND_LABELS = {
     DemandLevel.VERY_HIGH: "Domanda molto alta",
     DemandLevel.HIGH: "Domanda alta",
@@ -36,6 +37,7 @@ class ExplanationContext:
     listing_age_hours: float | None
     comparables_used: int
     sold_comparables: int
+    condition: str | None = None
 
 
 def _fmt_eur(value: Decimal) -> str:
@@ -73,16 +75,16 @@ def build_explanation(ctx: ExplanationContext) -> list[dict[str, Any]]:
         if d >= 0.1:
             factor(
                 "positive",
-                "undervaluation",
+                "price_vs_market",
                 f"Prezzo {pct}% sotto il mercato",
-                c["undervaluation"]["contribution"],
+                c["price_vs_market"]["contribution"],
             )
         elif d > -0.05:
             factor(
                 "neutral",
-                "undervaluation",
+                "price_vs_market",
                 "Prezzo in linea con il mercato",
-                c["undervaluation"]["contribution"],
+                c["price_vs_market"]["contribution"],
             )
         else:
             factor("negative", "overpriced", f"Prezzo {pct}% sopra il mercato", 0)
@@ -116,19 +118,31 @@ def build_explanation(ctx: ExplanationContext) -> list[dict[str, Any]]:
     days = ctx.velocity.estimated_days
     kind = "positive" if days <= 7 else "neutral" if days <= 14 else "negative"
     unit = "giorno" if round(days) == 1 else "giorni"
-    factor(kind, "velocity", f"Vendita stimata in ~{days:.0f} {unit}", c["velocity"]["contribution"])
+    factor(kind, "sale_time", f"Vendita stimata in ~{days:.0f} {unit}", c["sale_time"]["contribution"])
 
-    s = ctx.seller
-    if s.level == "high":
-        factor("positive", "seller", "Venditore affidabile", c["seller"]["contribution"])
-    elif s.level in ("low",):
-        factor("negative", "seller", "Venditore poco affidabile", c["seller"]["contribution"])
-    elif s.level == "new":
-        factor("neutral", "seller", "Venditore nuovo (poco storico)", c["seller"]["contribution"])
+    cond = ctx.condition
+    if cond is not None:
+        label = _CONDITION_LABEL.get(str(cond), str(cond))
+        score = c["condition"]["score"]
+        kind = "positive" if score >= 75 else "neutral" if score >= 50 else "negative"
+        factor(kind, "condition", label, c["condition"]["contribution"])
 
-    if ctx.listing_age_hours is not None:
-        kind = "positive" if ctx.listing_age_hours <= 6 else "neutral"
-        factor(kind, "freshness", _age_label(ctx.listing_age_hours), c["freshness"]["contribution"])
+    risk_score = c["risk"]["score"]
+    kind = "positive" if risk_score >= 75 else "neutral" if risk_score >= 45 else "negative"
+    factor(
+        kind,
+        "risk",
+        "Rischio basso"
+        if kind == "positive"
+        else "Rischio da valutare"
+        if kind == "neutral"
+        else "Rischio elevato",
+        c["risk"]["contribution"],
+    )
+
+    info_score = c["info"]["score"]
+    kind = "positive" if info_score >= 75 else "neutral" if info_score >= 45 else "negative"
+    factor(kind, "info", f"Annuncio leggibile al {info_score:.0f}%", c["info"]["contribution"])
 
     if ctx.comparables_used >= 10:
         factor(

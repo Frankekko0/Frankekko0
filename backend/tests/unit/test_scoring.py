@@ -30,28 +30,35 @@ def flip_input(**overrides: object) -> FlipInput:
         expected_profit=17.0,
         demand_score=98,
         velocity_score=89,
-        listing_age_hours=3,
-        seller_score=90,
-        sell_through_rate=0.6,
-        comparables_used=8,
-        market_dispersion=0.2,
-        market_confidence=75,
-        identification_confidence=85,
-        condition="very_good",
-        suspicious_terms=False,
-        brand_counterfeit_risk=0.12,
         risk_score=15,
+        condition="very_good",
+        info_score=85,
     )
     base.update(overrides)
     return FlipInput(**base)  # type: ignore[arg-type]
 
 
-def test_reference_case_scores_about_91() -> None:
-    """Spec: 52% below market, ROI 73%, strong demand, ~4 days, reliable seller, limited comps."""
+def test_the_default_weights_are_the_ones_of_the_brief() -> None:
+    assert DEFAULT_WEIGHTS == {
+        "profit": 25,
+        "roi": 15,
+        "demand": 15,
+        "price_vs_market": 15,
+        "condition": 10,
+        "risk": 10,
+        "info": 5,
+        "sale_time": 5,
+    }
+    assert sum(DEFAULT_WEIGHTS.values()) == 100
+
+
+def test_reference_case_scores_high() -> None:
+    """52% below market, ROI 73%, strong demand, ~4 days, low risk, clear listing."""
     r = compute_flip_score(flip_input())
-    assert 89 <= r.score <= 93
-    assert any(p["code"] == "limited_comparables" for p in r.penalties)
+    assert 85 <= r.score <= 93
     assert r.tier in (DealTier.EXCEPTIONAL, DealTier.EXCELLENT)
+    assert r.penalties == []  # what used to be penalties is now a component or a veto
+    assert abs(sum(c["contribution"] for c in r.components.values()) - r.base) < 0.1
 
 
 def test_cheap_but_fairly_priced_item_is_not_a_deal() -> None:
@@ -70,24 +77,62 @@ def test_undervalued_item_beats_cheaper_fair_item() -> None:
 
 
 @pytest.mark.parametrize(
-    "overrides,code",
+    "worse",
     [
-        ({"suspicious_terms": True}, "fake_risk"),
-        ({"condition": "satisfactory"}, "poor_condition"),
-        ({"identification_confidence": 20}, "insufficient_info"),
-        ({"sell_through_rate": 0.1}, "weak_demand"),
-        ({"comparables_used": 3}, "few_comparables"),
-        ({"market_dispersion": 0.9}, "unreliable_market"),
-        ({"discount_vs_market": 0.8}, "fake_risk"),
-        ({"risk_score": 80}, "high_risk"),
+        {"condition": "satisfactory"},
+        {"info_score": 20},
+        {"demand_score": 20},
+        {"velocity_score": 20},
+        {"risk_score": 80},
+        {"expected_profit": 5.0},
+        {"expected_roi": 0.2},
+        {"discount_vs_market": 0.1},
     ],
 )
-def test_penalties_are_applied_and_explained(overrides: dict, code: str) -> None:
-    base = compute_flip_score(flip_input())
-    r = compute_flip_score(flip_input(**overrides))
-    assert any(p["code"] == code and p["label"] for p in r.penalties)
-    if code != "fake_risk" or "discount_vs_market" not in overrides:
-        assert r.score < base.score
+def test_every_component_moves_the_score_the_right_way(worse: dict) -> None:
+    assert compute_flip_score(flip_input(**worse)).score < compute_flip_score(flip_input()).score
+
+
+@pytest.mark.parametrize(
+    "field,low,high",
+    [
+        ("expected_profit", 2.0, 30.0),
+        ("expected_roi", 0.05, 1.2),
+        ("discount_vs_market", 0.02, 0.6),
+        ("demand_score", 10, 95),
+        ("velocity_score", 10, 95),
+        ("risk_score", 90, 5),
+        ("info_score", 5, 95),
+    ],
+)
+def test_the_score_never_falls_when_an_input_improves(field: str, low: float, high: float) -> None:
+    """Monotonicity, checked on a fine grid between a bad and a good value of each input."""
+    steps = [low + (high - low) * i / 12 for i in range(13)]
+    scores = [compute_flip_score(flip_input(**{field: v})).score for v in steps]
+    assert scores == sorted(scores), (field, scores)
+
+
+def test_one_lopsided_metric_cannot_carry_the_score() -> None:
+    """A 90% discount on a 3 EUR item: huge discount, tiny profit. The economic pillar mixes in its
+    weakest member, so this does not look like a great deal."""
+    lopsided = compute_flip_score(flip_input(discount_vs_market=0.9, expected_profit=1.5, expected_roi=0.2))
+    balanced = compute_flip_score(flip_input(discount_vs_market=0.3, expected_profit=14.0, expected_roi=0.6))
+    assert balanced.score > lopsided.score
+
+
+def test_the_three_money_components_share_one_pillar() -> None:
+    """Their contributions add up to the pillar, never to more than the sum of their weights."""
+    r = compute_flip_score(flip_input())
+    money = sum(r.components[k]["contribution"] for k in ("profit", "roi", "price_vs_market"))
+    assert money <= 55.0 + 0.1
+
+
+def test_condition_scores_follow_the_condition_scale() -> None:
+    order = ["new_with_tags", "new_without_tags", "very_good", "good", "satisfactory"]
+    scores = [compute_flip_score(flip_input(condition=c)).components["condition"]["score"] for c in order]
+    assert scores == sorted(scores, reverse=True)
+    unknown = compute_flip_score(flip_input(condition="unknown")).components["condition"]["score"]
+    assert unknown < scores[2]  # an undeclared condition is worth less than a "very good" one
 
 
 def test_missing_market_value_caps_score() -> None:
@@ -96,7 +141,7 @@ def test_missing_market_value_caps_score() -> None:
 
 
 def test_weights_are_configurable_and_normalized() -> None:
-    w = normalize_weights({"undervaluation": 60, "roi": 0})
+    w = normalize_weights({"price_vs_market": 60, "roi": 0})
     assert abs(sum(w.values()) - 1) < 1e-9
     assert w["roi"] == 0
     default = compute_flip_score(flip_input(expected_roi=0.05))
@@ -105,6 +150,12 @@ def test_weights_are_configurable_and_normalized() -> None:
     assert no_roi.score != default.score
     assert normalize_weights({"bogus": 5}) == normalize_weights(None)
     assert set(DEFAULT_WEIGHTS) == set(normalize_weights(None))
+
+
+def test_weights_saved_under_the_old_names_keep_their_meaning() -> None:
+    assert normalize_weights({"undervaluation": 60}) == normalize_weights({"price_vs_market": 60})
+    assert normalize_weights({"velocity": 30}) == normalize_weights({"sale_time": 30})
+    assert normalize_weights({"freshness": 30, "seller": 30}) == normalize_weights(None)
 
 
 @pytest.mark.parametrize(

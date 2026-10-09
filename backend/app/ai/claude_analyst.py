@@ -5,6 +5,7 @@ The model receives only numbers computed by the deterministic engines and writes
 
 * hard SKIP conditions (no market value, non-positive expected profit, very high risk,
   counterfeit wording) override any LLM verdict;
+* the verdict of the decision engine is a ceiling: the model may be more cautious, never less;
 * the suggested maximum offer can never exceed the computed maximum buy price;
 * the recommended resale price is clamped to the [quick, optimistic] range.
 """
@@ -20,6 +21,7 @@ from app.ai.deal_analyst import (
     DealAnalyst,
     DealContext,
     RuleBasedDealAnalyst,
+    clamp_to_decision,
     guardrail_verdict,
 )
 from app.ai.llm import LLMClient
@@ -102,6 +104,7 @@ class ClaudeDealAnalyst(DealAnalyst):
         forced = guardrail_verdict(ctx)
         if forced is not None:
             verdict = forced
+        verdict = clamp_to_decision(ctx, verdict)
         quick = ctx.scenario("conservative")
         optimistic = ctx.scenario("optimistic")
         resale = data.get("recommended_resale_price")

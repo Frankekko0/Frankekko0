@@ -225,13 +225,13 @@ Anthropic (analisi foto e commento dell'analista) · Serper (prezzi da altri mer
 
 | Requisito | Stato | Dove / nota |
 |---|---|---|
-| Verdetti STRONG BUY / BUY / NEGOTIATE / WATCHLIST / PASS / EVIDENZA INSUFFICIENTE | ❌ | Oggi BUY/CONSIDER/SKIP + azione (buy_now/make_offer/watch/skip) + fascia |
-| Flip Score con i pesi del brief | 🟡 | Esiste con altri componenti (30/20/15/15/10/5/5) e penalità; pesi per utente ✅ |
-| Flip, Confidenza, Rischio, **Completezza** separati | 🟡 | Tre sono separati; la completezza è dentro la confidenza |
-| Veti non compensabili | 🟡 | Alcuni tetti e salti (rischio ≥ 75 → skip); non sistematici |
-| Motivi, avvisi, informazioni mancanti leggibili | 🟡 | `explanation`, `headline` ✅; "mancanti" parziale |
+| Verdetti STRONG BUY / BUY / NEGOTIATE / WATCHLIST / PASS / EVIDENZA INSUFFICIENTE | ✅ | `decision/engine.py`; il vecchio BUY/CONSIDER/SKIP è derivato (v3 D27) |
+| Flip Score con i pesi del brief | ✅ | `scoring/flip.py`, 25/15/15/15/10/10/5/5 con pilastro economico (v3 D24); pesi per utente salvati ma non ancora applicati (L11) |
+| Flip, Confidenza, Rischio, **Completezza** separati | ✅ | `decision/completeness.py`; colonna `data_completeness_score` |
+| Veti non compensabili | ✅ | `Decision.vetoes`: contraffazione, marca a rischio senza prove, rischio ≥ 75, confidenza bassa, annuncio non disponibile |
+| Motivi, avvisi, informazioni mancanti leggibili | ✅ | `reasons[]`, `warnings[]`, `missing_info[]`, requisiti dello STRONG BUY; sezione «Verdict» nella scheda |
 | 7 modalità di ricerca | 🟡 | Preset: best_deals, high_profit, high_roi, fast_flip, low_risk, just_listed, hidden_gems, under_20, ultra. Brand Hunter assente |
-| Capitale e combinazione migliore entro il budget | ❌ | Nessun budget né ottimizzazione (solo un filtro budget nell'estensione) |
+| Capitale e combinazione migliore entro il budget | 🟡 | `decision/allocation.py` (zaino esatto) ✅; mancano le impostazioni di capitale (Q10) e la schermata |
 
 ### Fasi 7–10
 
@@ -554,6 +554,7 @@ Q1–Q10 e C1–C5 (§2) · formula del Flip Score da farti vedere prima di fiss
 | 2026-10-09 | Prompt v3, Fase 2 = blocco 4.1 del piano: `profit/evaluation.py` (stati confermato/stimato/sconosciuto, ripristino, riserva imprevisti, margine sulla vendita, prezzo di pareggio, capitale immobilizzato), `/profit/calculate` esteso, valutazione nel blocco economico delle analisi, calcolatore "What-if" aggiornato. Prova numerica 20+4+2=26 · 44 · 18 · 69,23 % e casi E/H verdi (693 test backend) |
 | 2026-10-09 | Prompt v3 ("FlipFinder AI"): letto contro questo piano, nessuna decisione dell'utente riaperta. Mappa delle fasi v3 sulle fasi del piano in `ARCHITECTURE.md`; decisioni e limiti propri di v3 in `DECISIONS.md` e `LIMITATIONS.md`; aggiunto `marketplace/capabilities.py` (cosa fornisce ogni modalità di cattura, verificato contro il parser) |
 | 2026-10-09 | Fase 2 (blocchi 2.1–2.9): provenienza delle date, osservazioni tipizzate, foto nel tempo, «da verificare», venditori minimi con chiave protetta, analisi immutabili a blocchi, tabella dei prezzi venduti, CSV, migrazioni 0010–0016 provate anche su 30.000 annunci |
+| 2026-10-09 | v3 Fase 5 (= PIANO Fase 6.1–6.3, 6.5): modulo `decision` (6 verdetti, 4 punteggi separati, veti, STRONG BUY a requisiti, classifica, zaino esatto), Flip Score con i pesi del brief senza doppio conteggio, migrazione 0017; casi A, C, E, G, H e B (lato decisione) coperti da test. Restano 6.4 (sette modalità) e 6.6 (vettori JS/Python) |
 | 2026-10-08/09 | Fase 1. Lettura di backend, estensione, frontend, documentazione e test; esecuzione della suite (486 + 46 + 46); lettura dei Termini di Vinted e del listino Anthropic; scoperto e corretto il ritardo del checkout (72 commit); scrittura del piano |
 
 ### 11.5 Avanzamento Fase 2

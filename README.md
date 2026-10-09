@@ -549,12 +549,22 @@ costi di vendita 4 € ⇒ TAC 25 €, NSR 41 €, **profitto 16 €, ROI 64%**.
 **Prezzo massimo d'acquisto (Smart Buy Price)**: inversione in forma chiusa delle formule sopra
 sotto i vincoli *profitto minimo* e *ROI minimo* dell'utente, arrotondata per difetto.
 
-**Flip Score 0–100**: 30% sottovalutazione, 20% ROI, 15% profitto, 15% domanda, 10% velocità di
-vendita, 5% freschezza, 5% affidabilità venditore (pesi personalizzabili), con curve a rendimenti
-decrescenti e penalità motivate (rischio falso, condizioni, informazioni o comparabili
-insufficienti, domanda debole, mercato disperso, rischio alto). Ogni punto è spiegato nella UI
+**Flip Score 0–100**: 25% profitto netto, 15% ROI, 15% domanda e liquidità, 15% prezzo rispetto al
+mercato, 10% condizioni, 10% rischio, 5% qualità delle informazioni, 5% tempo di vendita (pesi
+personalizzabili), con curve a rendimenti decrescenti. Profitto, ROI e sconto derivano dalla stessa
+coppia prezzo/valore: sono un solo *pilastro economico* che mescia la media pesata con il membro più
+debole, così un sconto enorme su un articolo da 3 € non basta. Ogni punto è spiegato nella UI
 (*Why 86/100?*). Classi: 90+ Exceptional · 80–89 Excellent · 70–79 Good · 60–69 Moderate ·
 < 60 Low Priority.
+
+**Verdetto** (`backend/app/decision/`): STRONG BUY · BUY · NEGOTIATE · WATCHLIST · PASS ·
+INSUFFICIENT EVIDENCE, deciso dall'evidenza e non dal solo Flip Score. **Quattro punteggi separati**:
+Flip (quanto è attraente), Confidenza (quanto è sicura l'analisi), Rischio e Completezza dei dati
+(quanta parte dell'annuncio si è potuta leggere). Un 95 con confidenza 30 non è un acquisto. Rischio
+di contraffazione, marca a rischio senza prove, annuncio non disponibile o analisi troppo incerta
+sono **veti**: un ROI alto non li compensa. STRONG BUY richiede tutti i requisiti verificati e
+visibili (modello, costo totale, comparabili, condizioni, foto analizzate, etichetta vista); senza
+analisi delle foto (nessuna chiave AI) il massimo è BUY. NEGOTIATE indica il prezzo a cui conviene.
 
 **Confidence** (affidabilità della stima) e **Risk** (con motivazioni) sono separati dal Flip
 Score. **🔥 Ultra Deal** = Flip > 90 ∧ Confidence > 80 ∧ ROI > 60%.

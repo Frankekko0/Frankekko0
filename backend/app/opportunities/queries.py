@@ -434,6 +434,8 @@ class OpportunityQueries:
             sale_probability=o.sale_probability,
             authenticity_probability=o.authenticity_probability,
             authenticity_verdict=o.authenticity_verdict,
+            decision_verdict=o.decision_verdict,
+            data_completeness_score=o.data_completeness_score,
         )
 
     async def card_by_listing_ids(self, listing_ids: list[uuid.UUID]) -> list[OpportunityCard]:
@@ -648,6 +650,7 @@ class OpportunityQueries:
             ai_analysis=o.ai_analysis,
             price_history=[PricePoint(price=p, observed_at=t) for p, t in history],
             recommended_action=smart.action,
+            decision=o.decision,
         )
 
     def _scenarios(self, o: Opportunity, listing: Listing) -> list[ScenarioOut]:

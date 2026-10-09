@@ -58,6 +58,9 @@ class DealContext(BaseModel):
     suspicious_terms: list[str] = Field(default_factory=list)
     defect_terms: list[str] = Field(default_factory=list)
     is_vintage: bool = False
+    # The decision engine's verdict (see ``app.decision``): an analyst may agree with it or be more
+    # cautious, never more permissive.
+    decision_verdict: str | None = None
 
     def scenario(self, name: str) -> ScenarioSummary | None:
         return next((s for s in self.scenarios if s.name == name), None)
@@ -92,7 +95,30 @@ def guardrail_verdict(ctx: DealContext) -> Verdict | None:
     return None
 
 
+_LEGACY_RANK = {Verdict.SKIP: 0, Verdict.CONSIDER: 1, Verdict.BUY: 2}
+
+
+def decision_ceiling(ctx: DealContext) -> Verdict | None:
+    """The verdict the decision engine allows, in the three-valued vocabulary of the analysts."""
+    if ctx.decision_verdict is None:
+        return None
+    from app.decision.engine import DecisionVerdict
+
+    return DecisionVerdict(ctx.decision_verdict).legacy
+
+
+def clamp_to_decision(ctx: DealContext, verdict: Verdict) -> Verdict:
+    """Lower ``verdict`` to what the decision engine allows; never raise it."""
+    ceiling = decision_ceiling(ctx)
+    if ceiling is not None and _LEGACY_RANK[verdict] > _LEGACY_RANK[ceiling]:
+        return ceiling
+    return verdict
+
+
 def rule_verdict(ctx: DealContext) -> Verdict:
+    ceiling = decision_ceiling(ctx)
+    if ceiling is not None:
+        return ceiling  # the decision engine is the one place a verdict is made
     forced = guardrail_verdict(ctx)
     if forced is not None:
         return forced

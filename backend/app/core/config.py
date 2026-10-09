@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     stale_reserved_hours: int = Field(default=24, ge=1, le=720)
     # A listing seen again unchanged adds a history row only after this long (a "heartbeat").
     snapshot_heartbeat_hours: int = Field(default=6, ge=1, le=168)
-    algorithm_version: str = "2026.10-2"
+    algorithm_version: str = "2026.10-3"
 
     # Local copies of listing photos (internal use only). Downloaded once from the allowed image
     # hosts (Vinted's CDN), https only, public addresses only, size-limited.

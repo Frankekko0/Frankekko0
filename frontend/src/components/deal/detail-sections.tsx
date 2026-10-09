@@ -67,13 +67,14 @@ function KV({ label, value, sub, strong }: { label: string; value: ReactNode; su
 
 /* --------------------------------------------------------------- Explanation */
 const COMPONENT_LABEL: Record<string, string> = {
-  undervaluation: "Price undervaluation",
-  roi: "Expected ROI",
   profit: "Expected net profit",
-  demand: "Demand",
-  velocity: "Sales velocity",
-  freshness: "Listing freshness",
-  seller: "Seller reliability",
+  roi: "Expected ROI",
+  demand: "Demand and liquidity",
+  price_vs_market: "Price against the market",
+  condition: "Condition",
+  risk: "Risk",
+  info: "Quality of the information",
+  sale_time: "Time to sell",
 };
 
 function ReasonRow({ r }: { r: Reason }) {

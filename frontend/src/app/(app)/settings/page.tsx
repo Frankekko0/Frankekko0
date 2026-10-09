@@ -19,15 +19,16 @@ import { useBrands, useCategories, useNotificationSettings, usePreferences, useS
 import type { CostProfile, NotificationSettings, Preferences } from "@/lib/types";
 
 const WEIGHT_LABELS: Record<string, string> = {
-  undervaluation: "Price undervaluation",
-  roi: "Expected ROI",
   profit: "Expected net profit",
-  demand: "Demand",
-  velocity: "Sales velocity",
-  freshness: "Listing freshness",
-  seller: "Seller reliability",
+  roi: "Expected ROI",
+  demand: "Demand and liquidity",
+  price_vs_market: "Price against the market",
+  condition: "Condition",
+  risk: "Risk",
+  info: "Quality of the information",
+  sale_time: "Time to sell",
 };
-const DEFAULT_WEIGHTS: Record<string, number> = { undervaluation: 30, roi: 20, profit: 15, demand: 15, velocity: 10, freshness: 5, seller: 5 };
+const DEFAULT_WEIGHTS: Record<string, number> = { profit: 25, roi: 15, demand: 15, price_vs_market: 15, condition: 10, risk: 10, info: 5, sale_time: 5 };
 
 function Block({ icon, title, description, children }: { icon: ReactNode; title: string; description?: string; children: ReactNode }) {
   return (
@@ -95,7 +96,10 @@ function PreferencesForm({ initial }: { initial: Preferences }) {
   const categories = useCategories();
   const set = (patch: Partial<Preferences>) => setP({ ...p, ...patch });
   const setCost = (patch: Partial<CostProfile>) => setP({ ...p, cost_profile: { ...p.cost_profile, ...patch } });
-  const weights = { ...DEFAULT_WEIGHTS, ...(p.score_weights ?? {}) };
+  // Weights saved under the old names are dropped here: the sliders show the current ones only.
+  const weights: Record<string, number> = Object.fromEntries(
+    Object.entries(DEFAULT_WEIGHTS).map(([k, d]) => [k, p.score_weights?.[k] ?? d]),
+  );
   const totalWeight = Object.values(weights).reduce((a, b) => a + b, 0) || 1;
   const ex = useMemo(() => costExample(p.cost_profile), [p.cost_profile]);
   const toggle = (l: string[], v: string) => (l.includes(v) ? l.filter((x) => x !== v) : [...l, v]);

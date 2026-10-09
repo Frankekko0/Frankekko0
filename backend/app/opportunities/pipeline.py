@@ -993,7 +993,12 @@ def opportunity_values(
         "seller_score": r.seller.score,
         "deal_tier": r.tier.value,
         "is_ultra_deal": r.ultra,
-        "verdict": r.analysis.verdict.value,
+        "verdict": (r.decision.legacy_verdict if r.decision else r.analysis.verdict).value,
+        "decision_verdict": r.decision.verdict.value if r.decision else None,
+        "data_completeness_score": r.completeness.score if r.completeness else None,
+        "decision": r.decision.as_dict() | {"completeness": r.completeness.as_dict()}
+        if r.decision and r.completeness
+        else None,
         "recommended_action": recommended_action(r).value,
         "comparables_count": m.n_used,
         "sold_comparables_count": m.n_sold,

@@ -126,6 +126,10 @@ class OpportunityCard(Schema):
     sale_probability: Ratio | None = None
     authenticity_probability: Ratio | None = None
     authenticity_verdict: str | None = None
+    # The decision (see ``app.decision``): STRONG_BUY | BUY | NEGOTIATE | WATCHLIST | PASS |
+    # INSUFFICIENT_EVIDENCE, and the fourth separate score. None for rows analysed before it existed.
+    decision_verdict: str | None = None
+    data_completeness_score: int | None = None
 
 
 class QuickStats(Schema):
@@ -260,6 +264,8 @@ class OpportunityDetail(Schema):
     # Where every number comes from (expected price, range, days to sell, P(sale), new price,
     # real sales behind the estimate, external references): ``score_breakdown["provenance"]``.
     provenance: dict[str, Any] | None = None
+    # Verdict, scores, reasons, warnings, missing information, vetoes (``Opportunity.decision``).
+    decision: dict[str, Any] | None = None
 
 
 class FavoriteStateIn(Schema):

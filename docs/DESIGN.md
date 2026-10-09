@@ -251,37 +251,62 @@ estremo non domina, e la componente arriva a 100 a una soglia "eccellente"):
 
 `concave(x, full) = 100·(1 − (1 − min(1, x/full))^1.6)` — es. sconto 10% → 30, 20% → 56, 30% → 77, ≥ 50% → 100.
 
-| Componente | Peso default | Mappatura (implementazione: `backend/app/scoring/`) |
+| Componente | Peso default | Mappatura (implementazione: `backend/app/scoring/flip.py`) |
 |---|---|---|
-| Price undervaluation | 30% | sconto `d = (FMV − prezzo)/FMV`; `concave(d, 0.50)`, 0 se d ≤ 0 |
-| Expected ROI | 20% | `concave(ROI, 0.90)` |
-| Expected net profit | 15% | `concave(profit, 25 €)` |
-| Demand | 15% | `concave(STR, 0.65)` sul sell-through smussato (prior bayesiano) ± 8 punti dal segnale preferiti/giorno dell'annuncio |
-| Sales velocity | 10% | `0.8·days_score + 0.2·concave(STR, 0.65)` con `days_score = 100·e^(−max(0, giorni−1.5)/18)` (≈87 a 4 gg, ≈74 a 7, ≈50 a 14) |
-| Listing freshness | 5% | `100·e^(−ore/24)` |
-| Seller reliability | 5% | rating bayesiano, n. recensioni, anzianità, articoli venduti |
+| Expected net profit | 25% | `concave(profit, 25 €)` |
+| Expected ROI | 15% | `concave(ROI, 0.90)` |
+| Demand and liquidity | 15% | punteggio di domanda: `concave(STR, 0.65)` sul sell-through smussato (prior bayesiano) ± 8 punti dal segnale preferiti/giorno |
+| Price against the market | 15% | sconto `d = (FMV − prezzo)/FMV`; `concave(d, 0.50)`, 0 se d ≤ 0 |
+| Condition | 10% | nuovo con cartellino 100 · senza 92 · ottime 80 · buone 60 · discrete 35 · non indicata 40 (la peggiore tra dichiarata e vista nelle foto) |
+| Risk | 10% | `100 − risk_score` |
+| Quality of the information | 5% | completezza dei dati dell'annuncio (`decision/completeness.py`) |
+| Time to sell | 5% | `0.8·days_score + 0.2·concave(STR, 0.65)` con `days_score = 100·e^(−max(0, giorni−1.5)/18)` (≈87 a 4 gg, ≈74 a 7, ≈50 a 14) |
 
 Domanda (sell-through finestrato = venduti / (venduti + ancora attivi) tra i comparabili):
 ≥ 60% Very High · ≥ 45% High · ≥ 30% Medium · ≥ 15% Low · altrimenti Very Low.
 Velocity bucket: 0–3, 4–7, 8–14, 15–30, 30+ giorni.
 
-`base = Σ peso·componente` (pesi configurabili dall'utente e rinormalizzati). **Penalità
-sottrattive**, ciascuna con motivazione visibile nella UI:
-
-| Penalità | Punti |
-|---|---|
-| Rischio falso (si applica solo la più grave): descrizione sospetta / foto riutilizzate da altro venditore / prezzo troppo basso per brand spesso contraffatto (sconto > 55%) / "troppo bello per essere vero" (sconto > 65%) | 15 / 12 / 10 / 8 |
-| Condizioni: discrete / buone | 8 / 3 |
-| Informazioni insufficienti (identificazione < 50) | fino a 10 |
-| Domanda debole (STR < 20%) / contenuta (< 30%) | 8 / 4 |
-| Comparabili < 5 / < 10 | 8 / 3 |
-| Mercato poco affidabile (dispersione > 0.6 o market confidence < 35) | 6 / 5 |
-| Rischio complessivo ≥ 50 | `min(12, (risk − 45)/2.5)` |
+**Niente doppio conteggio.** Profitto, ROI e sconto vengono dalla stessa coppia prezzo/valore: formano un
+*pilastro economico* il cui contributo è `peso_totale · (0,6·media pesata + 0,4·membro più debole)`, ripartito
+sui tre. Le vecchie penalità (condizioni, rischio, dati scarsi) sono ora componenti; i casi non compensabili
+(contraffazione, prove insufficienti) sono **veti** del livello decisionale, non punti. Venditore e freschezza
+non entrano nel punteggio: il venditore pesa nel rischio, la freschezza negli avvisi. La formula è provata con
+test di monotonia (nessun input migliore abbassa il punteggio) in `tests/unit/test_scoring.py`.
 
 Tetti: valore di mercato non stimabile ⇒ max 35; profitto atteso ≤ 0 ⇒ max 30.
 Classi: 90–100 Exceptional, 80–89 Excellent, 70–79 Good, 60–69 Moderate, < 60 Low Priority.
-Caso di riferimento (prezzo 52% sotto mercato, ROI 73%, domanda forte, ~4 giorni, venditore
-affidabile) ⇒ ≈ 91 (verificato da `tests/unit/test_scoring.py`).
+Caso di riferimento (prezzo 52% sotto mercato, ROI 73%, domanda forte, ~4 giorni, rischio basso, annuncio
+chiaro) ⇒ 85–93 (verificato da `tests/unit/test_scoring.py`).
+
+### Decisione (`backend/app/decision/`)
+
+Il verdetto si decide in un solo posto (`decision/engine.py::decide`, puro, senza I/O):
+
+1. **Evidenza insufficiente** è uno stato a sé, controllato per primo: nessun valore di mercato affidabile o
+   completezza dell'annuncio < 30.
+2. Il **candidato** viene dall'economia: STRONG BUY (tutti i requisiti) · BUY (obiettivi rispettati al prezzo
+   attuale, Flip ≥ 65, confidenza ≥ 50, completezza ≥ 45, rischio < 55, scenario prudente ≥ 0) · NEGOTIATE (il
+   prezzo massimo d'acquisto è ≥ 75% del richiesto, quindi un'offerta plausibile) · WATCHLIST (un ribasso
+   plausibile, ≥ 65%, ci porta in obiettivo) · altrimenti PASS.
+3. I **veti** mettono un tetto che nessun margine alza: contraffazione o termini sospetti ⇒ PASS; rischio ≥ 75 ⇒
+   PASS; marca a rischio (≥ 0,3) senza prove di autenticità ⇒ WATCHLIST; confidenza < 40 ⇒ WATCHLIST; annuncio
+   non attivo ⇒ WATCHLIST (da verificare/riservato) o PASS (venduto/rimosso).
+4. **STRONG BUY** richiede insieme: Flip ≥ 80, confidenza ≥ 70, completezza ≥ 70, rischio < 35, prezzo entro la
+   soglia e obiettivi rispettati, profitto > 0 anche nello scenario prudente, ≥ 8 comparabili con confidenza di
+   mercato ≥ 60, modello identificato (≥ 70), condizione dichiarata, costo totale letto, ≥ 3 foto, foto
+   analizzate, etichetta vista, autenticità non a rischio, annuncio attivo. Ciò che manca è elencato in
+   `strong_buy_requirements` e `missing_info`.
+
+Output: `verdict`, i quattro punteggi (`flip`, `confidence`, `risk`, `completeness`), `reasons[]`, `warnings[]`,
+`missing_info[]`, `vetoes[]`, `threshold_price`, `rank_value`, `action`. Il vecchio `verdict` BUY/CONSIDER/SKIP
+è derivato (STRONG BUY·BUY → BUY; NEGOTIATE·WATCHLIST → CONSIDER; PASS·INSUFFICIENT → SKIP). L'analista
+(regole o modello) può **abbassare** il verdetto, mai alzarlo.
+
+**Classifica** (`decision/ranking.py`): prima il verdetto, poi `rank_value` = profitto corretto per il rischio ×
+(0,4 + 0,6·confidenza/100): un 15 € sicuro batte un 20 € incerto (caso H). **Capitale** (`decision/allocation.py`):
+zaino 0/1 esatto (programmazione dinamica su euro interi, costi arrotondati per eccesso) sul profitto corretto per
+il rischio, entro budget, massimo per articolo, numero di articoli e rischio massimo; confrontato con la forza bruta
+nei test.
 
 **Confidence (0–100)** = 45% affidabilità prezzo di mercato (n comparabili, similarità media,
 dispersione, quota venduti, recency) + 25% confidence identificazione + 15% completezza dati

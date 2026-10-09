@@ -101,6 +101,30 @@ export interface OpportunityCard {
   sale_probability: number | null;
   authenticity_probability: number | null;
   authenticity_verdict: AuthVerdict | null;
+  /** The decision engine's verdict; null for rows analysed before it existed. */
+  decision_verdict: DecisionVerdict | null;
+  /** How much of the listing could be read, 0-100 (the fourth, separate score). */
+  data_completeness_score: number | null;
+}
+
+export type DecisionVerdict = "STRONG_BUY" | "BUY" | "NEGOTIATE" | "WATCHLIST" | "PASS" | "INSUFFICIENT_EVIDENCE";
+
+export interface DecisionInfo {
+  verdict: DecisionVerdict;
+  label: string;
+  legacy_verdict: "BUY" | "CONSIDER" | "SKIP";
+  action: Action;
+  scores: { flip: number; confidence: number; risk: number; completeness: number };
+  reasons: string[];
+  warnings: string[];
+  missing_info: { code: string; label: string; blocks: "strong_buy" | "buy" | "confidence" }[];
+  vetoes: { code: string; label: string; ceiling: DecisionVerdict; binding: boolean }[];
+  strong_buy_requirements: { code: string; label: string; met: boolean }[];
+  /** The price at which it becomes (or stays) a deal, as a decimal string. */
+  threshold_price: string | null;
+  rank_value: number;
+  candidate: DecisionVerdict;
+  rules_version: string;
 }
 
 export type AuthVerdict = "probably_authentic" | "uncertain" | "counterfeit_risk" | "not_verifiable";
@@ -446,6 +470,8 @@ export interface OpportunityDetail {
   time_online: TimeOnline | null;
   /** Where the numbers come from; null for analyses made before it was recorded. */
   provenance?: Provenance | null;
+  /** Verdict, the four scores, reasons, warnings, missing information (null on older rows). */
+  decision?: DecisionInfo | null;
 }
 
 export interface OpportunityFilters {

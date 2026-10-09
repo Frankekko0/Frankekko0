@@ -78,6 +78,11 @@ class Opportunity(Base):
         Index("ix_opportunities_ultra", "is_ultra_deal", postgresql_where=text("is_active")),
         Index("ix_opportunities_analyzed_at", "analyzed_at"),
         Index("ix_opportunities_active_rap", "is_active", text("risk_adjusted_profit DESC NULLS LAST")),
+        CheckConstraint(
+            "decision_verdict IS NULL OR decision_verdict IN "
+            "('STRONG_BUY','BUY','NEGOTIATE','WATCHLIST','PASS','INSUFFICIENT_EVIDENCE')",
+            name="decision_verdict_values",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -141,7 +146,11 @@ class Opportunity(Base):
     seller_score: Mapped[int | None] = mapped_column(SmallInteger)
     deal_tier: Mapped[str] = mapped_column(String(16))
     is_ultra_deal: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
-    verdict: Mapped[str] = mapped_column(String(10))
+    verdict: Mapped[str] = mapped_column(String(10))  # BUY | CONSIDER | SKIP, derived from the decision
+    # The decision proper (see ``app.decision``); NULL for rows analysed before it existed.
+    decision_verdict: Mapped[str | None] = mapped_column(String(24), index=True)
+    data_completeness_score: Mapped[int | None] = mapped_column(SmallInteger)
+    decision: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     recommended_action: Mapped[str] = mapped_column(String(16))
 
     comparables_count: Mapped[int] = mapped_column(Integer, default=0)

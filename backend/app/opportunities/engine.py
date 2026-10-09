@@ -17,6 +17,8 @@ from typing import Any
 from app.ai.deal_analyst import DealAnalysis, DealContext, RuleBasedDealAnalyst, ScenarioSummary
 from app.analytics.calibration import Calibration
 from app.authenticity.assess import AuthInput, assess, photo_evidence
+from app.decision.completeness import Completeness, CompletenessInput, compute_completeness
+from app.decision.engine import Decision, DecisionInput, decide
 from app.demand.analysis import DemandResult, VelocityResult, analyze_demand, analyze_velocity
 from app.demand.time_online import time_online
 from app.domain.enums import Condition, DealTier, RecommendedAction
@@ -83,6 +85,8 @@ class SubjectContext:
     price_history: list[tuple[datetime, Decimal]] = field(default_factory=list)
     # Price behaviour of the seller's other listings (see ``AnalysisPipeline.seller_habits``).
     seller_habits: dict[str, Any] | None = None
+    # Lifecycle status of the listing when it is analysed (the decision needs "active").
+    status: str = "active"
 
     @property
     def suspicious_terms(self) -> list[str]:
@@ -131,6 +135,9 @@ class AnalysisResult:
     provenance: dict[str, Any] = field(default_factory=dict)
     # The expected scenario with cost statuses, margin on sale, break-even (``profit.evaluation``).
     economics: dict[str, Any] = field(default_factory=dict)
+    # Verdict, the four separate scores, vetoes, reasons, warnings, missing information.
+    decision: Decision | None = None
+    completeness: Completeness | None = None
 
     def scenario(self, name: str) -> Scenario | None:
         return next((s for s in self.scenarios if s.name == name), None)
@@ -295,6 +302,22 @@ def run_analysis(
             demand_observations=demand.observations,
         )
     )
+    quality_vision = vision.get("photo_quality") or {}
+    completeness = compute_completeness(
+        CompletenessInput(
+            brand_known=subject.profile.brand is not None,
+            model_known=subject.profile.model is not None,
+            size_known=subject.profile.size is not None,
+            condition_known=subject.profile.condition != Condition.UNKNOWN,
+            photo_count=subject.photo_count,
+            description_length=subject.description_length,
+            shipping_known=subject.shipping_fee is not None,
+            seller_known=subject.seller is not None,
+            label_photo_seen=quality_vision.get("has_label_photo"),
+            photos_analysed=vision.get("analyzer") not in (None, "heuristic"),
+            identification_confidence=subject.identification_confidence,
+        )
+    )
     flip = compute_flip_score(
         FlipInput(
             discount_vs_market=float(discount) if discount is not None else None,
@@ -302,18 +325,9 @@ def run_analysis(
             expected_profit=float(expected.result.net_profit) if expected else None,
             demand_score=demand.score,
             velocity_score=velocity.score,
-            listing_age_hours=subject.listing_age_hours,
-            seller_score=seller.score,
-            sell_through_rate=demand.sell_through_rate,
-            comparables_used=market.n_used,
-            market_dispersion=market.stats.dispersion if market.stats else None,
-            market_confidence=market.confidence,
-            identification_confidence=subject.identification_confidence,
-            condition=condition,
-            suspicious_terms=bool(subject.suspicious_terms),
-            brand_counterfeit_risk=subject.brand_counterfeit_risk,
             risk_score=risk.score,
-            photos_reused=bool(subject.identification.get("photos_reused_by_other_seller")),
+            condition=condition,
+            info_score=completeness.score,
         ),
         weights,
     )
@@ -333,6 +347,68 @@ def run_analysis(
             listing_age_hours=subject.listing_age_hours,
             comparables_used=market.n_used,
             sold_comparables=market.n_sold,
+            condition=condition,
+        )
+    )
+    comparison = market_comparison(priced, similar, market)
+    online = time_online(similar, now)
+    quality, reason = assess_data_quality(market, len(similar))
+    auth = assess_authenticity(subject, price, fmv)
+    p_sale = sale_probability(similar, now, prior)
+    margin = float(expected.result.net_profit) if expected and market.has_value else None
+    rap = ins.risk_adjusted_profit(margin, p_sale["p"], auth.p_authentic)
+    economics: dict[str, Any] = {}
+    unknown_costs: tuple[str, ...] = ()
+    if market.has_value and market.expected_sale_price is not None:
+        # Stored analyses use the default cost profile: every default is shown as an estimate.
+        evaluation = evaluate_deal(
+            price,
+            market.expected_sale_price,
+            costs,
+            listing_shipping=subject.shipping_fee,
+            listing_buyer_protection=subject.buyer_protection_fee,
+            profile_saved=False,
+        )
+        economics = {**evaluation.as_dict(), "basis": "default_cost_profile"}
+        unknown_costs = evaluation.unknown_costs
+    conservative = next((s for s in scenarios if s.name == "conservative"), None)
+    decision = decide(
+        DecisionInput(
+            price=price,
+            expected_profit=expected.result.net_profit if expected and market.has_value else None,
+            conservative_profit=conservative.result.net_profit if conservative and market.has_value else None,
+            expected_roi=expected.result.roi if expected and market.has_value else None,
+            max_buy_price=max_buy,
+            suggested_offer=offer.suggested_offer,
+            min_profit=targets.min_profit,
+            min_roi=targets.min_roi,
+            flip_score=flip.score,
+            confidence_score=confidence.score,
+            risk_score=risk.score,
+            completeness_score=completeness.score,
+            data_quality=quality,
+            insufficient_reason=reason,
+            comparables_used=market.n_used,
+            market_confidence=market.confidence,
+            identification_confidence=subject.identification_confidence,
+            model_known=subject.profile.model is not None,
+            condition_known=subject.profile.condition != Condition.UNKNOWN,
+            photo_count=subject.photo_count,
+            acquisition_cost_verified=subject.shipping_fee is not None,
+            photos_analysed=vision.get("analyzer") not in (None, "heuristic"),
+            label_photo_seen=quality_vision.get("has_label_photo"),
+            brand_counterfeit_risk=subject.brand_counterfeit_risk,
+            authenticity_verdict=auth.verdict,
+            suspicious_terms=bool(subject.suspicious_terms),
+            status=subject.status,
+            discount_vs_market=float(discount) if discount is not None else None,
+            demand_level=demand.level.value,
+            condition_downgraded=condition != subject.profile.condition,
+            unknown_costs=unknown_costs,
+            risk_labels=tuple(f.label for f in risk.factors if f.severity in ("medium", "high")),
+            missing_info=tuple(completeness.missing),
+            risk_adjusted_profit=rap,
+            offer_action=offer.action,
         )
     )
     ctx = build_deal_context(
@@ -350,14 +426,8 @@ def run_analysis(
         confidence.score,
         risk,
     )
+    ctx.decision_verdict = decision.verdict.value
     analysis = RuleBasedDealAnalyst().analyze_sync(ctx)
-    comparison = market_comparison(priced, similar, market)
-    online = time_online(similar, now)
-    quality, reason = assess_data_quality(market, len(similar))
-    auth = assess_authenticity(subject, price, fmv)
-    p_sale = sale_probability(similar, now, prior)
-    margin = float(expected.result.net_profit) if expected and market.has_value else None
-    rap = ins.risk_adjusted_profit(margin, p_sale["p"], auth.p_authentic)
     result = AnalysisResult(
         subject=subject,
         market=market,
@@ -387,20 +457,12 @@ def run_analysis(
         risk_adjusted_profit=rap,
         sale_probability=p_sale["p"],
         authenticity=auth.as_dict(),
+        decision=decision,
+        completeness=completeness,
     )
     result.headline = build_headline(result)
     result.insights = build_insights(result, similar, now, condition, p_sale, margin)
-    if market.has_value and market.expected_sale_price is not None:
-        # Stored analyses use the default cost profile: every default is shown as an estimate.
-        evaluation = evaluate_deal(
-            price,
-            market.expected_sale_price,
-            costs,
-            listing_shipping=subject.shipping_fee,
-            listing_buyer_protection=subject.buyer_protection_fee,
-            profile_saved=False,
-        )
-        result.economics = {**evaluation.as_dict(), "basis": "default_cost_profile"}
+    result.economics = economics
     if velocity.sample_size:
         days_basis = "sold"
     elif prior is not None and prior.avg_days_to_sale:
@@ -497,7 +559,7 @@ def build_insights(
     tracked = {c.item.id for c in similar if c.item.tracked}
     has = m.has_value
     comp = r.flip.components
-    margin_pillar = sum(comp[k]["score"] for k in ("undervaluation", "roi", "profit")) / 3 if has else 0.0
+    margin_pillar = sum(comp[k]["score"] for k in ("price_vs_market", "roi", "profit")) / 3 if has else 0.0
     demand_pillar = (r.demand.score + r.velocity.score) / 2
     roi = r.expected_roi
     d: dict[str, Any] = {
@@ -714,6 +776,9 @@ def build_deal_context(
 
 
 def recommended_action(result: AnalysisResult) -> RecommendedAction:
+    """The action that goes with the decision's verdict (one place makes the call)."""
+    if result.decision is not None:
+        return result.decision.action
     if result.analysis.verdict == "SKIP" and result.offer.action != RecommendedAction.WATCH:
         return RecommendedAction.SKIP
     return result.offer.action

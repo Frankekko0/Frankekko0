@@ -5,7 +5,7 @@ from pydantic import Field, field_validator
 from app.alerts.channels.discord import is_valid_discord_webhook
 from app.profit.calculator import CostProfile
 from app.schemas.common import Money, Ratio, Schema
-from app.scoring.flip import DEFAULT_WEIGHTS
+from app.scoring.flip import DEFAULT_WEIGHTS, LEGACY_ALIASES
 
 
 class PreferencesIO(Schema):
@@ -27,7 +27,7 @@ class PreferencesIO(Schema):
     def _weights(cls, v: dict[str, float] | None) -> dict[str, float] | None:
         if v is None:
             return None
-        unknown = set(v) - set(DEFAULT_WEIGHTS)
+        unknown = set(v) - set(DEFAULT_WEIGHTS) - set(LEGACY_ALIASES)
         if unknown or any(x < 0 or x > 100 for x in v.values()) or sum(v.values()) <= 0:
             raise ValueError("pesi non validi")
         return v
