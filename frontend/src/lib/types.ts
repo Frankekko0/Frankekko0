@@ -1251,3 +1251,20 @@ export interface PricingEvidence {
     note: string;
   };
 }
+
+/** AI spend against its caps (USD; amounts are decimal strings, prices are assumptions). */
+export interface AiUsage {
+  day_spent: string;
+  day_cap: string;
+  day_left: string;
+  month_spent: string;
+  month_cap: string;
+  month_left: string;
+  calls_today: number;
+  exhausted: boolean;
+  by_purpose: Record<string, string>;
+  currency: "USD";
+  prices_are_assumptions: boolean;
+  ai_enabled: boolean;
+  models: { strong: string; cheap: string };
+}

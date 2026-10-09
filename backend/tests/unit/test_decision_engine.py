@@ -524,3 +524,29 @@ def test_a_budget_in_cents_is_never_exceeded() -> None:
     pool = [cand("a", "10.01", 5.0), cand("b", "10.01", 5.0)]
     out = allocate_capital(pool, CapitalRules(budget=D("20.00")))
     assert len(out.selected) == 1 and out.total_cost <= D("20.00")
+
+
+# ------------------------------------------------------------------ an analyst's review lowers, never raises
+def test_a_review_lowers_the_stored_decision_and_says_why() -> None:
+    from app.decision.engine import apply_review_ceiling
+
+    d = decide(strong()).as_dict()
+    lowered = apply_review_ceiling(d, V.WATCHLIST, "L'analista consiglia più cautela")
+    assert lowered["verdict"] == "WATCHLIST" and lowered["legacy_verdict"] == "CONSIDER"
+    assert lowered["action"] == "watch" and lowered["reviewed_from"] == "STRONG_BUY"
+    assert lowered["warnings"][0] == "L'analista consiglia più cautela"
+    assert lowered["vetoes"][-1] == {
+        "code": "analyst_review",
+        "label": "L'analista consiglia più cautela",
+        "ceiling": "WATCHLIST",
+        "binding": True,
+    }
+    assert d["verdict"] == "STRONG_BUY"  # the original is untouched
+
+
+def test_a_review_never_raises_a_verdict() -> None:
+    from app.decision.engine import apply_review_ceiling
+
+    watch = decide(strong(status="to_verify")).as_dict()
+    assert apply_review_ceiling(watch, V.NEGOTIATE, "x") is watch
+    assert apply_review_ceiling(watch, V.WATCHLIST, "x") is watch  # same level: nothing to change

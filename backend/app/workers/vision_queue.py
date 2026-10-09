@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from app.agent.stages import needs_photo_check
 from app.core.logging import get_logger
 from app.workers.queue import enqueue
 
@@ -24,14 +25,17 @@ _STEP_SECONDS = 0.001
 
 
 def worth_vision(outcome: Any, after_vision: bool = False) -> bool:
-    """A listing whose photos are worth a check: promising, photos online, not checked yet."""
+    """A listing whose photos are worth a check: promising, photos online, and never checked or changed."""
     listing, r = outcome.listing, outcome.result
     if listing is None or after_vision:
         return False
     has_remote_photos = any(i.url.startswith("https://") for i in listing.images)
     vision_done = bool((listing.identification or {}).get("vision"))
     worth_checking = r.flip.score >= VISION_MIN_FLIP or (r.risk_adjusted_profit or 0) > 0
-    return worth_checking and has_remote_photos and not vision_done
+    trigger = getattr(outcome, "trigger", None)
+    # Photos are checked once; checked again only when the change touches them (a price change
+    # does not: see ``app.agent.stages``).
+    return worth_checking and has_remote_photos and needs_photo_check(trigger, vision_done=vision_done)
 
 
 def vision_order(outcomes: Iterable[Any], after_vision: bool = False) -> list[str]:

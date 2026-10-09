@@ -143,6 +143,25 @@ class Settings(BaseSettings):
     ai_vision_enabled: bool = True
     ai_auto_analyze_min_flip_score: float = 80.0
     ai_timeout_seconds: float = 90.0
+    # Model routing: the cheap tier for volume, the strong one (``ai_model``) where the stakes are.
+    ai_model_cheap: str = "claude-haiku-5-5"
+    # Spend caps in USD (UTC day and calendar month). A call that would cross a cap is not made:
+    # the application falls back to its rules. ``ai_call_reserve_usd`` is held back for one call.
+    ai_daily_budget_usd: Decimal = Field(default=Decimal("1.00"), ge=0)
+    ai_monthly_budget_usd: Decimal = Field(default=Decimal("20.00"), ge=0)
+    ai_call_reserve_usd: Decimal = Field(default=Decimal("0.05"), ge=0)
+    # USD per million tokens. ASSUMED, not read from the provider: set them to your plan's prices.
+    ai_price_strong_input_per_mtok: Decimal = Decimal("3")
+    ai_price_strong_output_per_mtok: Decimal = Decimal("15")
+    ai_price_cheap_input_per_mtok: Decimal = Decimal("1")
+    ai_price_cheap_output_per_mtok: Decimal = Decimal("5")
+    # Circuit breaker: after this many consecutive failures the provider is left alone for a while.
+    ai_breaker_failures: int = Field(default=5, ge=1)
+    ai_breaker_cooldown_seconds: float = Field(default=60.0, ge=1)
+    agent_max_steps: int = Field(default=8, ge=1, le=30)
+    agent_max_cost_usd: Decimal = Field(default=Decimal("0.10"), ge=0)
+    agent_max_notifications_per_day: int = Field(default=5, ge=0, le=100)
+    agent_review_limit: int = Field(default=12, ge=1, le=30)
 
     # --- Notifications -------------------------------------------------------------------
     telegram_bot_token: SecretStr | None = None

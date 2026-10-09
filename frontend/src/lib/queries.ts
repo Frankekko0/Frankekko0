@@ -4,6 +4,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { toast } from "sonner";
 import { api, errorMessage } from "./api";
 import type {
+  AiUsage,
   Accuracy,
   ExtensionKey,
   ExtensionKeyCreated,
@@ -336,6 +337,10 @@ export function useSavePreferences() {
     },
     onError: (e) => toast.error(errorMessage(e)),
   });
+}
+
+export function useAiUsage() {
+  return useQuery({ queryKey: ["ai-usage"], queryFn: () => api<AiUsage>("/ai/usage"), staleTime: 30_000 });
 }
 
 export function useNotificationSettings() {

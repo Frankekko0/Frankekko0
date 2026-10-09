@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 
 from app.domain.enums import AlertPriority, AlertType
@@ -16,6 +16,11 @@ PRICE_DROP_MIN_RATIO = Decimal("0.05")
 # Opportunity alerts are about acting fast: never alert on listings published long ago
 # (e.g. the historical backfill). A price drop is a fresh event at any listing age.
 FRESH_LISTING_MAX_HOURS = 72.0
+# The decision engine's verdicts an opportunity alert may be about. A listing that is a PASS or has
+# insufficient evidence never raises an alert on its own; a user's own watchlist may still hear
+# about a WATCHLIST item, but not about those two.
+ACTIONABLE_VERDICTS = frozenset({"STRONG_BUY", "BUY", "NEGOTIATE"})
+NEVER_ALERTED_VERDICTS = frozenset({"PASS", "INSUFFICIENT_EVIDENCE"})
 
 
 @dataclass(frozen=True)
@@ -41,6 +46,8 @@ class AlertCandidate:
     is_ultra: bool
     is_new: bool
     listing_age_hours: float | None = None  # since publication; None = unknown
+    # The decision engine's verdict; None = not known (the verdict gates nothing).
+    decision_verdict: str | None = None
 
 
 @dataclass(frozen=True)
@@ -80,6 +87,8 @@ class AlertDecision:
     body: str
     watchlist_id: uuid.UUID | None = None
     reasons: list[str] = field(default_factory=list)
+    # What this alert is about in a few words (a watchlist's name), used when alerts are merged.
+    tag: str = ""
 
 
 def _eur(v: Decimal | None) -> str:
@@ -137,10 +146,47 @@ def matches_watchlist(c: AlertCandidate, w: WatchlistRule) -> bool:
 
 
 def summary_line(c: AlertCandidate) -> str:
+    verdict = f"{c.decision_verdict.replace('_', ' ')} · " if c.decision_verdict else ""
     return (
-        f"{_eur(c.price)} → profitto {_eur(c.expected_profit)} · ROI {_pct(c.expected_roi)} · "
+        f"{verdict}{_eur(c.price)} → profitto {_eur(c.expected_profit)} · ROI {_pct(c.expected_roi)} · "
         f"Flip {c.flip_score} · Confidence {c.confidence} · Rischio {c.risk}"
     )
+
+
+_MERGE_ORDER = {
+    AlertType.ULTRA_DEAL: 0,
+    AlertType.PRICE_DROP: 1,
+    AlertType.WATCHLIST_MATCH: 2,
+    AlertType.NEW_OPPORTUNITY: 3,
+}
+_MERGE_LABEL = {
+    AlertType.ULTRA_DEAL: "Ultra Deal",
+    AlertType.PRICE_DROP: "prezzo ribassato",
+    AlertType.WATCHLIST_MATCH: "watchlist",
+    AlertType.NEW_OPPORTUNITY: "nuova opportunità",
+}
+
+
+def coalesce(decisions: list[AlertDecision]) -> list[AlertDecision]:
+    """One alert per analysis: the most important reason leads, the others are named in its body.
+
+    A price drop on a new Ultra Deal that also matches two watchlists is one event for the person,
+    not four notifications. The order is Ultra Deal, price drop, watchlist, new opportunity; the
+    priority is the highest among them.
+    """
+    if len(decisions) <= 1:
+        return decisions
+    ordered = sorted(decisions, key=lambda d: _MERGE_ORDER[d.type])
+    primary, rest = ordered[0], ordered[1:]
+    also = []
+    for d in rest:
+        label = f"{_MERGE_LABEL[d.type]} «{d.tag}»" if d.tag else _MERGE_LABEL[d.type]
+        if label not in also:
+            also.append(label)
+    priority = (
+        AlertPriority.HIGH if any(d.priority == AlertPriority.HIGH for d in decisions) else primary.priority
+    )
+    return [replace(primary, priority=priority, body=f"{primary.body}\nAnche: {', '.join(also)}")]
 
 
 def decide_alerts(
@@ -154,13 +200,14 @@ def decide_alerts(
     new_opportunity_enabled: bool = True,
     max_listing_age_hours: float = FRESH_LISTING_MAX_HOURS,
 ) -> list[AlertDecision]:
-    """Which alerts a user should get for this analysis (at most one per type/watchlist)."""
+    """The alert a user should get for this analysis: at most one, the reasons merged (``coalesce``)."""
     decisions: list[AlertDecision] = []
     root = c.root_listing_id
     line = summary_line(c)
     fresh = c.listing_age_hours is None or c.listing_age_hours <= max_listing_age_hours
+    actionable = c.decision_verdict is None or c.decision_verdict in ACTIONABLE_VERDICTS
 
-    if ultra_enabled and fresh and c.is_ultra:
+    if ultra_enabled and fresh and actionable and c.is_ultra:
         decisions.append(
             AlertDecision(
                 AlertType.ULTRA_DEAL,
@@ -176,7 +223,12 @@ def decide_alerts(
         and c.previous_price > 0
         and (c.previous_price - c.price) / c.previous_price >= PRICE_DROP_MIN_RATIO
     )
-    if price_drop_enabled and dropped and (passes_thresholds(c, thresholds) or c.flip_score >= 70):
+    if (
+        price_drop_enabled
+        and dropped
+        and actionable
+        and (passes_thresholds(c, thresholds) or c.flip_score >= 70)
+    ):
         decisions.append(
             AlertDecision(
                 AlertType.PRICE_DROP,
@@ -188,7 +240,7 @@ def decide_alerts(
         )
 
     already_ultra = any(d.type == AlertType.ULTRA_DEAL for d in decisions)
-    if watchlist_enabled and fresh:
+    if watchlist_enabled and fresh and c.decision_verdict not in NEVER_ALERTED_VERDICTS:
         for w in watchlists:
             if matches_watchlist(c, w):
                 decisions.append(
@@ -199,6 +251,7 @@ def decide_alerts(
                         f"👀 {w.name} · {c.title}"[:200],
                         line,
                         watchlist_id=w.id,
+                        tag=w.name,
                     )
                 )
 
@@ -206,6 +259,7 @@ def decide_alerts(
         new_opportunity_enabled
         and fresh
         and not already_ultra
+        and actionable
         and c.is_new
         and passes_thresholds(c, thresholds)
     ):
@@ -218,4 +272,4 @@ def decide_alerts(
                 line,
             )
         )
-    return decisions
+    return coalesce(decisions)

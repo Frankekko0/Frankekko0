@@ -17,6 +17,9 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, OperationalError
 
+from app.agent.model import AnthropicAgentModel
+from app.agent.review import review_candidates
+from app.ai.llm import get_llm
 from app.ai.service import run_ai_analysis, run_vision
 from app.alerts.channels.base import ChannelError
 from app.alerts.service import deliver_alert, evaluate_alerts
@@ -335,6 +338,30 @@ async def ai_analyze_task(ctx: dict[str, Any], opportunity_id: str) -> None:
             return
         await run_ai_analysis(s, opp)
     await cache.bump(NS_FEED)
+
+
+async def review_candidates_task(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Review the best opportunities with the agent (rules when there is no model or no budget).
+
+    Skipped when no candidate changed since the last review: nothing to redo."""
+    settings = get_settings()
+    llm = get_llm()
+    model = AnthropicAgentModel(llm) if llm.enabled else None
+    async with session_scope() as s:
+        run = await review_candidates(s, model=model, settings=settings)
+        summary = (
+            {"skipped": True}
+            if run is None
+            else {
+                "run_id": str(run.id),
+                "provider": run.provider,
+                "picks": len((run.result or {}).get("picks", [])),
+                "fallback": (run.result or {}).get("fallback"),
+            }
+        )
+    if run is not None:
+        await cache.bump(NS_FEED)
+    return summary
 
 
 async def deliver_alert_task(ctx: dict[str, Any], alert_id: str, channel: str) -> None:

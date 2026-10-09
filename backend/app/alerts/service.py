@@ -189,6 +189,7 @@ async def evaluate_alerts(
             is_ultra=r.ultra,
             is_new=outcome.is_new,
             listing_age_hours=age_hours,
+            decision_verdict=r.decision.verdict.value if r.decision else None,
         )
         ns = a.settings
         decisions = decide_alerts(

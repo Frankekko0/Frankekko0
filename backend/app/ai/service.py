@@ -16,6 +16,8 @@ from app.ai.llm import get_llm
 from app.authenticity.assess import brand_rules
 from app.core.logging import get_logger
 from app.db.models import Listing, Opportunity
+from app.decision.engine import DecisionVerdict, apply_review_ceiling
+from app.domain.enums import Verdict
 from app.identification.engine import ListingText
 from app.ingestion.catalog import load_catalog
 from app.ingestion.service import get_engine
@@ -73,6 +75,7 @@ def context_from_opportunity(opp: Opportunity, listing: Listing, brand_name: str
         suspicious_terms=list(ident.get("suspicious_terms") or []),
         defect_terms=list(ident.get("defect_terms") or []),
         is_vintage=listing.is_vintage,
+        decision_verdict=opp.decision_verdict,
     )
 
 
@@ -86,6 +89,19 @@ async def run_ai_analysis(db: AsyncSession, opp: Opportunity) -> dict[str, Any]:
     opp.ai_provider = analysis.provider
     opp.ai_analyzed_at = datetime.now(UTC)
     opp.verdict = analysis.verdict.value
+    # The analyst may be more cautious than the decision engine, never less: when it is, the
+    # decision is lowered with the reason on record, so there is still one verdict, not two.
+    ceiling = {Verdict.CONSIDER: DecisionVerdict.WATCHLIST, Verdict.SKIP: DecisionVerdict.PASS}.get(
+        analysis.verdict
+    )
+    if opp.decision and ceiling is not None:
+        lowered = apply_review_ceiling(
+            opp.decision, ceiling, "La revisione dell'analista AI consiglia più cautela"
+        )
+        if lowered is not opp.decision:
+            opp.decision = lowered
+            opp.decision_verdict = lowered["verdict"]
+            opp.recommended_action = lowered["action"]
     return opp.ai_analysis
 
 

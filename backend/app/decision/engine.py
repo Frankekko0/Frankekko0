@@ -498,3 +498,28 @@ def action_for(verdict: DecisionVerdict, offered: RecommendedAction | None) -> R
 
 def config_dict(cfg: DecisionConfig = DEFAULT_CONFIG) -> dict[str, Any]:
     return {k: str(v) if isinstance(v, Decimal) else v for k, v in asdict(cfg).items()}
+
+
+def apply_review_ceiling(decision: dict[str, Any], ceiling: DecisionVerdict, label: str) -> dict[str, Any]:
+    """Lower a stored decision to ``ceiling`` (an analyst's review found a reason); never raise it.
+
+    The verdict, its three-valued form and the action follow, and the reason is added as a binding
+    veto and as the first warning, so the lowering is visible and is not undone by reading the
+    scores again.
+    """
+    current = DecisionVerdict(decision["verdict"])
+    if current.rank <= ceiling.rank:
+        return decision
+    return {
+        **decision,
+        "verdict": ceiling.value,
+        "label": ceiling.label,
+        "legacy_verdict": ceiling.legacy.value,
+        "action": action_for(ceiling, None).value,
+        "vetoes": [
+            *decision.get("vetoes", []),
+            {"code": "analyst_review", "label": label, "ceiling": ceiling.value, "binding": True},
+        ],
+        "warnings": [label, *decision.get("warnings", [])],
+        "reviewed_from": current.value,
+    }

@@ -356,6 +356,10 @@ repository). Un valore vuoto equivale a "non impostato". Le principali:
 | `SCAN_INTERVAL_SECONDS` / `SCAN_BATCH_SIZE` | `30` / `500` | cadenza e dimensione delle scansioni |
 | `ALERT_MAX_LISTING_AGE_HOURS` | `72` | alert opportunità/watchlist solo per annunci recenti |
 | `AI_API_KEY` / `AI_MODEL` / `AI_EFFORT` | — / `claude-opus-5-5` / `medium` | AI Deal Analyst (facoltativo) |
+| `AI_MODEL_CHEAP` | `claude-haiku-5-5` | modello economico per il volume (agente) |
+| `AI_DAILY_BUDGET_USD` / `AI_MONTHLY_BUDGET_USD` | `1.00` / `20.00` | **tetti di spesa AI**: raggiunti, nessuna chiamata parte e l'app usa le regole |
+| `AI_PRICE_*_PER_MTOK` | 3/15 forte, 1/5 economico | prezzi **assunti** per il conteggio: impostali ai tuoi |
+| `AGENT_MAX_STEPS` / `AGENT_MAX_COST_USD` / `AGENT_MAX_NOTIFICATIONS_PER_DAY` | `8` / `0.10` / `5` | limiti dell'agente di revisione |
 | `TELEGRAM_BOT_TOKEN` | — | canale Telegram |
 | `SMTP_HOST/PORT/USERNAME/PASSWORD/FROM` | — | canale email |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | — | Web Push |

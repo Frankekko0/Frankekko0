@@ -223,8 +223,10 @@ async def test_market_statistics_and_alerts(session, make_listing) -> None:
     types = sorted(
         (await session.execute(select(Alert.type).where(Alert.user_id == user.id))).scalars().all()
     )
-    assert "watchlist_match" in types
-    assert "new_opportunity" in types or "ultra_deal" in types
+    # One alert for the analysis: the watchlist leads and names the other reason inside it.
+    assert types == ["watchlist_match"]
+    only = (await session.execute(select(Alert).where(Alert.user_id == user.id))).scalar_one()
+    assert "Anche:" in only.body and "nuova opportunità" in only.body
     assert pending == []  # only in-app channel enabled
     # Notification links open the deal's page in the web app (also from a phone).
     alert = (await session.execute(select(Alert).where(Alert.user_id == user.id).limit(1))).scalar_one()

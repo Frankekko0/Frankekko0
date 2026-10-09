@@ -13,19 +13,20 @@ Deploy: Docker Compose (`docker-compose*.yml`), Caddy HTTPS, backup in `deploy/`
 `acquisition` cattura da estensione/link/email, parser (`vinted_parser.json`) · `ingestion` normalizza/dedup/upsert · `identification` · `vision` hash e controlli foto ·
 `media` archivio foto e repost visivi · `authenticity` · `pricing` comparabili, FMV, prove di prezzo (`evidence`) · `external` prezzi esterni opzionali (Serper) ·
 `demand` · `profit` calcolatore+offerte · `scoring` (Flip Score a 8 componenti, confidenza, rischio) · `decision` (verdetti, completezza, veti, classifica, allocazione del capitale) · `opportunities` pipeline/engine/query · `tracking` ciclo di vita e "da verificare" · `alerts` ·
-`analytics` portfolio/calibrazione · `ai` analista, ricerca NL · `workers` arq · `api/v1` REST · `tools` CLI. Frontend: `frontend/src/app/(app)/*`.
+`analytics` portfolio/calibrazione · `ai` analista, ricerca NL, client del modello con **budget** e interruttore · `agent` strumenti, ciclo, guardrail, revisione, fasi S0–S5 · `workers` arq · `api/v1` REST · `tools` CLI. Frontend: `frontend/src/app/(app)/*`.
 
-## Schema DB (34 tabelle, migrazioni `0001`–`0017`, prossima **0018**)
+## Schema DB (37 tabelle, migrazioni `0001`–`0018`, prossima **0019**)
 Annunci: `listings` `listing_snapshots`(osservazioni tipizzate) `listing_price_history`(vista) `listing_images` `sellers`. Catalogo: `brands` `categories` `products`.
 Analisi: `analyses`(immutabili, 5 blocchi) `opportunities`(= analisi corrente) `opportunity_scores` `market_comparables` `market_statistics` `analysis_jobs`.
 Prezzi: `sold_sales`(prezzo richiesto ≠ reale) `model_price_stats` `external_prices` `external_searches`. Utente: `users` `user_preferences` `notification_settings` `push_subscriptions` `api_keys` `watchlists` `favorites` `user_affinities`.
-Business: `purchases` `sales` `inventory`. Avvisi: `alerts` `alert_deliveries`. Altro: `acquisition_attempts` `marketplace_actions` `system_state`. Importi `Decimal`; ROI memorizzato come rapporto (0,6923), mostrato in %.
+Agente e spesa AI: `ai_usage` `agent_runs` `events`(append-only). Business: `purchases` `sales` `inventory`. Avvisi: `alerts` `alert_deliveries`. Altro: `acquisition_attempts` `marketplace_actions` `system_state`. Importi `Decimal`; ROI memorizzato come rapporto (0,6923), mostrato in %.
 
 ## Punti di integrazione (dove si innesta il prompt v3)
 - Pipeline per annuncio: `opportunities/pipeline.py::analyze` → `engine.py::run_analysis` (completezza → Flip → **decisione** → analista). Stadi S0–S5 e dossier si innestano qui; **nessun secondo pipeline**.
 - Calcolo esatto: `profit/calculator.py` (formule, una sola copia) + `profit/evaluation.py` (`evaluate_deal`: stati dei costi, margine, pareggio) = futuro tool `finance_calc`.
 - Prove di prezzo: `pricing/evidence.py` + `sold_sales`/`model_price_stats` (oggi fondono ancora i tipi di prezzo: D1 del PIANO, v3 Fase 3).
-- AI: `ai/llm.py` (`LLMClient.structured`), `vision/analyzer.py`, `workers/vision_queue.py` → qui tetto di spesa, cache per hash, routing per tier.
+- AI: `ai/llm.py` (`structured`, `converse`; budget in `ai/budget.py`, interruttore in `ai/breaker.py`, routing economico/forte), `vision/analyzer.py`, `workers/vision_queue.py` → cache per hash (fase di visione).
+- Agente: `agent/tools.py` (registro), `agent/loop.py` (ciclo), `agent/guardrails.py`, `agent/review.py` (revisione dei candidati, job `review_candidates_task` ogni 30 min), `agent/stages.py` (cosa si rifà dopo una modifica).
 - Job: `workers/tasks.py` + `workers/main.py` (`_functions`, `_cron_jobs`) per orchestratore, monitor, learner.
 - Azioni su Vinted: **nessuna**. L'estensione legge solo le pagine che l'utente apre; "Apri su Vinted" è un link. Guardiani: `extension/tests/no-automation.test.mjs`, `backend/tests/unit/test_server_reads_no_vinted_pages.py`.
 - Test: `backend/tests/{unit,integration,api}` (Postgres+Redis reali, migrazioni eseguite), `extension/tests`+`e2e`, `frontend` Vitest.
@@ -44,7 +45,7 @@ Parser Vinted per ID (niente foto profilo/suggeriti) · verdetto rapido locale `
 | 3 Market intelligence | **fatta** (perimetro v3) | motore e provenienza già completi; aggiunti test G end-to-end e dichiarazione della base di misura (D1). Taglie per marca e titoli/sinonimi: PIANO 4.3–4.4, nella fase di dossier |
 | 4/4b Vision e dossier | da fare | PIANO Fase 5; serve Q8 (modello + tetto di spesa) e foto dal browser (Q3-B) |
 | 5 Decisione | **fatta** | `decision/` (6 verdetti, 4 punteggi separati, veti, STRONG BUY a requisiti, classifica, zaino esatto), Flip Score a 8 componenti, migrazione 0017; casi A, C, E, G, H e B (lato decisione) |
-| 6 Agente orchestratore | da fare | loop con tool, budget AI, trace, ricalcolo incrementale e avvisi dedup (nuovo in v3) |
+| 6 Agente orchestratore | **fatta** (perimetro v3) | registro di 9 strumenti, ciclo con tool use, guardrail nel codice, budget AI con tetti e stop, interruttore, traccia in `agent_runs`, `events` append-only, ricalcolo incrementale (35→23: solo decisione, un avviso), avvisi coalescenti e legati al verdetto, revisione con ripiego a regole. Strumenti delle fasi successive: L16 |
 | 7 Dashboard | da fare | PIANO Fase 8 (serve Q5, lingua) |
 | 8 Vendita e portfolio | parziale | PIANO Fase 9; `purchases/sales/inventory` esistono |
 | 8b Autonomia · 8c Intelligenza avanzata · 8d Imprenditore | da fare | nuovi in v3; esecuzione su Vinted solo dry-run/assistita (LIMITATIONS L01) |

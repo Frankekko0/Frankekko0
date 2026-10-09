@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.v1 import (
     acquisition,
+    agent,
     analytics,
     auth,
     extension,
@@ -33,5 +34,6 @@ for module in (
     pricing,
     settings,
     analytics,
+    agent,
 ):
     api_router.include_router(module.router, dependencies=_limited)

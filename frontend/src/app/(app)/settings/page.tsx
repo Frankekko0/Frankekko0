@@ -4,6 +4,7 @@ import { BellRing, Calculator, Goal, LogOut, Scale, Send, Smartphone, Sparkles, 
 import { useRouter } from "next/navigation";
 import { useMemo, useState, type ReactNode, type CSSProperties } from "react";
 import { toast } from "sonner";
+import { AiUsageCard } from "@/components/settings/ai-usage";
 import { DataSourcesCard } from "@/components/settings/data-sources";
 import { ErrorLogCard } from "@/components/settings/error-log";
 import { ExtensionKeysCard } from "@/components/settings/extension-keys";
@@ -453,6 +454,7 @@ export default function SettingsPage() {
       {prefs.data ? <PreferencesForm initial={prefs.data} /> : <Skeleton className="h-96 rounded-2xl" />}
       {notif.data ? <NotificationsForm initial={notif.data} /> : <Skeleton className="h-96 rounded-2xl" />}
       <ExtensionKeysCard />
+      <AiUsageCard />
       <DataSourcesCard />
       <PriceDataCard />
       <ErrorLogCard />
