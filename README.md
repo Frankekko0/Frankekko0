@@ -365,6 +365,7 @@ repository). Un valore vuoto equivale a "non impostato". Le principali:
 | `BACKEND_URL` (frontend, build) | `http://localhost:8000` | destinazione del proxy `/api` (in Docker: `http://backend:8000`) |
 | `ALGORITHM_VERSION` | `2026.10-2` | versione registrata con ogni analisi |
 | `IMAP_HOST` / `IMAP_PORT` / `IMAP_USER` / `IMAP_PASSWORD` / `IMAP_FOLDER` / `IMAP_POLL_MINUTES` | — / `993` / — / — / `INBOX` / `15` | lettura (sola lettura) delle email di notifica di Vinted |
+| `VISION_VOI_COST_EUR` | `0.50` | costo assunto di un'analisi delle foto per il valore dell'informazione (vedi `docs/DEPENDENCIES.md`) |
 | `PARSER_CONFIG_PATH` | — | copia aggiornata di `vinted_parser.json` (selettori, etichette, pattern) senza ricostruire nulla |
 | `IMAGE_ARCHIVE_ENABLED` / `MEDIA_DIR` / `IMAGE_ARCHIVE_MAX_BYTES` | `true` / `var/media` / `10485760` | accetta e conserva le foto caricate dall'estensione, per la pagina di tracking e l'analisi (in Docker: volume `media`); `false`: nessun caricamento |
 
@@ -648,6 +649,14 @@ ROI"*), `watchlists`, `alerts`, `notifications/push`, `flips`/`purchases`/`sales
 utenti autenticati), `extension` / `capture` (chiavi dell'estensione e catture: schede, annunci,
 valutazioni rapide, coda dei controlli lenti; autenticazione con `Authorization: Bearer ff_ext_…`,
 valida solo per questi endpoint).
+
+Ciclo di vendita, autonomia e modalità imprenditore: `selling/inventory` (stati, piano di prezzo e
+ribassi, bozza dell'annuncio, valutazione delle offerte), `accounting` (spese, riepilogo, registro,
+esportazione per il commercialista), `learning` (esiti, rapporto di apprendimento, esperimenti),
+`opportunities/{id}/negotiation` (offerta iniziale, massimo accettabile, messaggi pronti), `autonomy`
+(limiti, kill switch, azioni con conferma dell'utente, rapporto del dry-run, registro di audit) e
+`business` (obiettivi, piano, KPI, cash flow con stress, nicchie, soglie, riparazioni, scanner, SOP,
+esportazione). L'autonomia non esegue mai azioni su Vinted (vedi `docs/LIMITATIONS.md` L27).
 
 ---
 

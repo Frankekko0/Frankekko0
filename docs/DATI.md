@@ -56,7 +56,7 @@ identici all'analisi corrente **non si crea nulla**.
 (analisi) · `/pricing/sold-prices/export.csv` (prezzi venduti per modello). Parametro `delimiter=semicolon` per Excel
 italiano. Sono nel menu "Export CSV" della pagina Archivio.
 
-## Migrazioni (0010–0021)
+## Migrazioni (0010–0022)
 
 Additive e reversibili; **fai un backup prima** (`deploy/backup.sh`). Verificate con 30.000 annunci, 90.000 foto e 60.000
 osservazioni: 14 s in avanti, 3 s all'indietro, nessuna riga persa. La chiave dei venditori (0014) non si può "tornare
@@ -67,3 +67,5 @@ indietro" (un HMAC non è reversibile): il `downgrade` lascia le chiavi protette
 **0018** aggiunge `ai_usage` (una riga per chiamata a pagamento: modello, livello, token, costo in USD, a cosa serviva), `agent_runs` (una riga per esecuzione dell'agente: passi/traccia, costo, risultato verificato, motivo di arresto) ed `events` (registro di audit **a sola aggiunta**: un trigger rifiuta UPDATE e DELETE). Il `downgrade` rimuove le tre tabelle.
 
 **0019** aggiunge a `opportunities` `dossier` (JSONB: i passaggi P0–P12, i segnali tipizzati, le contraddizioni, ciò che non si è potuto analizzare, le cinque ragioni) e `analysis_coverage_score`; nel registro permanente `analyses.decision.dossier` ne tiene la forma compatta. **0020** aggiunge `vision_cache` (analisi delle foto già pagate, per contenuto delle foto + modello + versione del prompt; potata dopo 90 giorni senza uso). **0021** aggiunge a `user_preferences` `total_budget` e `max_owned_items` (facoltativi: il budget totale e quanti articoli tenere in giacenza, per il piano d'acquisto).
+
+**0022** (fasi 8, 8b, 8d) aggiunge `inventory` le colonne del ciclo di vendita (`stage`, data di arrivo, prezzo iniziale e minimo, storico dei prezzi, visualizzazioni, preferiti, link dell'annuncio) e sei tabelle: `autonomy_settings` (limiti, stato, kill switch, sospensione, fine del dry-run), `autonomy_actions` (ogni azione considerata, con stato, motivi, esito del verificatore e canale), `prediction_outcomes` (previsto al momento dell'acquisto contro realizzato, per l'apprendimento), `business_goals` (obiettivi, capitale, riserva, soglie con fonte e data), `expenses` (spese del registro) ed `experiments` (valutazioni con impronta). Le righe di `inventory` esistenti ricevono lo stato `to_list` (o `returned` se già rese) e nient'altro cambia; il `downgrade` rimuove le colonne e le tabelle nuove.

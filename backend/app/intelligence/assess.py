@@ -35,6 +35,15 @@ class AssessInputs:
     condition_known: bool
 
 
+def straight_line(exact: Callable[[float], float], span: float = 1000.0) -> Callable[[float], float]:
+    """Net revenue is a straight line in the sale price (fixed fees plus a percentage), so two exact points of the
+    real calculator define it. The simulation then needs no ``Decimal`` arithmetic per sample (10 ms instead of
+    1 ms per analysis); the difference from the exact figure is the rounding of the fees to the cent."""
+    base = exact(0.0)
+    slope = (exact(span) - base) / span
+    return lambda price: base + slope * price
+
+
 def hidden_defect_probability(photos_analysed: bool, condition_known: bool) -> float:
     return HIDDEN_DEFECT_BASE + (0.0 if photos_analysed else 0.06) + (0.0 if condition_known else 0.04)
 

@@ -397,7 +397,9 @@ def run_analysis(
             resale_low=float(by_name["conservative"].sale_price),
             resale_mid=float(by_name["expected"].sale_price),
             resale_high=float(by_name["optimistic"].sale_price),
-            net_of_price=lambda p: float(sale_revenue(Decimal(str(round(p, 2))), costs).net),
+            net_of_price=intel.straight_line(
+                lambda p: float(sale_revenue(Decimal(str(round(p, 2))), costs).net)
+            ),
             p_authentic=auth.p_authentic,
             estimated_days=velocity.estimated_days,
             return_cost=float(costs.shipping_out + costs.shipping_in),

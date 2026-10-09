@@ -16,6 +16,8 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.tracking.queries import csv_cell
+
 ZERO = Decimal("0")
 
 
@@ -145,15 +147,12 @@ def to_csv(rows: list[LedgerRow]) -> str:
     running = ZERO
     for r in rows:
         running += r.amount
-        desc = r.description
-        if desc[:1] in "=+-@\t\r":
-            desc = "'" + desc
         w.writerow(
             [
                 r.on.isoformat(),
-                r.kind,
-                r.ref,
-                desc,
+                csv_cell(r.kind),
+                csv_cell(r.ref),
+                csv_cell(r.description),
                 f"{r.amount:.2f}".replace(".", ","),
                 f"{running:.2f}".replace(".", ","),
             ]

@@ -19,6 +19,17 @@ fase di lavoro, vedi `LIMITATIONS.md` L05).
 Routing: il volume (agente di revisione) usa `AI_MODEL_CHEAP`; le decisioni ad alto impatto usano `AI_MODEL`.
 Le foto vanno al fornitore del modello (possono contenere persone); l'app chiede di ignorarle ma il dato viaggia.
 
+## Valori assunti che muovono i numeri (non servizi, ma costano se sbagliati)
+
+| Impostazione | Default | Perché è un'assunzione |
+|---|---|---|
+| `VISION_VOI_COST_EUR` | `0.50` | Costo in euro assegnato a un'analisi delle foto nel calcolo del valore dell'informazione (chiamata al modello + attesa). Non è misurato: nessuna chiave in questa fase (L05). Più basso = analizza più spesso e spende di più; la spesa reale resta limitata dai tetti `AI_DAILY_BUDGET_USD` / `AI_MONTHLY_BUDGET_USD`. |
+| Resi, ore per articolo, costo del capitale, ritardo di incasso | 4% · 45 min · 0,2%/giorno · 3 giorni | Elencati in LIMITATIONS L26; ogni risultato che li usa è marcato `assumption`. |
+
+Le fasi 8–8d non aggiungono servizi esterni: sopravvivenza, Monte Carlo, Kelly, calibrazione, deriva, piano, cash flow e
+scanner girano nel tuo server. Il secondo parere del verificatore usa il modello **economico** solo se c'è la chiave e
+il tetto di spesa lo permette (mai provato dal vivo, L27).
+
 ## Facoltativi senza costo diretto
 
 | Servizio | Uso |

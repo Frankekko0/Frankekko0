@@ -309,3 +309,31 @@ def test_the_baseline_is_beaten_only_where_it_is_measured_to_be() -> None:
     s = baseline.summary(list(res.values()))
     assert s["degraded"] == ["nike-felpa"] and s["measurable"] == 2
     assert "senza esiti reali" in baseline.summary([])["note"]
+
+
+def test_the_straight_line_revenue_matches_the_exact_calculator_to_the_cent() -> None:
+    """The simulation uses two exact points of the calculator instead of Decimal arithmetic per sample (about 7x
+    faster per analysis); it must not drift from the real formulas, whatever the fee profile."""
+    from decimal import Decimal
+
+    from app.intelligence.assess import straight_line
+    from app.profit.calculator import CostProfile, sale_revenue
+
+    for profile in (
+        CostProfile(),
+        CostProfile(
+            selling_fee_pct=Decimal("0.037"),
+            selling_fee_fixed=Decimal("0.73"),
+            payment_fee_pct=Decimal("0.019"),
+            payment_fee_fixed=Decimal("0.31"),
+            packaging=Decimal("0.67"),
+            shipping_out=Decimal("4.13"),
+        ),
+    ):
+
+        def exact(p: float, pr: CostProfile = profile) -> float:
+            return float(sale_revenue(Decimal(str(round(p, 2))), pr).net)
+
+        fast = straight_line(exact)
+        for price in (1.0, 7.49, 19.99, 44.0, 123.45, 480.0, 999.99):
+            assert abs(fast(price) - exact(price)) <= 0.02, (profile, price)

@@ -9,7 +9,7 @@ from itertools import pairwise
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Query, Response
-from pydantic import Field
+from pydantic import Field, field_validator
 from sqlalchemy import func, select
 
 from app.api.deps import DB, CurrentUser, Economics
@@ -43,6 +43,14 @@ class InventoryPatch(Schema):
     favourites: int | None = Field(default=None, ge=0)
     listing_url: str | None = Field(default=None, max_length=500)
     reason: str | None = Field(default=None, max_length=120)
+
+    @field_validator("listing_url")
+    @classmethod
+    def _web_address(cls, v: str | None) -> str | None:
+        """Only http(s) links: the field is shown as a link, and ``javascript:`` or ``data:`` would run in the page."""
+        if v and not v.strip().lower().startswith(("https://", "http://")):
+            raise ValueError("serve un indirizzo che inizi con http:// o https://")
+        return v.strip() if v else v
 
 
 async def _item(db: DB, user_id: uuid.UUID, purchase_id: uuid.UUID) -> tuple[Purchase, InventoryItem]:
