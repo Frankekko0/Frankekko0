@@ -81,8 +81,21 @@ async def test_unchanged_cards_keep_their_analysis(auth_client: httpx.AsyncClien
         await s.execute(
             update(Opportunity).where(Opportunity.listing_id == lid2).values(algorithm_version="old")
         )
+    before = datetime.now(UTC)
     await _post(auth_client, headers, changed[:2])
-    assert await _scores() == 7
+    # Both were analysed again (fresh time, current version)...
+    async with session_scope() as s:
+        redone = (
+            await s.execute(
+                select(Opportunity.algorithm_version, Opportunity.analyzed_at)
+                .join(Listing, Listing.id == Opportunity.listing_id)
+                .where(Listing.external_id.in_(["8400", "8401"]))
+            )
+        ).all()
+    assert len(redone) == 2
+    assert all(v != "old" and at >= before for v, at in redone)
+    # ...but with the same inputs and the same results nothing new is recorded.
+    assert await _scores() == 5
 
 
 async def test_pools_shared_between_requests(

@@ -67,6 +67,47 @@ class AttemptOut(Schema):
     duration_ms: int | None
 
 
+class AnalysisSummaryOut(Schema):
+    """One row of a listing's analysis history."""
+
+    id: uuid.UUID
+    created_at: datetime
+    trigger: str
+    source: str | None
+    schema_version: int
+    algorithm_version: str
+    price: str | None
+    flip_score: int | None
+    verdict: str | None
+    expected_profit: str | None
+    data_quality: str | None
+    is_current: bool
+
+
+class AnalysisRecordOut(Schema):
+    """A whole analysis: traceability fields and the five blocks, exactly as stored."""
+
+    id: uuid.UUID
+    listing_id: uuid.UUID
+    vinted_id: str | None
+    provider: str
+    url: str
+    source: str | None
+    created_at: datetime
+    schema_version: int
+    algorithm_version: str
+    trigger: str
+    input_hash: str
+    result_hash: str
+    inputs: dict[str, Any]
+    product: dict[str, Any]
+    visual: dict[str, Any]
+    economic: dict[str, Any]
+    market: dict[str, Any]
+    decision: dict[str, Any]
+    is_current: bool
+
+
 class ItemImageOut(Schema):
     position: int
     url: str

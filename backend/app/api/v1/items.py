@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -13,10 +14,12 @@ from app.api.deps import DB, CurrentUser
 from app.core.cache import NS_FEED, cache
 from app.core.errors import NotFoundError
 from app.core.rate_limit import RateLimit
-from app.db.models import AcquisitionAttempt, Listing, ListingSnapshot, Opportunity
+from app.db.models import AcquisitionAttempt, Analysis, Listing, ListingSnapshot, Opportunity
 from app.media.archive import schedule_archive
 from app.schemas.common import Page
 from app.schemas.items import (
+    AnalysisRecordOut,
+    AnalysisSummaryOut,
     AttemptOut,
     ItemDetailOut,
     ItemImageOut,
@@ -232,6 +235,58 @@ def image_out(img: Any) -> dict[str, Any]:
         "local_url": f"/api/v1/media/{img.id}" if img.local_path else None,
         "archive_status": img.archive_status,
     }
+
+
+@router.get("/{ref}/analyses", response_model=list[AnalysisSummaryOut])
+async def item_analyses(ref: str, user: CurrentUser, db: DB) -> list[AnalysisSummaryOut]:
+    """Every analysis that produced a different result for this listing, newest first."""
+    listing = await _listing(db, ref)
+    current = await db.scalar(select(Opportunity.analysis_id).where(Opportunity.listing_id == listing.id))
+    rows = (
+        (
+            await db.execute(
+                select(Analysis)
+                .where(Analysis.listing_id == listing.id)
+                .order_by(Analysis.created_at.desc(), Analysis.id)
+                .limit(500)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        AnalysisSummaryOut(
+            id=a.id,
+            created_at=a.created_at,
+            trigger=a.trigger,
+            source=a.source,
+            schema_version=a.schema_version,
+            algorithm_version=a.algorithm_version,
+            price=(a.economic or {}).get("listing_price"),
+            flip_score=(a.decision or {}).get("flip_score"),
+            verdict=(a.decision or {}).get("verdict"),
+            expected_profit=((a.economic or {}).get("scenarios") or {}).get("expected", {}).get("profit"),
+            data_quality=(a.market or {}).get("data_quality"),
+            is_current=a.id == current,
+        )
+        for a in rows
+    ]
+
+
+@router.get("/{ref}/analyses/{analysis_id}", response_model=AnalysisRecordOut)
+async def item_analysis(ref: str, analysis_id: uuid.UUID, user: CurrentUser, db: DB) -> AnalysisRecordOut:
+    """One stored analysis in full (the five blocks)."""
+    listing = await _listing(db, ref)
+    a = await db.get(Analysis, analysis_id)
+    if a is None or a.listing_id != listing.id:
+        raise NotFoundError("Analisi non trovata.")
+    current = await db.scalar(select(Opportunity.analysis_id).where(Opportunity.listing_id == listing.id))
+    return AnalysisRecordOut.model_validate(
+        {
+            **{c: getattr(a, c) for c in AnalysisRecordOut.model_fields if c != "is_current"},
+            "is_current": a.id == current,
+        }
+    )
 
 
 refresh_limit = RateLimit("item-refresh", per_minute=30)

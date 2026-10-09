@@ -20,6 +20,7 @@ from app.analytics.calibration import Calibration
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.db.models import (
+    Analysis,
     ExternalPrice,
     ExternalSearch,
     Listing,
@@ -37,6 +38,15 @@ from app.external.keys import model_key
 from app.identification.taxonomy import fold
 from app.ingestion.catalog import Catalog, load_catalog
 from app.ingestion.normalizer import title_tokens
+from app.opportunities.analysis_record import (
+    SCHEMA_VERSION,
+    build_blocks,
+    classify_trigger,
+    inputs_hash,
+    jsonable,
+    listing_inputs,
+    result_hash,
+)
 from app.opportunities.engine import (
     SAME_ITEM_ANOMALY,
     AnalysisResult,
@@ -121,6 +131,11 @@ class AnalysisOutcome:
     previous_price: Decimal | None
     result: AnalysisResult
     listing: Listing | None = None
+    # The permanent record this outcome corresponds to; ``analysis_created`` is False when the
+    # same inputs gave the same results again (the existing record is still the current one).
+    analysis_id: uuid.UUID | None = None
+    analysis_created: bool = False
+    trigger: str | None = None
 
 
 _SIZE_TOKEN = re.compile(r"^(?:x{0,4}[sl]|xx+|[2-5]\d)$")
@@ -660,6 +675,7 @@ class AnalysisPipeline:
         listing_ids: Sequence[uuid.UUID],
         now: datetime | None = None,
         mode: AcquisitionMode | str | None = None,
+        trigger: str | None = None,
     ) -> list[AnalysisOutcome]:
         """Analyse a batch of listings with a handful of queries instead of a dozen per listing.
 
@@ -727,7 +743,7 @@ class AnalysisPipeline:
                     ),
                 )
             )
-        outcomes = await self.persist_many(results, now, mode)
+        outcomes = await self.persist_many(results, now, mode, trigger)
         await self.record_demand(listings, catalog)
         return outcomes
 
@@ -739,11 +755,14 @@ class AnalysisPipeline:
         items: list[tuple[Listing, AnalysisResult]],
         now: datetime,
         mode: AcquisitionMode | str | None = None,
+        trigger: str | None = None,
     ) -> list[AnalysisOutcome]:
-        """Upsert opportunities, append score history and replace comparables, all in bulk.
+        """Upsert opportunities, record the analyses, append score history, replace comparables.
 
-        Every analysis is recorded permanently in the score history with its algorithm version,
-        the acquisition mode of the data and the analysis depth.
+        An analysis whose inputs, algorithm version and results equal the current one's adds
+        nothing (the current record stays); any other is stored for good in ``analyses`` with the
+        reason it ran, and in the score history with its algorithm version, the acquisition mode
+        of the data and the analysis depth.
         """
         version = self.settings.algorithm_version
         ids = [listing.id for listing, _ in items]
@@ -759,10 +778,46 @@ class AnalysisPipeline:
         }
         # Sorted by key: concurrent batches lock opportunity rows in the same order.
         ordered = sorted(items, key=lambda it: str(it[0].id))
-        rows = [
-            {"id": uuid.uuid4(), "created_at": now, **opportunity_values(listing, result, version, now, mode)}
-            for listing, result in ordered
-        ]
+        current = await self._current_analyses(ids)
+        rows: list[dict[str, Any]] = []
+        analysis_rows: list[dict[str, Any]] = []
+        analysis_info: dict[uuid.UUID, tuple[uuid.UUID, bool, str | None]] = {}
+        for listing, result in ordered:
+            values = opportunity_values(listing, result, version, now, mode)
+            inputs = listing_inputs(listing)
+            in_hash, out_hash = inputs_hash(inputs), result_hash(values)
+            prev = current.get(listing.id)
+            if prev is not None and (prev.input_hash, prev.result_hash, prev.algorithm_version) == (
+                in_hash,
+                out_hash,
+                version,
+            ):
+                analysis_id, created, why = prev.id, False, None
+            else:
+                analysis_id, created = uuid.uuid4(), True
+                why = classify_trigger(prev.inputs if prev is not None else None, inputs, trigger)
+                analysis_rows.append(
+                    {
+                        "id": analysis_id,
+                        "listing_id": listing.id,
+                        "vinted_id": listing.external_id if listing.provider == "vinted" else None,
+                        "provider": listing.provider,
+                        "url": listing.url,
+                        "source": str(mode or listing.acquisition_mode),
+                        "created_at": now,
+                        "schema_version": SCHEMA_VERSION,
+                        "algorithm_version": version,
+                        "trigger": why,
+                        "input_hash": in_hash,
+                        "result_hash": out_hash,
+                        "inputs": jsonable(inputs),
+                        **build_blocks(listing, result, values),
+                    }
+                )
+            analysis_info[listing.id] = (analysis_id, created, why)
+            rows.append({"id": uuid.uuid4(), "created_at": now, **values, "analysis_id": analysis_id})
+        if analysis_rows:
+            await self.session.execute(Analysis.__table__.insert(), analysis_rows)
         # One single-row statement run with many parameter sets ("insertmanyvalues"): compiled
         # once and cached, where a 200-row VALUES clause took ~0.5 s just to compile.
         table = Opportunity.__table__
@@ -773,28 +828,31 @@ class AnalysisPipeline:
         ).returning(table.c.id, table.c.listing_id)
         opp_ids = {r.listing_id: r.id for r in (await self.session.execute(stmt, rows)).all()}
 
-        # Core (not ORM) executemany: no per-row ORM bookkeeping on the hot path.
-        await self.session.execute(
-            OpportunityScore.__table__.insert(),
-            [
-                {
-                    "opportunity_id": opp_ids[listing.id],
-                    "algorithm_version": version,
-                    "acquisition_mode": str(mode or listing.acquisition_mode),
-                    "analysis_depth": analysis_depth(listing),
-                    "data_quality": result.data_quality,
-                    "listing_price": listing.price,
-                    "flip_score": result.flip.score,
-                    "confidence_score": result.confidence.score,
-                    "risk_score": result.risk.score,
-                    "components": result.flip.components,
-                    "penalties": result.flip.penalties,
-                    "expected_roi": result.expected_roi,
-                    "computed_at": now,
-                }
-                for listing, result in ordered
-            ],
-        )
+        # Core (not ORM) executemany: no per-row ORM bookkeeping on the hot path. One score row per
+        # *new* analysis: an identical re-run adds nothing.
+        recorded = [(listing, result) for listing, result in ordered if analysis_info[listing.id][1]]
+        if recorded:
+            await self.session.execute(
+                OpportunityScore.__table__.insert(),
+                [
+                    {
+                        "opportunity_id": opp_ids[listing.id],
+                        "algorithm_version": version,
+                        "acquisition_mode": str(mode or listing.acquisition_mode),
+                        "analysis_depth": analysis_depth(listing),
+                        "data_quality": result.data_quality,
+                        "listing_price": listing.price,
+                        "flip_score": result.flip.score,
+                        "confidence_score": result.confidence.score,
+                        "risk_score": result.risk.score,
+                        "components": result.flip.components,
+                        "penalties": result.flip.penalties,
+                        "expected_roi": result.expected_roi,
+                        "computed_at": now,
+                    }
+                    for listing, result in recorded
+                ],
+            )
         await self.session.execute(delete(MarketComparable).where(MarketComparable.listing_id.in_(ids)))
         records = [
             (
@@ -825,9 +883,28 @@ class AnalysisPipeline:
                 previous_price=previous[listing.id].listing_price if listing.id in previous else None,
                 result=result,
                 listing=listing,
+                analysis_id=analysis_info[listing.id][0],
+                analysis_created=analysis_info[listing.id][1],
+                trigger=analysis_info[listing.id][2],
             )
             for listing, result in items
         ]
+
+    async def _current_analyses(self, listing_ids: list[uuid.UUID]) -> dict[uuid.UUID, Any]:
+        """The analysis each listing's opportunity points at (what the next one is compared to)."""
+        rows = await self.session.execute(
+            select(
+                Opportunity.listing_id,
+                Analysis.id,
+                Analysis.input_hash,
+                Analysis.result_hash,
+                Analysis.algorithm_version,
+                Analysis.inputs,
+            )
+            .join(Analysis, Analysis.id == Opportunity.analysis_id)
+            .where(Opportunity.listing_id.in_(listing_ids))
+        )
+        return {r.listing_id: r for r in rows}
 
     async def _copy_comparables(self, records: list[tuple[Any, ...]]) -> None:
         """Bulk-load comparables with PostgreSQL COPY (much faster than INSERT for thousands of rows).

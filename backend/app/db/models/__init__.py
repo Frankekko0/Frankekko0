@@ -5,7 +5,7 @@ from app.db.models.catalog import Brand, Category, Product
 from app.db.models.listing import Listing, ListingImage, ListingPriceHistory, ListingSnapshot
 from app.db.models.market import MarketComparable, MarketStatistic
 from app.db.models.monitoring import Alert, AlertDelivery, Watchlist
-from app.db.models.opportunity import Opportunity, OpportunityScore
+from app.db.models.opportunity import Analysis, Opportunity, OpportunityScore
 from app.db.models.portfolio import Favorite, InventoryItem, MarketplaceAction, Purchase, Sale, UserAffinity
 from app.db.models.pricing_data import ExternalPrice, ExternalSearch, ModelPriceStat, SoldSale
 from app.db.models.seller import Seller
@@ -16,6 +16,7 @@ __all__ = [
     "AcquisitionAttempt",
     "Alert",
     "AlertDelivery",
+    "Analysis",
     "AnalysisJob",
     "ApiKey",
     "Brand",

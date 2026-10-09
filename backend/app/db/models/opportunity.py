@@ -8,12 +8,14 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     ForeignKey,
     Index,
     Integer,
     Numeric,
     SmallInteger,
     String,
+    Text,
     func,
     text,
 )
@@ -24,6 +26,47 @@ from app.db.base import Base, Ratio, utcnow
 
 if TYPE_CHECKING:
     from app.db.models.listing import Listing
+
+
+class Analysis(Base):
+    """One analysis of a listing, kept for good (see ``app.opportunities.analysis_record``).
+
+    Rows are never updated (a database trigger refuses it); a listing's current analysis is the
+    one its ``opportunities`` row points at.
+    """
+
+    __tablename__ = "analyses"
+    __table_args__ = (
+        CheckConstraint("btrim(url) <> ''", name="url_not_empty"),
+        CheckConstraint(
+            "trigger IN ('new', 'price_change', 'photos', 'status_change', 'data_changed', 'recompute',"
+            " 'manual', 'migrated')",
+            name="trigger_valid",
+        ),
+        Index("ix_analyses_listing_created", "listing_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    listing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"))
+    # Traceability: the internal id above, the Vinted id, the original URL, the source of the data
+    # (acquisition mode), when, and which version of the schema and of the algorithm.
+    vinted_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    url: Mapped[str] = mapped_column(Text)
+    source: Mapped[str | None] = mapped_column(String(24))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
+    schema_version: Mapped[int] = mapped_column(SmallInteger)
+    algorithm_version: Mapped[str] = mapped_column(String(32))
+    trigger: Mapped[str] = mapped_column(String(16))
+    input_hash: Mapped[str] = mapped_column(String(64))
+    result_hash: Mapped[str] = mapped_column(String(64))
+    inputs: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+    product: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    visual: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    economic: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    market: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    decision: Mapped[dict[str, Any]] = mapped_column(JSONB)
 
 
 class Opportunity(Base):
@@ -41,6 +84,10 @@ class Opportunity(Base):
     listing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), unique=True)
     product_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("products.id", ondelete="SET NULL"))
     algorithm_version: Mapped[str] = mapped_column(String(32))
+    # The permanent record of this analysis (see ``Analysis``).
+    analysis_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("analyses.id", ondelete="SET NULL"), index=True
+    )
     # How the analysed data was acquired and how deep the analysis is: "quick" for a card seen
     # while scrolling (title, price, one photo), "full" for an item page or a provider listing.
     acquisition_mode: Mapped[str | None] = mapped_column(String(24))
