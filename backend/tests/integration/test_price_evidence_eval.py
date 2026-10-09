@@ -86,6 +86,11 @@ async def test_daily_calibration_stores_the_gate(session, make_listing) -> None:
     assert "non ancora misurabili" in gate["note"] and gate["use_new_cap"] is False
     assert set(gate["with_external"]) >= {"mae_eur", "mape", "median_ape", "bias", "in_range"}
     assert metrics["evidence"]["variant"] == gate["variant"]
+    # The report says what it measured against: last asking prices, not prices really paid.
+    basis = metrics["basis"]
+    assert basis["market_sales"] == "last_asking_price" and basis["own_resales"] == "price_received"
+    assert basis["n_market_sales"] == metrics["learn_sales"] + metrics["test_sales"]
+    assert basis["n_own_resales"] == metrics["own_resales"] == 0
     cal = (
         await session.execute(select(SystemState.value).where(SystemState.key == "price_calibration"))
     ).scalar()

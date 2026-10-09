@@ -135,6 +135,15 @@ def evaluate(
         "learn_sales": len(learn),
         "test_sales": len(test),
         "own_resales": len(own),
+        # What the estimates are compared with. Vinted publishes no sale prices: for market sales
+        # it is the last asking price seen while the item was on sale (typically above the price
+        # really paid); only the user's own resales are real prices.
+        "basis": {
+            "market_sales": "last_asking_price",
+            "n_market_sales": len(learn) + len(test),
+            "own_resales": "price_received",
+            "n_own_resales": len(own),
+        },
         "shift_applied": use_shift,
         # Same newer half of the sales, estimated by the previous and by the current version.
         "before": describe_errors(_pairs_raw(before_test)),

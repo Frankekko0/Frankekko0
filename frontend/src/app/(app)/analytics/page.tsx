@@ -266,7 +266,7 @@ function AccuracyCard() {
               </tbody>
             </table>
             <p className="mt-3 text-xs text-fg-3">
-              Learned on {m.learn_sales} older sales{m.own_resales ? ` and ${m.own_resales} of your resales` : ""}. Bias &gt; 0 means estimates above the realized price.
+              Learned on {m.learn_sales} older sales{m.own_resales ? ` and ${m.own_resales} of your resales` : ""}. Errors are measured against the last asking price seen on each sold listing (Vinted publishes no sale prices, and items usually sell for less){m.own_resales ? "; your own resales use the price you actually received" : ""}. Bias &gt; 0 means estimates above that price.
             </p>
           </TableScroll>
         )}

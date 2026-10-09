@@ -41,7 +41,7 @@ Parser Vinted per ID (niente foto profilo/suggeriti) · verdetto rapido locale `
 | 1 Core data | **fatta** | PIANO Fase 2 (osservazioni, `last_verified_at`, `to_verify`, `analyses`, dedup, CSV) + `marketplace/capabilities.py` |
 | conformità §2 (estensione solo su ciò che l'utente vede) | da fare | PIANO Fase 3: rimuovere scanner/letture automatiche/lettura server/clic programmatici (Q1, già deciso) |
 | 2 Financial engine | **fatta** | PIANO 4.1: `profit/evaluation.py` (stati dei costi, ripristino, riserva, margine, pareggio, capitale), `/profit/calculate`, blocco economico delle analisi; test 26/44/18/69,23%, casi E e H |
-| 3 Market intelligence | parziale | PIANO 4.2–4.4: `data_quality` esiste; D1 (tipi di prezzo fusi), taglie, test G |
+| 3 Market intelligence | **fatta** (perimetro v3) | motore e provenienza già completi; aggiunti test G end-to-end e dichiarazione della base di misura (D1). Taglie per marca e titoli/sinonimi: PIANO 4.3–4.4, nella fase di dossier |
 | 4/4b Vision e dossier | da fare | PIANO Fase 5; serve Q8 (modello + tetto di spesa) e foto dal browser (Q3-B) |
 | 5/6 Decisione e agente | da fare | PIANO Fase 6 + loop agente con tool, budget, trace (nuovo in v3) |
 | 7 Dashboard | da fare | PIANO Fase 8 (serve Q5, lingua) |

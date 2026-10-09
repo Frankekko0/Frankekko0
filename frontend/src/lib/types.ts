@@ -1117,6 +1117,13 @@ export interface Accuracy {
     learn_sales: number;
     test_sales: number;
     own_resales: number;
+    /** What the errors are measured against (Vinted publishes no sale prices). */
+    basis?: {
+      market_sales: "last_asking_price";
+      n_market_sales: number;
+      own_resales: "price_received";
+      n_own_resales: number;
+    };
     before: ErrorStats;
     after: ErrorStats;
     after_by_confidence: Record<"low" | "mid" | "high", ErrorStats>;

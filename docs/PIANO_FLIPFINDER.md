@@ -549,6 +549,7 @@ Q1–Q10 e C1–C5 (§2) · formula del Flip Score da farti vedere prima di fiss
 
 | Data | Cosa |
 |---|---|
+| 2026-10-09 | Prompt v3, Fase 3 (mercato): test del caso G su tutta la catena (oggetto raro: nessun prezzo, profitto, offerta, avviso né numero nel verdetto rapido dell'estensione) e base di misura dichiarata nel report di accuratezza (D1: errore contro ultimo prezzo richiesto, non prezzo incassato). 698 test backend |
 | 2026-10-09 | Prompt v3, Fase 2 = blocco 4.1 del piano: `profit/evaluation.py` (stati confermato/stimato/sconosciuto, ripristino, riserva imprevisti, margine sulla vendita, prezzo di pareggio, capitale immobilizzato), `/profit/calculate` esteso, valutazione nel blocco economico delle analisi, calcolatore "What-if" aggiornato. Prova numerica 20+4+2=26 · 44 · 18 · 69,23 % e casi E/H verdi (693 test backend) |
 | 2026-10-09 | Prompt v3 ("FlipFinder AI"): letto contro questo piano, nessuna decisione dell'utente riaperta. Mappa delle fasi v3 sulle fasi del piano in `ARCHITECTURE.md`; decisioni e limiti propri di v3 in `DECISIONS.md` e `LIMITATIONS.md`; aggiunto `marketplace/capabilities.py` (cosa fornisce ogni modalità di cattura, verificato contro il parser) |
 | 2026-10-09 | Fase 2 (blocchi 2.1–2.9): provenienza delle date, osservazioni tipizzate, foto nel tempo, «da verificare», venditori minimi con chiave protetta, analisi immutabili a blocchi, tabella dei prezzi venduti, CSV, migrazioni 0010–0016 provate anche su 30.000 annunci |
