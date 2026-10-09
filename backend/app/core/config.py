@@ -138,6 +138,9 @@ class Settings(BaseSettings):
     ai_model: str = "claude-opus-5-5"
     ai_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     ai_vision_enabled: bool = True
+    # What a photo analysis is assumed to cost in euros for the value-of-information check (model call plus
+    # the wait). An assumption, not a measurement: see docs/DEPENDENCIES.md.
+    vision_voi_cost_eur: float = Field(default=0.5, ge=0, le=20)
     # Local OCR of labels (RapidOCR, optional dependency): free, offline, no key needed.
     ocr_enabled: bool = True
     ai_auto_analyze_min_flip_score: float = 80.0

@@ -24,6 +24,27 @@ VISION_HIGH_TOP = 3
 _STEP_SECONDS = 0.001
 
 
+PHOTO_ONLY = {"photos_checked", "label"}
+
+
+def voi_says(result: Any) -> bool | None:
+    """The value-of-information verdict of the analysis (None when the analysis carries none).
+
+    A photo analysis is paid for only where it can change the decision: never on a clear PASS, and on the
+    cases at the boundary. A Buy whose only unmet Strong-buy requirements are the photo ones is also worth
+    it: the check is what could make it a Strong buy."""
+    decision = getattr(result, "decision", None)
+    block = getattr(decision, "intelligence", None) or {}
+    voi = block.get("voi")
+    if not voi:
+        return None
+    if voi.get("worth_it"):
+        return True
+    unmet = {r.code for r in getattr(decision, "strong_buy_requirements", []) if not r.met}
+    verdict = getattr(getattr(decision, "verdict", None), "value", None)
+    return verdict == "BUY" and bool(unmet) and unmet <= PHOTO_ONLY
+
+
 def worth_vision(outcome: Any, after_vision: bool = False) -> bool:
     """A listing whose photos are worth a check: promising, all photos uploaded, never checked or changed."""
     listing, r = outcome.listing, outcome.result
@@ -34,7 +55,10 @@ def worth_vision(outcome: Any, after_vision: bool = False) -> bool:
     gallery = [i for i in listing.images if getattr(i, "removed_at", None) is None]
     has_local_photos = bool(gallery) and all(getattr(i, "local_path", None) for i in gallery)
     vision_done = bool((listing.identification or {}).get("vision"))
-    worth_checking = r.flip.score >= VISION_MIN_FLIP or (r.risk_adjusted_profit or 0) > 0
+    voi = voi_says(r)
+    worth_checking = (
+        voi if voi is not None else (r.flip.score >= VISION_MIN_FLIP or (r.risk_adjusted_profit or 0) > 0)
+    )
     trigger = getattr(outcome, "trigger", None)
     # Photos are checked once; checked again only when the change touches them (a price change
     # does not: see ``app.agent.stages``).

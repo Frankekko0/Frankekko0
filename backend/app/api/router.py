@@ -14,6 +14,7 @@ from app.api.v1 import (
     plan,
     portfolio,
     pricing,
+    selling,
     settings,
     system,
 )
@@ -34,6 +35,7 @@ for module in (
     portfolio,
     plan,
     pricing,
+    selling,
     settings,
     analytics,
     agent,

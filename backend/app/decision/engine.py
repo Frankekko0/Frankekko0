@@ -82,6 +82,9 @@ class DecisionConfig:
     strong_min_comparables: int = 8
     strong_min_market_confidence: int = 60
     strong_min_identification: int = 70
+    # Downside (Monte Carlo): the chance of losing money. It cannot be small: an item that is counterfeit
+    # (up to ~15% even when "probably authentic") or comes back already costs the purchase.
+    strong_max_p_loss: float = 0.30
     # BUY
     buy_flip: int = 65
     buy_confidence: int = 50
@@ -99,6 +102,7 @@ class DecisionConfig:
     min_confidence_to_act: int = 40
     brand_at_risk: float = 0.3
     high_risk: int = 75
+    high_seller_risk: int = 70  # a scam-risk seller: no purchase whatever the margin
 
 
 DEFAULT_CONFIG = DecisionConfig()
@@ -147,6 +151,12 @@ class DecisionInput:
     missing_info: tuple[MissingInfo, ...] = ()
     risk_adjusted_profit: float | None = None
     offer_action: RecommendedAction | None = None
+    # Monte Carlo (None: not simulated, which a Strong buy does not accept): chance of a loss, mean profit
+    # after the risks, and the unfavourable scenario (P10, shown, not a requirement). Seller scam risk.
+    p_loss: float | None = None
+    profit_mean: float | None = None
+    profit_p10: float | None = None
+    seller_risk_score: int = 0
 
 
 @dataclass(frozen=True)
@@ -189,6 +199,8 @@ class Decision:
     action: RecommendedAction = RecommendedAction.WATCH
     candidate: DecisionVerdict = DecisionVerdict.PASS
     rules_version: str = RULES_VERSION
+    # Distribution of the profit, pre-mortem, value of information, seller risk (attached by the analysis).
+    intelligence: dict[str, Any] | None = None
 
     @property
     def legacy_verdict(self) -> Verdict:
@@ -210,6 +222,7 @@ class Decision:
             "rank_value": round(self.rank_value, 2),
             "candidate": self.candidate.value,
             "rules_version": self.rules_version,
+            "intelligence": self.intelligence,
         }
 
 
@@ -278,6 +291,14 @@ def strong_buy_requirements(inp: DecisionInput, cfg: DecisionConfig = DEFAULT_CO
             "photos", f"Almeno {cfg.strong_min_photos} foto", inp.photo_count >= cfg.strong_min_photos
         ),
         Requirement("authenticity", "Autenticità non a rischio per questa marca", brand_ok),
+        Requirement(
+            "downside",
+            f"Probabilità di perdita al massimo {cfg.strong_max_p_loss:.0%} e profitto medio positivo dopo i rischi",
+            inp.p_loss is not None
+            and inp.p_loss <= cfg.strong_max_p_loss
+            and inp.profit_mean is not None
+            and inp.profit_mean > 0,
+        ),
         Requirement("available", "Annuncio disponibile", inp.status == "active"),
     ]
 
@@ -374,6 +395,12 @@ def decide(inp: DecisionInput, cfg: DecisionConfig = DEFAULT_CONFIG) -> Decision
             "Rischio contraffazione elevato: non compensabile da un buon margine",
             DecisionVerdict.PASS,
             inp.authenticity_verdict == "counterfeit_risk" or inp.suspicious_terms,
+        ),
+        (
+            "seller_scam_risk",
+            f"Venditore ad alto rischio truffa ({inp.seller_risk_score}/100): non si compra",
+            DecisionVerdict.PASS,
+            inp.seller_risk_score >= cfg.high_seller_risk,
         ),
         (
             "very_high_risk",

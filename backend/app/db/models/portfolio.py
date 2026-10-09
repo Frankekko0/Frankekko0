@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
@@ -99,6 +100,15 @@ class InventoryItem(UUIDPk, Timestamped, Base):
     listed_price: Mapped[Decimal | None] = mapped_column()
     estimated_value: Mapped[Decimal | None] = mapped_column()
     listed_at: Mapped[datetime | None] = mapped_column()
+    # The selling cycle (see app.selling.stages): to_list, listed, sold, returned, unsold, ...
+    stage: Mapped[str] = mapped_column(String(16), default="to_list", server_default="to_list")
+    received_at: Mapped[datetime | None] = mapped_column()
+    min_price: Mapped[Decimal | None] = mapped_column()
+    initial_price: Mapped[Decimal | None] = mapped_column()
+    price_history: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
+    views: Mapped[int | None] = mapped_column()
+    favourites: Mapped[int | None] = mapped_column()
+    listing_url: Mapped[str | None] = mapped_column(Text)
 
     purchase: Mapped[Purchase] = relationship(back_populates="inventory_item")
 

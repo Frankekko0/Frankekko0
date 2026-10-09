@@ -127,6 +127,35 @@ export interface DecisionInfo {
   rank_value: number;
   candidate: DecisionVerdict;
   rules_version: string;
+  intelligence?: Intelligence | null;
+}
+
+/** Distribution of the profit, pre-mortem, value of information and seller risk of one analysis. */
+export interface Intelligence {
+  distribution: {
+    n: number;
+    mean: number;
+    p10: number;
+    p50: number;
+    p90: number;
+    p_loss: number;
+    expected_days: number | null;
+    p_unsold_at_horizon: number;
+  } | null;
+  premortem?: { required: boolean; modes: FailureMode[] };
+  voi?: { voi: number; resolvable: number; cost: number; worth_it: boolean; reason: string };
+  seller_risk: { score: number; level: "low" | "medium" | "high"; factors: { label: string; impact: number }[] };
+}
+
+export interface FailureMode {
+  code: string;
+  title: string;
+  probability: number;
+  loss: number;
+  expected_loss: number;
+  evidence: string[];
+  check: "verified_ok" | "contradicted" | "unverifiable";
+  how: string;
 }
 
 export type AuthVerdict = "probably_authentic" | "uncertain" | "counterfeit_risk" | "not_verifiable";

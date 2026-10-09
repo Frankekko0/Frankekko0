@@ -2,6 +2,14 @@
 
 from app.db.models.acquisition import AcquisitionAttempt
 from app.db.models.agent import AgentRun, AiUsage, Event, VisionCache
+from app.db.models.autonomy import (
+    AutonomyAction,
+    AutonomySettings,
+    BusinessGoals,
+    Expense,
+    Experiment,
+    PredictionOutcome,
+)
 from app.db.models.catalog import Brand, Category, Product
 from app.db.models.listing import Listing, ListingImage, ListingPriceHistory, ListingSnapshot
 from app.db.models.market import MarketComparable, MarketStatistic
@@ -22,9 +30,14 @@ __all__ = [
     "Analysis",
     "AnalysisJob",
     "ApiKey",
+    "AutonomyAction",
+    "AutonomySettings",
     "Brand",
+    "BusinessGoals",
     "Category",
     "Event",
+    "Expense",
+    "Experiment",
     "ExternalPrice",
     "ExternalSearch",
     "Favorite",
@@ -40,6 +53,7 @@ __all__ = [
     "NotificationSettings",
     "Opportunity",
     "OpportunityScore",
+    "PredictionOutcome",
     "Product",
     "Purchase",
     "PushSubscription",

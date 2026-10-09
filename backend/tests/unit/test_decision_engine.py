@@ -59,6 +59,9 @@ def strong(**overrides: object) -> DecisionInput:
         discount_vs_market=0.5,
         demand_level="high",
         risk_adjusted_profit=11.0,
+        p_loss=0.12,
+        profit_mean=8.0,
+        profit_p10=-18.0,
     )
     base.update(overrides)
     return DecisionInput(**base)  # type: ignore[arg-type]
@@ -89,6 +92,9 @@ def test_case_a_strong_buy_only_when_everything_is_verified() -> None:
         ({"photo_count": 2}, "photos"),
         ({"identification_confidence": 55}, "model"),
         ({"conservative_profit": D("-1")}, "conservative_profit"),
+        ({"p_loss": None}, "downside"),  # never simulated: a Strong buy does not accept that
+        ({"p_loss": 0.35}, "downside"),
+        ({"profit_mean": -1.0}, "downside"),  # after the risks the deal loses money on average
     ],
 )
 def test_one_missing_requirement_is_enough_to_stop_a_strong_buy(gap: dict, requirement: str) -> None:
@@ -122,6 +128,13 @@ def test_a_risky_brand_without_proof_is_never_bought() -> None:
 
 def test_very_high_risk_is_a_veto() -> None:
     assert decide(strong(risk_score=80)).verdict == V.PASS
+
+
+def test_case_l_a_scam_risk_seller_is_never_bought_whatever_the_margin() -> None:
+    d = decide(strong(seller_risk_score=85, flip_score=97, expected_roi=D("3.0")))
+    assert d.verdict == V.PASS
+    assert any(v.code == "seller_scam_risk" and v.binding for v in d.vetoes)
+    assert decide(strong(seller_risk_score=40)).verdict == V.STRONG_BUY  # a middling profile is not a veto
 
 
 def test_a_score_of_95_with_confidence_30_is_not_acted_on() -> None:

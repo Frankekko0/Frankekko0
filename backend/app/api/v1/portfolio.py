@@ -23,6 +23,7 @@ from app.market.sold_sales import sync_own_records
 from app.profit.calculator import acquisition_cost
 from app.schemas.common import Message
 from app.schemas.portfolio import FlipOut, PurchaseIn, PurchaseUpdate, SaleIn, SaleOut
+from app.selling.service import record_outcome
 
 log = get_logger(__name__)
 router = APIRouter(tags=["portfolio"])
@@ -212,8 +213,14 @@ async def update_purchase(purchase_id: uuid.UUID, body: PurchaseUpdate, user: Cu
     if inv is not None and p.sale is None:
         if body.inventory_status:
             inv.status = body.inventory_status
-            if body.inventory_status == InventoryStatus.LISTED.value and inv.listed_at is None:
-                inv.listed_at = datetime.now(UTC)
+            if body.inventory_status == InventoryStatus.LISTED.value:
+                inv.stage = "listed"
+                if inv.listed_at is None:
+                    inv.listed_at = datetime.now(UTC)
+            elif body.inventory_status == InventoryStatus.RETURNED.value:
+                inv.stage = "returned"
+            elif inv.stage in ("listed", "returned"):
+                inv.stage = "to_list"
         if body.listed_price is not None:
             inv.listed_price = body.listed_price
         if body.expected_sale_price is not None:
@@ -272,6 +279,9 @@ async def create_sale(body: SaleIn, user: CurrentUser, db: DB) -> FlipOut:
     db.add(sale)
     if p.inventory_item is not None:
         p.inventory_item.status = InventoryStatus.SOLD.value
+        p.inventory_item.stage = "sold"
+    await db.flush()
+    await record_outcome(db, sale, p)  # forecast against what happened (closed-loop learning)
     if p.listing_id is not None:
         fav = (
             await db.execute(
@@ -307,6 +317,7 @@ async def delete_sale(sale_id: uuid.UUID, user: CurrentUser, db: DB) -> Message:
     await db.delete(sale)
     if purchase is not None and purchase.inventory_item is not None:
         purchase.inventory_item.status = InventoryStatus.IN_STOCK.value
+        purchase.inventory_item.stage = "listed" if purchase.inventory_item.listed_at else "to_list"
     await db.commit()
     await _refresh_learning(db, user.id)
     # The resale row went with the sale; the purchase counts again as a purchase.

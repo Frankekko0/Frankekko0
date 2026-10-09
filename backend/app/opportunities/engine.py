@@ -16,13 +16,18 @@ from typing import Any
 
 from app.ai.deal_analyst import DealAnalysis, DealContext, RuleBasedDealAnalyst, ScenarioSummary
 from app.analysis.dossier import DossierFacts, build_dossier
+from app.analysis.text import analyze_text
 from app.analytics.calibration import Calibration
 from app.authenticity.assess import AuthInput, assess, photo_evidence
+from app.core.config import get_settings
 from app.decision.completeness import Completeness, CompletenessInput, compute_completeness
 from app.decision.engine import Decision, DecisionInput, decide
 from app.demand.analysis import DemandResult, VelocityResult, analyze_demand, analyze_velocity
 from app.demand.time_online import time_online
 from app.domain.enums import Condition, DealTier, RecommendedAction
+from app.intelligence import assess as intel
+from app.intelligence import premortem as pm
+from app.intelligence.seller_risk import seller_risk_score
 from app.opportunities import insights as ins
 from app.pricing.comparables import ItemProfile, ScoredComparable, select_comparables
 from app.pricing.comparison import market_comparison
@@ -40,7 +45,14 @@ from app.pricing.market_value import (
     _euros,
     estimate_market_value,
 )
-from app.profit.calculator import CostProfile, Scenario, acquisition_cost, max_buy_price, profit_scenarios
+from app.profit.calculator import (
+    CostProfile,
+    Scenario,
+    acquisition_cost,
+    max_buy_price,
+    profit_scenarios,
+    sale_revenue,
+)
 from app.profit.evaluation import evaluate_deal
 from app.profit.offers import OfferPlan, build_offer_plan
 from app.scoring.confidence import ConfidenceInput, ConfidenceResult, compute_confidence
@@ -375,6 +387,36 @@ def run_analysis(
         economics = {**evaluation.as_dict(), "basis": "default_cost_profile"}
         unknown_costs = evaluation.unknown_costs
     conservative = next((s for s in scenarios if s.name == "conservative"), None)
+    # ---- advanced assessment: the distribution of the profit and the seller's scam risk -----------
+    by_name = {sc.name: sc for sc in scenarios}
+    assessment = None
+    if market.has_value and {"conservative", "expected", "optimistic"} <= set(by_name):
+        assessment = intel.AssessInputs(
+            seed_key=f"{subject.profile.title}|{price}",
+            cost=float(acq.total),
+            resale_low=float(by_name["conservative"].sale_price),
+            resale_mid=float(by_name["expected"].sale_price),
+            resale_high=float(by_name["optimistic"].sale_price),
+            net_of_price=lambda p: float(sale_revenue(Decimal(str(round(p, 2))), costs).net),
+            p_authentic=auth.p_authentic,
+            estimated_days=velocity.estimated_days,
+            return_cost=float(costs.shipping_out + costs.shipping_in),
+            photos_analysed=vision.get("analyzer") not in (None, "heuristic"),
+            condition_known=subject.profile.condition != Condition.UNKNOWN,
+        )
+    dist = intel.distribution(assessment) if assessment is not None else None
+    text = analyze_text(subject.profile.title, subject.description)
+    off_platform = any(
+        r.get("code") in ("off_platform_contact", "off_platform_payment") for r in text.risk_phrases
+    )
+    s_risk = seller_risk_score(
+        reliability=seller.score,
+        review_count=subject.seller.review_count if subject.seller else 0,
+        reused_photos=bool(subject.identification.get("photos_reused_by_other_seller")),
+        off_platform=off_platform,
+        price_too_good=discount is not None and float(discount) >= 0.6,
+        anomalies=len(subject.seller.anomalies) if subject.seller else 0,
+    )
     decision = decide(
         DecisionInput(
             price=price,
@@ -412,6 +454,10 @@ def run_analysis(
             missing_info=tuple(completeness.missing),
             risk_adjusted_profit=rap,
             offer_action=offer.action,
+            p_loss=dist.p_loss if dist else None,
+            profit_mean=dist.mean if dist else None,
+            profit_p10=dist.p10 if dist else None,
+            seller_risk_score=s_risk.score,
         )
     )
     ctx = build_deal_context(
@@ -514,6 +560,48 @@ def run_analysis(
             favourites=subject.favourite_count,
         )
     )
+    # Pre-mortem (above a cost threshold) and value of information, now that the dossier has found the
+    # contradictions; they explain the decision, they never change it.
+    if assessment is not None and dist is not None:
+        modes = (
+            pm.premortem(
+                pm.PremortemFacts(
+                    cost=assessment.cost,
+                    resale_low=assessment.resale_low,
+                    resale_mid=assessment.resale_mid,
+                    p_authentic=assessment.p_authentic,
+                    p_sale_30d=float(p_sale["p"]) if p_sale["p"] is not None else 0.5,
+                    seller_risk=s_risk.score,
+                    comparables=market.n_used,
+                    sold_comparables=market.n_sold,
+                    photos_analysed=assessment.photos_analysed,
+                    label_seen=bool(quality_vision.get("has_label_photo")),
+                    unobserved_parts=tuple(vision.get("unobserved_parts") or ()),
+                    declared_defects=tuple(subject.defect_terms),
+                    contradictions=tuple(
+                        str(c.get("detail", "")) for c in (result.dossier or {}).get("contradictions", [])
+                    ),
+                    positive_auth_signals=tuple(vision.get("authenticity_positive_signals") or ()),
+                    shipping_out=float(costs.shipping_out),
+                    return_cost=assessment.return_cost,
+                )
+            )
+            if pm.required(assessment.cost)
+            else []
+        )
+        decision.intelligence = intel.intelligence_block(
+            dist,
+            intel.value_of_analysis(
+                assessment,
+                float(expected.result.net_profit) if expected else 0.0,
+                get_settings().vision_voi_cost_eur,
+            ),
+            modes,
+            s_risk.as_dict(),
+            pm.required(assessment.cost),
+        )
+    else:
+        decision.intelligence = {"distribution": None, "seller_risk": s_risk.as_dict()}
     if velocity.sample_size:
         days_basis = "sold"
     elif prior is not None and prior.avg_days_to_sale:
