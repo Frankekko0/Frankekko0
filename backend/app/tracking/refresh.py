@@ -16,9 +16,8 @@ def refresh_modes(listing: Listing) -> list[str]:
         return [AcquisitionMode.PROVIDER_SCAN.value]
     modes: list[str] = []
     if listing.provider == "vinted":
-        modes.append(AcquisitionMode.EXTENSION_REFRESH.value)
-        if settings.vinted_public_fetch_enabled:
-            modes.append(AcquisitionMode.PUBLIC_FETCH.value)
+        # Nothing reads Vinted on its own: the item is updated when the user opens it.
+        modes.append(AcquisitionMode.EXTENSION_ITEM.value)
         if settings.email_import_enabled:
             modes.append(AcquisitionMode.EMAIL.value)
     return modes

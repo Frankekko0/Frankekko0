@@ -12,7 +12,6 @@ from app.tracking.schedule import ScheduleInput, next_check_at
 # updated whenever they are seen again, and tracked only when the user asks.
 TRACKING_MODES = frozenset(
     {
-        AcquisitionMode.EXTENSION_DEEP,
         AcquisitionMode.LINK_IMPORT,
         AcquisitionMode.MANUAL_FORM,
         AcquisitionMode.BOOKMARKLET,

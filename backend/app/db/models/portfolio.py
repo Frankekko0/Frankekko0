@@ -125,9 +125,9 @@ class UserAffinity(Base):
 
 
 class MarketplaceAction(UUIDPk, Base):
-    """What happened on Vinted for a listing, in the user's own session: favourite added or
-    removed (by a click from FlipFinder, or as seen on the item page), checkout opened, purchase
-    completed with the price paid. Append-only: the latest row of a kind is the current state."""
+    """Legacy history of what the extension did on Vinted for a listing (favourite added or removed,
+    checkout opened, purchase completed). Nothing writes it any more: FlipFinder no longer clicks on
+    Vinted (decision Q1) and the user records a purchase by hand. Kept so the history is not lost."""
 
     __tablename__ = "marketplace_actions"
     __table_args__ = (Index("ix_marketplace_actions_lookup", "user_id", "listing_id", "kind", "created_at"),)

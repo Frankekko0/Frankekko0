@@ -1,7 +1,8 @@
 /*
  * FlipFinder for Vinted - pure logic shared by the service worker, the content script and the
- * live panel: options, the sync queue (dedupe by Vinted ID, retry with backoff), the pacing of
- * page reads, and the live ranking. No browser APIs: unit-tested in Node.
+ * live panel: options, the sync queue (dedupe by Vinted ID, retry with backoff) and the live
+ * ranking. No browser APIs: unit-tested in Node. The extension reads only the pages the user opens:
+ * there is no pacing of automatic reads because there are none.
  */
 (function (root, factory) {
   const api = factory();
@@ -27,14 +28,6 @@
     excludeFakeRisk: true,
     alertsVisual: true,
     alertsSound: false,
-    // Slow, optional reads of other pages (never on by default).
-    autoDeep: false,
-    autoDeepPerHour: 10,
-    slowRefresh: false,
-    // Automatic scanner of saved searches (opt-in, off by default, browser open).
-    scanEnabled: false,
-    scanIntervalMin: 15,
-    scanNotify: true,
   });
 
   const clampNum = (v, lo, hi, dflt) => {
@@ -59,12 +52,6 @@
       excludeFakeRisk: bool("excludeFakeRisk"),
       alertsVisual: bool("alertsVisual"),
       alertsSound: bool("alertsSound"),
-      autoDeep: bool("autoDeep"),
-      autoDeepPerHour: clampNum(src.autoDeepPerHour, 1, 20, DEFAULT_OPTIONS.autoDeepPerHour),
-      slowRefresh: bool("slowRefresh"),
-      scanEnabled: bool("scanEnabled"),
-      scanIntervalMin: Math.round(clampNum(src.scanIntervalMin, 10, 240, DEFAULT_OPTIONS.scanIntervalMin)),
-      scanNotify: bool("scanNotify"),
     };
   }
 
@@ -167,186 +154,6 @@
     return dropped;
   }
 
-  // ------------------------------------------------------------------ pacing of page reads
-  // Reads of other pages (deep analysis, status checks) are few and slow. On command they
-  // start right away (at most one every 4 s); automatic ones wait 30-60 s between reads and
-  // stop for 6 hours at the first sign of a refusal.
-  const PACING = Object.freeze({
-    manualGapMs: 4000,
-    autoGapMs: 30000,
-    refreshGapMs: 60000,
-    manualPerHour: 60,
-    backgroundPerHour: 20,
-    pauseMs: 6 * 3600 * 1000,
-  });
-
-  function emptyPacing() {
-    return { lastAt: 0, hourStart: 0, counts: { manual: 0, auto: 0, refresh: 0 }, pausedUntil: 0, pauseReason: "" };
-  }
-
-  function pacingCheck(state, kind, now, opts) {
-    const s = state || emptyPacing();
-    if (s.pausedUntil > now) return { ok: false, waitMs: s.pausedUntil - now, reason: "paused" };
-    const counts = now - s.hourStart >= 3600000 ? { manual: 0, auto: 0, refresh: 0 } : s.counts;
-    const gap = kind === "manual" ? PACING.manualGapMs : kind === "refresh" ? PACING.refreshGapMs : PACING.autoGapMs;
-    const since = now - s.lastAt;
-    if (since < gap) return { ok: false, waitMs: gap - since, reason: "gap" };
-    const hourLeft = Math.max(1000, 3600000 - (now - s.hourStart));
-    if (kind === "manual" && counts.manual >= PACING.manualPerHour) return { ok: false, waitMs: hourLeft, reason: "hourly" };
-    if (kind !== "manual") {
-      const cap = Math.min(PACING.backgroundPerHour, kind === "auto" ? (opts && opts.autoDeepPerHour) || 10 : PACING.backgroundPerHour);
-      const used = kind === "auto" ? counts.auto : counts.auto + counts.refresh;
-      if (used >= cap || counts.auto + counts.refresh >= PACING.backgroundPerHour) return { ok: false, waitMs: hourLeft, reason: "hourly" };
-    }
-    return { ok: true, waitMs: 0, reason: "" };
-  }
-
-  function pacingRecord(state, kind, now) {
-    const s = { ...emptyPacing(), ...(state || {}) };
-    if (now - s.hourStart >= 3600000) {
-      s.hourStart = now;
-      s.counts = { manual: 0, auto: 0, refresh: 0 };
-    } else {
-      s.counts = { ...s.counts };
-    }
-    s.counts[kind] = (s.counts[kind] || 0) + 1;
-    s.lastAt = now;
-    return s;
-  }
-
-  function pacingPause(state, now, reason) {
-    return { ...emptyPacing(), ...(state || {}), pausedUntil: now + PACING.pauseMs, pauseReason: reason };
-  }
-
-  const CHALLENGE_MARKERS = [
-    "datadome",
-    "captcha-delivery",
-    "geo.captcha",
-    "cf-chl",
-    "challenge-platform",
-    "just a moment",
-    "attention required",
-    "please enable js",
-    "verify you are human",
-  ];
-
-  /** A refusal (403/429) or an anti-bot page: never retried around, the reads pause instead. */
-  function isRefusal(status, body) {
-    if (status === 403 || status === 429) return true;
-    if (status !== 200 && status !== 503) return false;
-    const head = String(body || "").slice(0, 20000).toLowerCase();
-    return CHALLENGE_MARKERS.some((m) => head.includes(m));
-  }
-
-  // ------------------------------------------------------------------ automatic scanner
-  // Opt-in and cautious: it re-reads page 1 of the searches you saved (newest first), one search
-  // at a time, never more than one read a minute, 30 an hour and 300 a day, without cookies, and
-  // stops for 6 hours at the first refusal or anti-bot page. It never works around a block.
-  const SCAN = Object.freeze({
-    gapMs: 60 * 1000,
-    perHour: 30,
-    perDay: 300,
-    pauseMs: 6 * 3600 * 1000,
-    maxSearches: 10,
-    maxSeen: 600, // Vinted IDs remembered per search, to tell what is new
-    maxFailures: 3, // consecutive failed reads before a search is set aside
-    watchTtlMs: 24 * 3600 * 1000,
-  });
-
-  const SCAN_HOST = /^www\.vinted\.[a-z]{2,3}(\.[a-z]{2})?$/;
-  const SCAN_DROP_PARAMS = ["page", "time", "search_id", "referrer", "search_by_image_uuid"];
-
-  /**
-   * A Vinted search/category address -> the one that is scanned: https, a vinted.* host, a /catalog
-   * path, without paging or tracking parameters, newest first (so the first page holds what is
-   * new). Returns { url, key, name, origin } or { error }.
-   */
-  function normalizeSearchUrl(value) {
-    let u;
-    try {
-      u = new URL(String(value || "").trim());
-    } catch {
-      return { error: "Indirizzo non valido: copia l'indirizzo di una ricerca di Vinted." };
-    }
-    if (u.protocol !== "https:" || !SCAN_HOST.test(u.hostname)) return { error: "Serve l'indirizzo di una ricerca di Vinted (https://www.vinted.it/catalog?…)." };
-    if (!/^\/catalog(\/|$)/.test(u.pathname)) return { error: "Apri una ricerca o una categoria su Vinted e copia quell'indirizzo: deve contenere /catalog." };
-    for (const p of SCAN_DROP_PARAMS) u.searchParams.delete(p);
-    if (!u.searchParams.has("order")) u.searchParams.set("order", "newest_first");
-    u.searchParams.sort();
-    u.hash = "";
-    const text = (u.searchParams.get("search_text") || "").trim();
-    const last = decodeURIComponent(u.pathname.split("/").filter(Boolean).pop() || "").replace(/^\d+-/, "").replace(/-/g, " ");
-    const name = (text || (last !== "catalog" ? last : "") || "Ricerca").slice(0, 60);
-    return { url: u.href, key: u.hostname + u.pathname + "?" + u.searchParams.toString(), name, origin: u.origin };
-  }
-
-  function emptyScanPacing() {
-    return { lastAt: 0, hourStart: 0, hourCount: 0, dayStart: 0, dayCount: 0, pausedUntil: 0, pauseReason: "" };
-  }
-
-  /** Whether a read may start now; otherwise how long to wait and why. */
-  function scanPacingCheck(state, now) {
-    const s = { ...emptyScanPacing(), ...(state || {}) };
-    if (s.pausedUntil > now) return { ok: false, waitMs: s.pausedUntil - now, reason: "paused" };
-    if (now - s.lastAt < SCAN.gapMs) return { ok: false, waitMs: SCAN.gapMs - (now - s.lastAt), reason: "gap" };
-    const hour = now - s.hourStart >= 3600000 ? 0 : s.hourCount;
-    if (hour >= SCAN.perHour) return { ok: false, waitMs: s.hourStart + 3600000 - now, reason: "hourly" };
-    const day = now - s.dayStart >= 86400000 ? 0 : s.dayCount;
-    if (day >= SCAN.perDay) return { ok: false, waitMs: s.dayStart + 86400000 - now, reason: "daily" };
-    return { ok: true, waitMs: 0, reason: "" };
-  }
-
-  function scanPacingRecord(state, now) {
-    const s = { ...emptyScanPacing(), ...(state || {}) };
-    if (now - s.hourStart >= 3600000) {
-      s.hourStart = now;
-      s.hourCount = 0;
-    }
-    if (now - s.dayStart >= 86400000) {
-      s.dayStart = now;
-      s.dayCount = 0;
-    }
-    s.hourCount += 1;
-    s.dayCount += 1;
-    s.lastAt = now;
-    return s;
-  }
-
-  function scanPacingPause(state, now, reason) {
-    return { ...emptyScanPacing(), ...(state || {}), pausedUntil: now + SCAN.pauseMs, pauseReason: reason };
-  }
-
-  /** Minutes between two reads of the same search: the chosen one, stretched so that all the
-   * searches together stay within the hourly and daily caps. */
-  function scanIntervalMin(searchCount, chosenMin) {
-    const n = Math.max(1, searchCount);
-    return Math.max(Math.round(chosenMin) || 15, Math.ceil((n * 1440) / SCAN.perDay), Math.ceil((n * 60) / SCAN.perHour));
-  }
-
-  /** Searches due for a read, the longest unread first. A failing search waits longer each time. */
-  function scanPickDue(searches, now, chosenMin) {
-    const active = (searches || []).filter((s) => s.enabled !== false);
-    const every = scanIntervalMin(active.length, chosenMin) * 60000;
-    return active
-      .filter((s) => now - (s.lastScanAt || 0) >= every * (1 + Math.min(s.failures || 0, 3)))
-      .sort((a, b) => (a.lastScanAt || 0) - (b.lastScanAt || 0));
-  }
-
-  /** What a read shows against what was seen before: the IDs not seen yet, and the new memory. */
-  function scanDiff(seen, vids) {
-    const known = new Set(seen || []);
-    const fresh = [...new Set(vids)].filter((v) => !known.has(v));
-    return { fresh, seen: [...fresh, ...(seen || [])].slice(0, SCAN.maxSeen) };
-  }
-
-  /** Evaluations of items that were new in a scan and are worth an alert: best first, at most `max`. */
-  function scanHotPick(evals, watch, opts, max = 3) {
-    return (evals || [])
-      .filter((e) => watch && watch[e.vinted_id] && isHot(e, opts) && passesFilters(e, opts))
-      .sort(compare)
-      .slice(0, max);
-  }
-
   // ------------------------------------------------------------------ live ranking
   /** Filters of the live panel: budget (total cost), minimum net margin, brands, sizes, fakes. */
   function passesFilters(ev, f) {
@@ -414,7 +221,6 @@
 
   return {
     DEFAULT_OPTIONS,
-    PACING,
     normalizeOptions,
     normalizeAppUrl,
     splitList,
@@ -427,21 +233,6 @@
     queueSize,
     queueNextAt,
     queuePrune,
-    emptyPacing,
-    pacingCheck,
-    pacingRecord,
-    pacingPause,
-    SCAN,
-    normalizeSearchUrl,
-    emptyScanPacing,
-    scanPacingCheck,
-    scanPacingRecord,
-    scanPacingPause,
-    scanIntervalMin,
-    scanPickDue,
-    scanDiff,
-    scanHotPick,
-    isRefusal,
     passesFilters,
     rank,
     compare,

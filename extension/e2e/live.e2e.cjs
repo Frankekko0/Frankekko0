@@ -159,16 +159,19 @@ const SVG = (n) => `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="
   assert.equal(trackedBadge.includes("<svg"), !trackedBefore, "Traccia / Smetti di tracciare toggles");
   assert.ok(page.url().includes("/catalog"), "badge clicks never open the listing");
 
-  // 5) Deep analysis on command: one cookie-less read of that item page, then a full analysis.
-  const deepVid = await page.evaluate(() => [...document.querySelectorAll("[data-ff-vid]")][2].getAttribute("data-ff-vid"));
-  const deepBadge = page.locator(`[data-ff-vid="${deepVid}"] ff-badge`);
-  await deepBadge.locator(".b").click();
-  await deepBadge.locator('button[data-act="deep"]').click();
-  await page.waitForTimeout(6000);
-  const deepEval = await sw.evaluate(async (vid) => ((await chrome.storage.local.get("evalCache")).evalCache || {})[vid] || (self.evalMem || {})[vid], deepVid);
-  log("deep read requests:", JSON.stringify(reads), "→ depth:", deepEval && deepEval.analysis_depth);
-  assert.equal(reads.length, 1, "exactly one page read, on command");
-  assert.equal(deepEval.analysis_depth, "full");
+  // 5) Nothing reads other pages on its own: browsing the catalog and using the badge asked Vinted
+  //    for no item page. "Apri su Vinted" is a link the user clicks: it opens the listing in a tab.
+  const openVid = await page.evaluate(() => [...document.querySelectorAll("[data-ff-vid]")][2].getAttribute("data-ff-vid"));
+  const openBadge = page.locator(`[data-ff-vid="${openVid}"] ff-badge`);
+  await openBadge.locator(".b").click();
+  assert.equal(await openBadge.locator('button[data-act="deep"]').count(), 0, "no deep-read button");
+  assert.equal(reads.length, 0, "the extension requested no item page by itself");
+  const [opened] = await Promise.all([ctx.waitForEvent("page"), openBadge.locator('button[data-act="vinted"]').click()]);
+  await opened.waitForLoadState("domcontentloaded");
+  log("Apri su Vinted opened:", opened.url());
+  assert.match(opened.url(), /\/items\/\d+/);
+  await opened.close();
+  await page.bringToFront();
 
   // 6) Live panel (pinned to this tab), ranking + click to scroll.
   const tabId = await sw.evaluate(async () => Object.keys((await chrome.storage.session.get("tabs")).tabs || {}).map(Number)[0]);
@@ -213,7 +216,7 @@ const SVG = (n) => `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="
   assert.ok(detail.snapshots.some((s) => s.acquisition_mode === "extension_item"));
   const archive = await (await api.get(`/api/v1/items`, { params: { mode: "extension_card", page_size: 50 } })).json();
   log("archive extension_card records:", archive.total);
-  log("cookies sent to Vinted on deep reads:", reads.filter((r) => r.cookie).length, "document.cookie on page:", JSON.stringify(cookieless));
+  log("cookies sent to Vinted:", reads.filter((r) => r.cookie).length, "document.cookie on page:", JSON.stringify(cookieless));
   assert.equal(reads.filter((r) => r.cookie).length, 0);
   console.log("e2e OK");
   await ctx.close();

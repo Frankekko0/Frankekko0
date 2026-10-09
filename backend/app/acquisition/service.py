@@ -3,10 +3,9 @@
 Refresh fallback (best first), as listed by :func:`app.tracking.refresh.refresh_modes`:
 
 1. the configured provider (an authorized feed) re-reads the listing;
-2. the server reads the public page (opt-in, polite, stops at the first block);
-3. otherwise the listing stays due and the browser extension refreshes it when the user browses
-   Vinted (passively when the page is opened, or slowly in the background if enabled);
-4. notification emails confirm sales and price drops whenever they arrive.
+2. otherwise the listing stays due and the browser extension refreshes it when the user opens it
+   on Vinted (passive capture of the page they are looking at: nothing reads Vinted by itself);
+3. notification emails confirm sales and price drops whenever they arrive.
 
 Every attempt that involves a user-facing source is logged in ``acquisition_attempts`` with a
 readable message, successful or not.
@@ -26,8 +25,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.acquisition.identity import title_from_slug
-from app.acquisition.public_fetch import FetchOutcome, PublicPageFetcher
-from app.acquisition.vinted_parser import EmailItem, items_in_email, parse_item_html
+from app.acquisition.vinted_parser import EmailItem, items_in_email
 from app.core.logging import get_logger
 from app.db.models import Listing
 from app.domain.enums import AcquisitionMode, CaptureLevel, ListingStatus, StatusEvidence
@@ -132,7 +130,6 @@ async def refresh_listing(
     session: AsyncSession,
     listing: Listing,
     now: datetime | None = None,
-    fetcher: PublicPageFetcher | None = None,
 ) -> RefreshResult:
     """Re-read one listing with the best available mode (see module docstring)."""
     now = now or datetime.now(UTC)
@@ -194,127 +191,16 @@ async def refresh_listing(
             upd.status.value,
         )
 
-    if AcquisitionMode.PUBLIC_FETCH in modes:
-        fetcher = fetcher or PublicPageFetcher()
-        result = await fetcher.fetch_item(listing.url)
-        attempt = Attempt(
-            AcquisitionMode.PUBLIC_FETCH,
-            "refresh",
-            listing_id=listing.id,
-            vinted_id=listing.external_id,
-            http_status=result.http_status,
-        )
-        if result.has_page:
-            parsed = parse_item_html(result.html or "", listing.url, now)
-            if parsed.complete:
-                res = await IngestionService(session, "vinted", AcquisitionMode.PUBLIC_FETCH).ingest(
-                    [parsed.to_provider_listing()], now=now
-                )
-                await _analyze_if_needed(session, res.updated_ids, AcquisitionMode.PUBLIC_FETCH)
-                upd = res.status_updates[listing.id]
-                await record_attempts(session, [attempt])
-                return RefreshResult(
-                    "updated",
-                    "Pagina letta e analisi aggiornata.",
-                    AcquisitionMode.PUBLIC_FETCH,
-                    upd.status.value,
-                )
-            if parsed.status == ListingStatus.REMOVED:
-                result_obs = Observation(
-                    now, StatusEvidence.NOT_FOUND, note="La pagina dice che l'annuncio non è più disponibile."
-                )
-                upd = await TrackingService(session).observe(
-                    {listing.id: result_obs}, AcquisitionMode.PUBLIC_FETCH
-                )
-                attempt.fail(
-                    "not_found", "Annuncio non più disponibile: segnato come rimosso (vendita non dedotta)."
-                )
-                await record_attempts(session, [attempt])
-                return RefreshResult(
-                    "not_found",
-                    attempt.message or "",
-                    AcquisitionMode.PUBLIC_FETCH,
-                    upd[listing.id].status.value,
-                )
-            attempt.fail(
-                "error",
-                "Pagina letta ma dati non riconosciuti (mancano: "
-                + ", ".join(parsed.missing)
-                + "). Probabile cambio di pagina di Vinted: aggiornare vinted_parser.json.",
-                parser_sources=parsed.sources,
-            )
-            await TrackingService(session).observe(
-                {listing.id: Observation(now, StatusEvidence.UNREACHABLE)}, AcquisitionMode.PUBLIC_FETCH
-            )
-            await record_attempts(session, [attempt])
-            return RefreshResult(
-                "error",
-                attempt.message or "",
-                AcquisitionMode.PUBLIC_FETCH,
-                listing.status,
-                needs_extension=True,
-            )
-        if result.outcome == FetchOutcome.NOT_FOUND:
-            upd = await TrackingService(session).observe(
-                {listing.id: Observation(now, StatusEvidence.NOT_FOUND)}, AcquisitionMode.PUBLIC_FETCH
-            )
-            attempt.fail(
-                "not_found", "Annuncio non trovato (404): segnato come rimosso, vendita non dedotta."
-            )
-            await record_attempts(session, [attempt])
-            return RefreshResult(
-                "not_found", attempt.message or "", AcquisitionMode.PUBLIC_FETCH, upd[listing.id].status.value
-            )
-        if result.outcome.attempted:  # blocked or network error: back off, status untouched
-            attempt.fail("blocked" if result.outcome == FetchOutcome.BLOCKED else "error", result.message)
-            await TrackingService(session).observe(
-                {listing.id: Observation(now, StatusEvidence.UNREACHABLE)}, AcquisitionMode.PUBLIC_FETCH
-            )
-            await record_attempts(session, [attempt])
-            return RefreshResult(
-                "blocked" if result.outcome == FetchOutcome.BLOCKED else "error",
-                result.message,
-                AcquisitionMode.PUBLIC_FETCH,
-                listing.status,
-                needs_extension=True,
-            )
-        # Not attempted (paused, waiting, cap, robots): fall through to the extension.
-        fallback_note = result.message
-    else:
-        fallback_note = None
-
-    # No server-side mode right now: the extension refreshes it when the user browses Vinted.
+    # Nothing reads Vinted on its own: the listing is refreshed when the user opens it on Vinted
+    # with the extension active (passive capture of the page they are looking at).
     await session.execute(update(Listing).where(Listing.id == listing.id).values(next_check_at=now))
-    message = "Apri l'annuncio su Vinted con l'estensione attiva: verrà aggiornato appena lo vedi."
     return RefreshResult(
         "queued",
-        f"{fallback_note} {message}" if fallback_note else message,
-        AcquisitionMode.EXTENSION_REFRESH,
+        "Apri l'annuncio su Vinted con l'estensione attiva: verrà aggiornato appena lo vedi.",
+        AcquisitionMode.EXTENSION_ITEM,
         listing.status,
         needs_extension=True,
     )
-
-
-async def refresh_due_public(session: AsyncSession, now: datetime | None = None) -> RefreshResult | None:
-    """One step of the periodic server-side refresh (the job runs every minute): the most overdue
-    tracked Vinted listing, if the public fetch is enabled and allowed right now."""
-    fetcher = PublicPageFetcher()
-    if not fetcher.s.vinted_public_fetch_enabled:
-        return None
-    now = now or datetime.now(UTC)
-    listing = (
-        await session.execute(
-            select(Listing)
-            .where(
-                Listing.provider == "vinted", Listing.next_check_at <= now, Listing.tracked_at.is_not(None)
-            )
-            .order_by(Listing.next_check_at)
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if listing is None:
-        return None
-    return await refresh_listing(session, listing, now, fetcher)
 
 
 # ------------------------------------------------------------------ emails

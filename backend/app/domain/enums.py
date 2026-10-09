@@ -61,15 +61,17 @@ class AcquisitionMode(StrEnum):
     PROVIDER_SCAN = "provider_scan"  # configured provider (authorized feed)
     EXTENSION_ITEM = "extension_item"  # browser extension, item page the user opened
     EXTENSION_CARD = "extension_card"  # browser extension, card seen while scrolling
-    EXTENSION_DEEP = "extension_deep"  # browser extension, deep analysis on the user's command
-    EXTENSION_REFRESH = "extension_refresh"  # browser extension, slow background status check
-    EXTENSION_SCAN = "extension_scan"  # browser extension, automatic scan of a saved search (opt-in)
+    # Legacy modes: they exist on records captured before the extension was limited to the pages
+    # the user opens (decision Q1). Nothing produces them any more; they stay so history reads.
+    EXTENSION_DEEP = "extension_deep"
+    EXTENSION_REFRESH = "extension_refresh"
+    EXTENSION_SCAN = "extension_scan"
     BATCH_IMPORT = "batch_import"  # a whole search page sent in one click
     LINK_IMPORT = "link_import"  # pasted link(s)
     MANUAL_FORM = "manual_form"  # data typed in the Analyze form
     BOOKMARKLET = "bookmarklet"
     EMAIL = "email"  # Vinted notification email
-    PUBLIC_FETCH = "public_fetch"  # server-side read of a public page (opt-in)
+    PUBLIC_FETCH = "public_fetch"  # legacy: the server no longer reads Vinted pages
     MIGRATED = "migrated"  # existed before acquisition modes were recorded
 
 

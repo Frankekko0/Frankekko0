@@ -92,15 +92,7 @@ class Settings(BaseSettings):
     # Point it to a mounted file to update the parser without rebuilding or republishing.
     parser_config_path: str | None = None
 
-    # --- Acquisition modes beyond the extension (all opt-in, see docs/ACQUISITION.md) --------
-    # Server-side read of public Vinted item pages. Off by default: Vinted's terms forbid
-    # automated collection; when enabled it honours robots.txt, never bypasses a block and stops.
-    vinted_public_fetch_enabled: bool = False
-    vinted_public_fetch_min_interval_seconds: int = Field(default=30, ge=30)
-    vinted_public_fetch_daily_cap: int = Field(default=300, ge=1, le=2000)
-    vinted_public_fetch_cache_hours: int = Field(default=6, ge=1, le=72)
-    vinted_public_fetch_block_pause_hours: int = Field(default=6, ge=1, le=168)
-    vinted_public_fetch_contact: str = "FlipFinder personal tool (no automation of purchases)"
+    # --- Acquisition modes beyond the extension (opt-in, see docs/ACQUISITION.md) ----------------
     # Vinted notification emails (favourite sold / price reduced): read-only IMAP mailbox.
     imap_host: str | None = None
     imap_port: int = 993

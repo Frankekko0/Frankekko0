@@ -871,7 +871,6 @@ export interface LinkImportResult {
   created: number;
   existing: number;
   items: { vinted_id: string; listing_id: Uuid; url: string }[];
-  public_fetch_enabled?: boolean;
   message?: string;
 }
 
@@ -905,14 +904,6 @@ export interface AcquisitionFailure {
 export interface AcquisitionStatus {
   provider: { name: string | null; listings: number };
   extension: { listings: number; last_sync: string | null };
-  public_fetch: {
-    enabled: boolean;
-    paused_for_seconds: number;
-    pause_reason: string | null;
-    used_today: number;
-    daily_cap: number;
-    min_interval_seconds: number;
-  };
   email: { enabled: boolean; listings: number; last_run?: string | null; last_error?: string | null; last_summary?: EmailImportResult | null };
   manual: Record<string, number>;
   tracked_due_now: number;

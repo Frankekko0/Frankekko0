@@ -10,7 +10,7 @@ Deploy: Docker Compose (`docker-compose*.yml`), Caddy HTTPS, backup in `deploy/`
 
 ## Cartelle (`backend/app/`)
 `core` config/sicurezza/cache/money · `db/models` ORM · `marketplace` `MarketplaceProvider` (= il `DataSource` del prompt) + `capabilities` (cosa fornisce ogni modalità di cattura) ·
-`acquisition` cattura da estensione/link/email, parser (`vinted_parser.json`), azioni Vinted · `ingestion` normalizza/dedup/upsert · `identification` · `vision` hash e controlli foto ·
+`acquisition` cattura da estensione/link/email, parser (`vinted_parser.json`) · `ingestion` normalizza/dedup/upsert · `identification` · `vision` hash e controlli foto ·
 `media` archivio foto e repost visivi · `authenticity` · `pricing` comparabili, FMV, prove di prezzo (`evidence`) · `external` prezzi esterni opzionali (Serper) ·
 `demand` · `profit` calcolatore+offerte · `scoring` · `opportunities` pipeline/engine/query · `tracking` ciclo di vita e "da verificare" · `alerts` ·
 `analytics` portfolio/calibrazione · `ai` analista, ricerca NL · `workers` arq · `api/v1` REST · `tools` CLI. Frontend: `frontend/src/app/(app)/*`.
@@ -27,7 +27,7 @@ Business: `purchases` `sales` `inventory`. Avvisi: `alerts` `alert_deliveries`. 
 - Prove di prezzo: `pricing/evidence.py` + `sold_sales`/`model_price_stats` (oggi fondono ancora i tipi di prezzo: D1 del PIANO, v3 Fase 3).
 - AI: `ai/llm.py` (`LLMClient.structured`), `vision/analyzer.py`, `workers/vision_queue.py` → qui tetto di spesa, cache per hash, routing per tier.
 - Job: `workers/tasks.py` + `workers/main.py` (`_functions`, `_cron_jobs`) per orchestratore, monitor, learner.
-- Azioni su Vinted: `acquisition/vinted_actions.py` + `extension/src/app-bridge.js` (da sostituire con "Apri su Vinted", Q1 f/g).
+- Azioni su Vinted: **nessuna**. L'estensione legge solo le pagine che l'utente apre; "Apri su Vinted" è un link. Guardiani: `extension/tests/no-automation.test.mjs`, `backend/tests/unit/test_server_reads_no_vinted_pages.py`.
 - Test: `backend/tests/{unit,integration,api}` (Postgres+Redis reali, migrazioni eseguite), `extension/tests`+`e2e`, `frontend` Vitest.
 
 ## Da preservare (non rompere)
@@ -39,7 +39,7 @@ Parser Vinted per ID (niente foto profilo/suggeriti) · verdetto rapido locale `
 |---|---|---|
 | 0 Audit | fatta | questo file, `DECISIONS.md`, `LIMITATIONS.md` |
 | 1 Core data | **fatta** | PIANO Fase 2 (osservazioni, `last_verified_at`, `to_verify`, `analyses`, dedup, CSV) + `marketplace/capabilities.py` |
-| conformità §2 (estensione solo su ciò che l'utente vede) | da fare | PIANO Fase 3: rimuovere scanner/letture automatiche/lettura server/clic programmatici (Q1, già deciso) |
+| conformità §2 (estensione solo su ciò che l'utente vede) | **fatta** | rimossi scanner, letture automatiche, lettura dal server, clic su Preferiti/Acquista, permessi `scripting`/`offscreen`/`notifications` (Q1); resta Q3-B (foto dal browser) |
 | 2 Financial engine | **fatta** | PIANO 4.1: `profit/evaluation.py` (stati dei costi, ripristino, riserva, margine, pareggio, capitale), `/profit/calculate`, blocco economico delle analisi; test 26/44/18/69,23%, casi E e H |
 | 3 Market intelligence | **fatta** (perimetro v3) | motore e provenienza già completi; aggiunti test G end-to-end e dichiarazione della base di misura (D1). Taglie per marca e titoli/sinonimi: PIANO 4.3–4.4, nella fase di dossier |
 | 4/4b Vision e dossier | da fare | PIANO Fase 5; serve Q8 (modello + tetto di spesa) e foto dal browser (Q3-B) |

@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from app.acquisition.identity import vinted_links
-from app.acquisition.public_fetch import PublicPageFetcher
 from app.acquisition.service import import_links, process_email_bytes
 from app.acquisition.vinted_parser import load_config
 from app.api.deps import DB, CurrentUser
@@ -59,7 +58,6 @@ async def import_link_list(body: LinksIn, user: CurrentUser, db: DB) -> dict[str
         "items": [
             {"vinted_id": vid, "listing_id": str(res.ids_by_vinted[vid]), "url": url} for url, vid in links
         ],
-        "public_fetch_enabled": get_settings().vinted_public_fetch_enabled,
     }
 
 
@@ -135,7 +133,6 @@ async def acquisition_status(user: CurrentUser, db: DB) -> dict[str, Any]:
             ),
             "last_sync": (extension_state.value or {}).get("last_sync") if extension_state else None,
         },
-        "public_fetch": await PublicPageFetcher(s).status(),
         "email": {
             "enabled": s.email_import_enabled,
             "listings": by_mode.get("email", 0),

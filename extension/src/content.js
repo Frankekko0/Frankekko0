@@ -62,7 +62,7 @@
   const cards = new Map(); // vid -> { root, captured, badge }
   const registered = new WeakSet();
   const pendingCards = new Map(); // vid -> payload (to send)
-  const deepState = new Map(); // vid -> reading | paused | error message
+  const notes = new Map(); // vid -> a short message about the last quick action (e.g. why tracking failed)
   // This page's progress (per search; what was sent is never sent again): what went to FlipFinder, what came back, and
   // the timings exposed on <html> for measurement (data-ff-* attributes, ff:* marks).
   const page = {
@@ -233,7 +233,7 @@
     return P.itemId(a.getAttribute("href") || "", C);
   }
 
-  // Card reading is shared with the scanner (src/cards.js).
+  // Card reading lives in src/cards.js.
   const cardRoot = (link, id) => Cards.cardRoot(link, id, C);
   const collectCard = (root, link) => Cards.collectCard(root, link, C);
 
@@ -675,7 +675,6 @@
       for (const n of m.addedNodes) if (n.nodeType === 1 && n.tagName !== "FF-BADGE" && !(n.getAttribute("id") || "").startsWith("flipfinder")) addedRoots.add(n); // the attribute: n.id is an element when a form has a field named "id"
     }
     if (location.href !== lastHref) onNavigate();
-    if (onCheckoutPath()) purchaseSoon(); // the confirmation may render well after load
     if (addedRoots.size) scanSoon();
     if (pageType === "item" && itemCapture.waiting) itemCapture.retrySoon();
   });
@@ -794,7 +793,6 @@
 
   function renderMenu(vid, menu) {
     const ev = verdict(vid);
-    const ds = deepState.get(vid);
     const scoredEv = ev && !ev.insufficient && ((ev.source === "local" && ev.net_margin !== undefined) || (ev.flip_score !== null && ev.flip_score !== undefined));
     const p = (v) => (v === null || v === undefined ? "—" : `${Math.round(v * 100)}%`);
     const rows = scoredEv
@@ -804,11 +802,11 @@
     const depth = ev && ev.source === "local" ? "Stima rapida dal riepilogo di mercato: analisi completa in arrivo" : ev && ev.analysis_depth === "full" ? "Analizzato a fondo" : ev ? "Visto in scorrimento (dati della scheda)" : "";
     menu.innerHTML = `${rows}<p></p><p class="depth"></p>
       <button type="button" role="menuitem" data-act="track">${ev && ev.tracked ? "Smetti di tracciare" : "Traccia"}</button>
-      <button type="button" role="menuitem" data-act="deep" ${ds === "reading" ? "disabled" : ""}>${ds === "reading" ? "Lettura in corso…" : ds === "paused" ? "Letture in pausa (riprova più tardi)" : "Analisi approfondita"}</button>
+      <button type="button" role="menuitem" data-act="vinted">Apri su Vinted</button>
       <button type="button" role="menuitem" data-act="open">Apri nella pagina di tracking</button>`;
     const ps = menu.querySelectorAll("p");
     ps[0].textContent = reason; // never HTML from the network
-    ps[1].textContent = depth + (typeof ds === "string" && !["reading", "paused", "ok"].includes(ds) ? ` · ${ds}` : "");
+    ps[1].textContent = depth + (notes.has(vid) ? ` · ${notes.get(vid)}` : "");
   }
 
   function toggleMenu(vid) {
@@ -847,9 +845,15 @@
     return link ? P.cleanItemUrl(link.getAttribute("href") || "", location.href) : `${location.origin}/items/${vid}`;
   }
 
-  /** Quick actions: only on your click. */
+  /** Quick actions: only on your click. Nothing here acts on your Vinted account. */
   async function quickAction(vid, act) {
     if (act === "open") return send({ type: "ff:open", path: `/items/${vid}` });
+    if (act === "vinted") {
+      // The listing opens in a new tab: that page is then read like any page you look at, and any
+      // action on it (favourite, buy, message) is yours.
+      window.open(itemUrl(vid), "_blank", "noopener");
+      return;
+    }
     if (act === "track") {
       const ev = evals.get(vid);
       const r = await send({ type: "ff:track", url: itemUrl(vid), track: !(ev && ev.tracked) });
@@ -857,16 +861,10 @@
       else if (r && r.error) note(vid, r.error);
       return;
     }
-    if (act === "deep") {
-      const r = await send({ type: "ff:deep", vid, url: itemUrl(vid) });
-      if (r && r.error) note(vid, r.error);
-      else deepState.set(vid, r && r.pacing && r.pacing.pausedUntil > Date.now() ? "paused" : "reading");
-      drawBadge(vid, verdict(vid));
-    }
   }
 
   function note(vid, message) {
-    deepState.set(vid, message);
+    notes.set(vid, message);
     drawBadge(vid, verdict(vid));
   }
 
@@ -927,10 +925,6 @@
       this.sent = true;
       itemBox.render();
       send({ type: "ff:item", vid: this.vid, payload, pageUrl: location.href });
-      // Your favourite state on Vinted, as this page shows it (keeps FlipFinder aligned).
-      const fav = favouriteButton();
-      const value = fav && !signedOut() ? favouriteNow(fav, scriptsAreFresh() ? parsed : null) : null;
-      if (value !== null) send({ type: "ff:favourite-seen", vid: this.vid, value });
     },
   };
 
@@ -1033,192 +1027,10 @@
         ${scoredItem ? `<dl><dt>Costo totale</dt><dd>${K.eur(ev.total_cost)}</dd><dt>Rivendita stimata</dt><dd>${K.eur(ev.resale_expected)}</dd><dt>Margine netto</dt><dd class="${(ev.net_margin ?? 0) >= 0 ? "pos" : "neg"}">${K.eur(ev.net_margin, true)}</dd><dt>ROI</dt><dd>${ev.roi === null ? "—" : Math.round(ev.roi * 100) + "%"}</dd><dt>Confidenza</dt><dd>${ev.confidence ?? "—"}/100</dd></dl>` : `<dl><dt>Costo totale</dt><dd>${K.eur(ev.total_cost)}</dd></dl>`}
         ${status}
         <div class="acts"><button class="primary" type="button" data-act="track">${ev.tracked ? "Tracciato ✓" : "Traccia"}</button><button type="button" data-act="open">Tracking</button><button type="button" data-act="full">Analisi</button></div>
-        <p class="muted">Analizzato a fondo · le azioni partono solo su tuo clic.</p>`;
+        <p class="muted">Analizzato a fondo.</p>`;
       body.querySelector(".reason").textContent = ev.reason || "";
     },
   };
-
-  // ------------------------------------------------------------------ deep reads (on request of the service worker)
-  /** Reads one item page, without cookies, for a deep analysis you asked for (or a slow,
-   * opt-in automatic one). A refusal is reported, never worked around. */
-  async function readPage(url, vid) {
-    let target;
-    let rewritten = false;
-    try {
-      const u = new URL(url);
-      if (!P.isVintedUrl(u.href, C) || P.itemId(u.pathname, C) !== String(vid)) return { outcome: "error", message: "Indirizzo non valido." };
-      target = u.host === location.host ? u.origin + u.pathname : location.origin + u.pathname;
-      rewritten = u.host !== location.host;
-    } catch {
-      return { outcome: "error", message: "Indirizzo non valido." };
-    }
-    let res;
-    try {
-      res = await fetch(target, { credentials: "omit", redirect: "follow", headers: { Accept: "text/html" } });
-    } catch {
-      return { outcome: "error", message: "Vinted non raggiungibile." };
-    }
-    const body = await res.text().catch(() => "");
-    if (K.isRefusal(res.status, body)) return { outcome: "blocked", status: res.status, message: `Vinted ha rifiutato la lettura (HTTP ${res.status}).` };
-    if (res.status === 404 || res.status === 410) {
-      return rewritten ? { outcome: "error", status: res.status, message: "Non trovato su questo dominio di Vinted." } : { outcome: "not_found", status: res.status, message: "Annuncio non più disponibile." };
-    }
-    if (!res.ok) return { outcome: "error", status: res.status, message: `Risposta inattesa (HTTP ${res.status}).` };
-    const parsed = P.parseItem(P.collectHtml(body.slice(0, 3e6), C), target, Date.now(), C);
-    if (!parsed.complete) {
-      if (parsed.status === "removed") return { outcome: "not_found", status: 200, message: "Annuncio rimosso dal venditore." };
-      return { outcome: "error", status: 200, message: `Pagina letta ma senza ${parsed.missing.join(" e ")}: va aggiornata la configurazione del parser.` };
-    }
-    const payload = await P.itemPayload({ ...parsed, url: url.split(/[?#]/)[0] }, C);
-    return payload ? { outcome: "ok", status: 200, payload } : { outcome: "error", status: 200, message: "Valuta non supportata o dati non validi." };
-  }
-
-  // ------------------------------------------------------------------ actions on Vinted (your click in FlipFinder)
-  // Favourite and Buy are done here, in your Vinted session, by clicking Vinted's own buttons
-  // once - only when you asked from FlipFinder. Nothing is paid: the checkout waits for you.
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-  function actionButtons(selector) {
-    const S = C.selectors;
-    return [...document.querySelectorAll(selector || "")].filter((el) => !(S.action_scope_exclude && el.closest(S.action_scope_exclude)) && el.offsetParent !== null);
-  }
-
-  function favouriteButton() {
-    return actionButtons(C.selectors.favourite_button)[0] || null;
-  }
-
-  /** true / false when the button says it (pressed state or label), null when it can't be read. */
-  function favouriteState(btn) {
-    if (!btn) return null;
-    const pressed = btn.getAttribute("aria-pressed");
-    if (pressed === "true" || pressed === "false") return pressed === "true";
-    const label = `${btn.getAttribute("aria-label") || ""} ${btn.getAttribute("title") || ""} ${text(btn)}`;
-    if (C.patterns.favourite_on && C.patterns.favourite_on.test(label)) return true;
-    if (C.patterns.favourite_off && C.patterns.favourite_off.test(label)) return false;
-    return null;
-  }
-
-  // Vinted's own Buy button: its exact test id, otherwise a button whose whole text is "Acquista"
-  // (never a look-alike such as "Protezione acquisti" or "Fai un'offerta").
-  function buyButton() {
-    const rx = C.patterns.buy_text;
-    const all = actionButtons(C.selectors.buy_button);
-    return all.find((b) => b.getAttribute("data-testid") === "item-buy-button") || all.find((b) => rx && rx.test(text(b))) || null;
-  }
-
-  // Vinted's buttons are in the served HTML before its scripts make them work: a click before
-  // that would be lost. Clicks wait for the page's load event (and a short settle), a few seconds at most.
-  const pageLoaded = () =>
-    Promise.race([
-      document.readyState === "complete" ? Promise.resolve() : new Promise((resolve) => addEventListener("load", resolve, { once: true })),
-      sleep(12000),
-    ]).then(() => sleep(400));
-
-  const signedOut = () => Boolean(C.selectors.signed_out_marker && document.querySelector(C.selectors.signed_out_marker));
-
-  async function itemSnapshot(vid) {
-    // The page may still be rendering: wait for the item data (and the buttons) a few seconds.
-    // Time-bound, not count-bound: in a background tab the browser slows timers down to 1/s.
-    let parsed = null;
-    const until = Date.now() + 10000;
-    for (;;) {
-      parsed = P.parseItem(collectDocument(scriptsAreFresh()), location.href, Date.now(), C, { useScripts: scriptsAreFresh() });
-      if (parsed.complete && (favouriteButton() || buyButton() || signedOut() || parsed.status !== "active")) break;
-      if (Date.now() > until) break;
-      await sleep(250);
-    }
-    const fav = favouriteButton();
-    return {
-      vid,
-      status: parsed ? parsed.status : "unknown",
-      price: parsed ? parsed.price : null,
-      currency: parsed ? parsed.currency : null,
-      title: parsed ? parsed.title : null,
-      signedIn: !signedOut(),
-      favourite: favouriteNow(fav, parsed),
-      canFavourite: Boolean(fav),
-      canBuy: Boolean(buyButton()),
-    };
-  }
-
-  // The button first; otherwise the item's own data as the page was served (null if neither).
-  function favouriteNow(btn, parsed) {
-    const shown = favouriteState(btn);
-    if (shown !== null) return shown;
-    return parsed && typeof parsed.favourite_by_me === "boolean" ? parsed.favourite_by_me : null;
-  }
-
-  async function vintedAct(msg) {
-    // Asked as soon as the tab answers: the document (and the settings) first, a few seconds at most.
-    await Promise.race([Promise.all([domReady(), started]), sleep(8000)]);
-    // A tab sent to a new address answers only from the new page, never from the one it is leaving.
-    if (msg.after && performance.timeOrigin + 300 < msg.after) return null;
-    if (pageType !== "item" || P.itemId(location.href, C) !== String(msg.vid)) return { ok: false, code: "wrong_page", message: "Pagina dell'annuncio non aperta." };
-    const snap = await itemSnapshot(String(msg.vid));
-    if (msg.action === "state") return { ok: true, ...snap };
-    if (msg.action === "buy") {
-      // Checked right before the click, on the page as it is now: never a purchase of something
-      // else than what you saw in FlipFinder.
-      if (snap.status !== "active") return { ok: false, code: snap.status, message: "L'articolo non è più acquistabile.", ...snap };
-      const expect = msg.expect_price === undefined || msg.expect_price === null ? null : Number(msg.expect_price);
-      if (expect !== null) {
-        if (typeof snap.price !== "number") return { ok: false, code: "no_price", message: "Non riesco a leggere il prezzo su Vinted: nessun clic fatto.", ...snap };
-        if (Math.abs(snap.price - expect) >= 0.01) return { ok: false, code: "price_changed", message: "Il prezzo è cambiato: nessun clic fatto.", ...snap, expected: expect };
-      }
-    }
-    if (!snap.signedIn) return { ok: false, code: "signed_out", message: "Non sei collegato a Vinted in questo browser: accedi su Vinted e riprova.", ...snap };
-    if (msg.action === "favourite") {
-      const btn = favouriteButton();
-      if (!btn) return { ok: false, code: "no_button", message: "Pulsante dei preferiti non trovato in questa pagina (configurazione da aggiornare).", ...snap };
-      // Never a blind click: if the current state can't be read, a click could undo it.
-      if (snap.favourite === null) return { ok: false, code: "unknown_state", message: "Non riesco a leggere se l'annuncio è già nei tuoi preferiti: nessun clic fatto (configurazione da aggiornare).", ...snap };
-      if (snap.favourite === Boolean(msg.want)) return { ok: true, changed: false, ...snap };
-      await pageLoaded();
-      if (favouriteState(favouriteButton()) === Boolean(msg.want)) return { ok: true, changed: false, ...snap, favourite: Boolean(msg.want) };
-      (favouriteButton() || btn).click(); // one click, as you would
-      for (const until = Date.now() + 4000; Date.now() < until; ) {
-        await sleep(200);
-        if (favouriteState(favouriteButton()) === Boolean(msg.want)) return { ok: true, changed: true, ...snap, favourite: Boolean(msg.want) };
-        if (signedOut()) return { ok: false, code: "signed_out", message: "Vinted chiede di accedere: accedi e riprova.", ...snap };
-      }
-      // Clicked once, but the button doesn't show the new state: the page is reloaded and read again.
-      return { ok: false, code: "verify", clicked: true, ...snap };
-    }
-    if (msg.action === "buy") {
-      if (!buyButton()) return { ok: false, code: "no_button", message: "Tasto Acquista non trovato in questa pagina (configurazione da aggiornare).", ...snap };
-      await pageLoaded();
-      // The wait can be long: still this item, still on sale, still at the expected price?
-      if (pageType !== "item" || P.itemId(location.href, C) !== String(msg.vid)) return { ok: false, code: "wrong_page", message: "Pagina dell'annuncio cambiata: nessun clic fatto." };
-      const now = await itemSnapshot(String(msg.vid));
-      if (now.status !== "active") return { ok: false, code: now.status, message: "L'articolo non è più acquistabile.", ...now };
-      const expected = msg.expect_price === undefined || msg.expect_price === null ? null : Number(msg.expect_price);
-      if (expected !== null && (typeof now.price !== "number" || Math.abs(now.price - expected) >= 0.01)) {
-        return { ok: false, code: typeof now.price === "number" ? "price_changed" : "no_price", message: "Il prezzo è cambiato: nessun clic fatto.", ...now, expected };
-      }
-      const btn = buyButton();
-      if (!btn) return { ok: false, code: "no_button", message: "Tasto Acquista non trovato in questa pagina (configurazione da aggiornare).", ...now };
-      btn.click(); // opens Vinted's checkout: the payment is confirmed by you
-      return { ok: true, ...now };
-    }
-    return { ok: false, code: "unknown", message: "Azione non supportata." };
-  }
-
-  /** The checkout you confirmed is complete: total paid, read from the page you are on. */
-  function purchaseDone() {
-    const path = location.pathname;
-    const pat = C.patterns;
-    const body = (document.body && document.body.innerText) || "";
-    const done = (pat.purchase_done_path && pat.purchase_done_path.test(path) && (!pat.purchase_done_text || pat.purchase_done_text.test(body) || /checkout|transaction/.test(path))) ||
-      (pat.page_checkout && pat.page_checkout.test(path) && pat.purchase_done_text && pat.purchase_done_text.test(body));
-    if (!done) return null;
-    let total = null;
-    for (const line of body.split("\n")) {
-      if (!/total|totale|gesamt/i.test(line)) continue;
-      const hit = P.findPrice(line, C);
-      if (hit && (!total || hit.price > total)) total = hit.price;
-    }
-    return { url: location.origin + path, total };
-  }
 
   // ------------------------------------------------------------------ navigation
   function onNavigate() {
@@ -1240,7 +1052,6 @@
       itemCapture.waiting = false;
       itemBox.unmount();
     }
-    checkPurchase();
     addedRoots.clear();
     bestBox.closed = false;
     bestBox.vid = null;
@@ -1254,10 +1065,7 @@
     if (!msg || typeof msg.type !== "string") return false;
     switch (msg.type) {
       case "ff:evals":
-        for (const ev of msg.evals || []) {
-          onEval(ev);
-          if (msg.deep && msg.deep.vid === ev.vinted_id && msg.deep.mode !== "extension_item") deepState.set(ev.vinted_id, "ok");
-        }
+        for (const ev of msg.evals || []) onEval(ev);
         addTiming(msg.timing);
         if ((msg.evals || []).some((ev) => page.sent.has(ev.vinted_id))) {
           markOnce("server-first");
@@ -1271,17 +1079,6 @@
           card.hot = true;
           drawBadge(vid, verdict(vid));
         }
-        return false;
-      case "ff:deep-status":
-        deepState.set(msg.vid, msg.state === "reading" || msg.state === "paused" ? msg.state : msg.message || msg.state);
-        drawBadge(msg.vid, verdict(msg.vid));
-        return false;
-      case "ff:read-page":
-        readPage(msg.url, msg.vid).then(sendResponse);
-        return true;
-      case "ff:page-info":
-        // For the popup: what kind of Vinted page this is (to offer "add to the scanner").
-        sendResponse({ pageType, url: location.href });
         return false;
       case "ff:scroll-to": {
         const card = cards.get(msg.vid);
@@ -1312,9 +1109,6 @@
         sendResponse({ ok: Boolean(card) });
         return false;
       }
-      case "ff:vinted-act":
-        vintedAct(msg).then(sendResponse, () => sendResponse({ ok: false, code: "error", message: "Errore nella pagina di Vinted." }));
-        return true;
       case "flipfinder:prepare":
         prepareLink().then(sendResponse);
         return true;
@@ -1379,36 +1173,6 @@
     }
   });
 
-  let purchaseReported = null;
-  function onCheckoutPath() {
-    const pat = C.patterns;
-    return Boolean((pat.purchase_done_path && pat.purchase_done_path.test(location.pathname)) || (pat.page_checkout && pat.page_checkout.test(location.pathname)));
-  }
-  const purchaseSoon = debounce(() => checkPurchase(), 500);
-
-  let purchaseWait = null;
-  function checkPurchase() {
-    if (!paired) return;
-    const done = purchaseDone();
-    if (!done || purchaseReported === done.url) return;
-    if (done.total === null) {
-      // The total paid may render a moment later: wait for it, then report what the page shows.
-      purchaseWait = purchaseWait || setTimeout(() => {
-        const last = purchaseDone();
-        if (last && purchaseReported !== last.url) reportPurchase(last);
-      }, 6000);
-      return;
-    }
-    reportPurchase(done);
-  }
-
-  function reportPurchase(done) {
-    clearTimeout(purchaseWait);
-    purchaseWait = null;
-    purchaseReported = done.url;
-    send({ type: "ff:purchase-done", ...done });
-  }
-
   // The document is parsed (DOM interactive): Vinted's own deferred scripts don't need to run first.
   const domReady = () =>
     document.readyState === "loading"
@@ -1421,11 +1185,6 @@
           document.addEventListener("readystatechange", on);
         })
       : Promise.resolve();
-
-  let startDone = () => {};
-  const started = new Promise((resolve) => {
-    startDone = resolve;
-  });
 
   async function start() {
     mark("start");
@@ -1446,7 +1205,6 @@
     useConfig(store.parserConfig);
     market = store.marketCache ? Q.compileMarket(store.marketCache) : null;
     pageType = P.pageType(location.pathname, C);
-    startDone();
     send({ type: "ff:hello", pageType, url: location.href }); // live panel bookkeeping
     if (!opts.enabled) return;
     // Injected at the start of the navigation: settings are read while the page loads, the
@@ -1456,7 +1214,6 @@
     await domReady();
     mark("dom");
     addedRoots.clear(); // the pass below reads the whole document
-    setTimeout(checkPurchase, 600); // the confirmation text may render a moment after load
     if (pageType === "item") {
       itemBox.render();
       if (paired) itemCapture.start();

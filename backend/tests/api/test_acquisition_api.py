@@ -42,7 +42,7 @@ async def test_update_now_uses_the_best_mode(
         f"{API}/listings/import/links", json={"text": "https://www.vinted.it/items/4242-x"}
     )
     q = (await auth_client.post(f"{API}/items/4242/refresh")).json()
-    assert q["outcome"] == "queued" and q["needs_extension"] and q["mode"] == "extension_refresh"
+    assert q["outcome"] == "queued" and q["needs_extension"] and q["mode"] == "extension_item"
 
     # Listing from the configured source (an authorized feed): read again from it.
     from app.core.config import get_settings
@@ -90,7 +90,7 @@ async def test_email_upload_and_status_page(auth_client: httpx.AsyncClient, make
     assert too_big.status_code == 413 and "Traceback" not in too_big.text
 
     status = (await auth_client.get(f"{API}/acquisition/status")).json()
-    assert status["public_fetch"]["enabled"] is False
+    assert "public_fetch" not in status  # the server reads no Vinted page
     assert status["email"]["enabled"] is False
     assert status["parser_config_version"]
     assert status["extension"]["listings"] >= 1

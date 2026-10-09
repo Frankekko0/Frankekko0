@@ -9,11 +9,11 @@ read or sent.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response
-from sqlalchemy import func, select, update
+from fastapi import APIRouter, BackgroundTasks, Depends, Response
+from sqlalchemy import func, select
 
 from app.acquisition.evaluations import quick_evaluations
 from app.acquisition.identity import listing_identity
@@ -30,7 +30,7 @@ from app.core.logging import get_logger
 from app.core.rate_limit import RateLimit
 from app.core.security import hash_api_key, new_api_key
 from app.db.models import ApiKey, Listing, Opportunity, SystemState
-from app.domain.enums import OPEN_STATUSES, AcquisitionMode, CaptureLevel, StatusEvidence
+from app.domain.enums import AcquisitionMode, CaptureLevel
 from app.ingestion.catalog import load_catalog
 from app.market.model_stats import lookup_stats
 from app.media.archive import schedule_archive
@@ -46,12 +46,9 @@ from app.schemas.extension import (
     PageStatsIn,
     PageStatsOut,
     QuickEval,
-    RefreshResultIn,
     TrackIn,
 )
 from app.tracking.actions import set_tracked
-from app.tracking.service import Attempt, TrackingService, record_attempts
-from app.tracking.status import Observation
 from app.tracking.summary import analysis_summary
 from app.workers.vision_queue import queue_vision_safely, vision_order
 
@@ -59,7 +56,6 @@ log = get_logger(__name__)
 router = APIRouter(tags=["extension"])
 
 MAX_ACTIVE_KEYS = 10
-REFRESH_LEASE = timedelta(minutes=30)
 capture_limit = RateLimit("capture", per_minute=90)
 item_limit = RateLimit("capture-item", per_minute=40)
 page_stats_limit = RateLimit("page-stats", per_minute=60)
@@ -214,7 +210,7 @@ async def capture_cards(
     Cards seen again unchanged keep their recent analysis; photo copies and photo checks (best
     candidates first) are queued after the response is sent."""
     items = _vinted_only(body.items)
-    mode = AcquisitionMode.EXTENSION_SCAN if body.page_type == "scan" else AcquisitionMode.EXTENSION_CARD
+    mode = AcquisitionMode.EXTENSION_CARD
     by_id = {
         pl.external_id: pl for pl in (manual_to_provider(i, mode.value, CaptureLevel.CARD) for i in items)
     }
@@ -332,77 +328,3 @@ async def capture_item_detail(
     out["images"] = [{"position": i["position"], "url": i["url"]} for i in out["images"]]
     out["evaluation"] = evaluation.model_dump(mode="json") if evaluation else None
     return out
-
-
-@router.get("/capture/refresh-queue", response_model=dict[str, Any])
-async def refresh_queue(user: CaptureUser, db: DB, limit: int = Query(3, ge=1, le=5)) -> dict[str, Any]:
-    """A few tracked items due for a status check, for the extension's optional slow refresh.
-
-    Handed out items are leased for 30 minutes, so they are not handed out again meanwhile.
-    """
-    now = datetime.now(UTC)
-    rows = (
-        await db.execute(
-            select(Listing.id, Listing.external_id, Listing.url)
-            .where(
-                Listing.provider == "vinted",
-                Listing.tracked_at.is_not(None),
-                Listing.status.in_([s.value for s in OPEN_STATUSES]),
-                Listing.next_check_at <= now,
-            )
-            .order_by(Listing.next_check_at)
-            .limit(limit)
-        )
-    ).all()
-    if rows:
-        await db.execute(
-            update(Listing)
-            .where(Listing.id.in_([r.id for r in rows]))
-            .values(next_check_at=now + REFRESH_LEASE)
-        )
-        await db.commit()
-    return {"items": [{"vinted_id": r.external_id, "url": r.url} for r in rows]}
-
-
-@router.post("/capture/refresh-result", response_model=dict[str, Any])
-async def refresh_result(body: RefreshResultIn, user: CaptureUser, db: DB) -> dict[str, Any]:
-    """A status check by the extension that did not yield a page: gone (404/410) or not readable.
-
-    "Gone" marks the item removed, never sold. A block or an error changes nothing but the
-    failure count (the next check is pushed back).
-    """
-    listing = (
-        await db.execute(
-            select(Listing).where(Listing.provider == "vinted", Listing.external_id == body.vinted_id)
-        )
-    ).scalar_one_or_none()
-    if listing is None:
-        raise NotFoundError("Articolo non trovato.")
-    now = datetime.now(UTC)
-    evidence = StatusEvidence.NOT_FOUND if body.outcome == "not_found" else StatusEvidence.UNREACHABLE
-    note = {
-        "not_found": "Annuncio non più disponibile (controllo dell'estensione).",
-        "blocked": "Vinted ha rifiutato la lettura: nessun nuovo tentativo immediato.",
-        "error": "Pagina non leggibile dall'estensione.",
-    }[body.outcome]
-    updates = await TrackingService(db).observe(
-        {listing.id: Observation(observed_at=now, evidence=evidence, note=note)},
-        AcquisitionMode.EXTENSION_REFRESH,
-    )
-    attempt = Attempt(
-        mode=AcquisitionMode.EXTENSION_REFRESH.value,
-        action="refresh",
-        listing_id=listing.id,
-        vinted_id=body.vinted_id,
-        http_status=body.http_status,
-        started_at=now,
-    )
-    if body.outcome != "not_found":
-        attempt.fail(body.outcome, body.message or note)
-    else:
-        attempt.message = note
-    await record_attempts(db, [attempt])
-    await db.commit()
-    await cache.bump(NS_FEED)
-    upd = updates.get(listing.id)
-    return {"vinted_id": body.vinted_id, "status": upd.status.value if upd else listing.status}

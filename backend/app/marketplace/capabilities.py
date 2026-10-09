@@ -111,7 +111,7 @@ MODE_FIELDS: dict[AcquisitionMode, frozenset[SourceField]] = {
     AcquisitionMode.BOOKMARKLET: _ITEM_PAGE,
     AcquisitionMode.PUBLIC_FETCH: _ITEM_PAGE,
     AcquisitionMode.EXTENSION_CARD: _CARD,
-    AcquisitionMode.EXTENSION_SCAN: _CARD,  # automatic saved-search scan (slated for removal, Q1a)
+    AcquisitionMode.EXTENSION_SCAN: _CARD,  # legacy: records from the removed automatic scanner
     AcquisitionMode.BATCH_IMPORT: _CARD,
     AcquisitionMode.EXTENSION_REFRESH: frozenset({F.PRICE, F.STATUS}),
     AcquisitionMode.EMAIL: frozenset({F.TITLE, F.PRICE, F.STATUS}),

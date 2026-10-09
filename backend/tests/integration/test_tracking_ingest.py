@@ -79,7 +79,7 @@ async def test_richer_capture_enriches_poorer_never_downgrades(session, make_lis
     full = pl.model_copy(
         update={"description": "Polo originale, etichetta e cartellino in foto. Nessun difetto."}
     )
-    res = await IngestionService(session, "vinted", AcquisitionMode.EXTENSION_DEEP).ingest(
+    res = await IngestionService(session, "vinted", AcquisitionMode.EXTENSION_ITEM, track=True).ingest(
         [full], now=NOW + timedelta(hours=1)
     )
     await session.commit()
@@ -87,7 +87,7 @@ async def test_richer_capture_enriches_poorer_never_downgrades(session, make_lis
     listing = (await session.execute(select(Listing))).scalar_one()
     assert listing.capture_level == "full" and listing.photo_count == 5
     assert "etichetta" in listing.description
-    assert listing.tracked_at is not None and listing.next_check_at is not None  # deep analysis tracks it
+    assert listing.tracked_at is not None and listing.next_check_at is not None  # tracked on request
     assert listing.acquisition_mode == "extension_card"  # first acquisition is kept
     images = (await session.execute(select(ListingImage.url).order_by(ListingImage.position))).scalars().all()
     assert images == [i.url for i in pl.images]

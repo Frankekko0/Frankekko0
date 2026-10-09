@@ -81,26 +81,6 @@ export function DataSourcesCard() {
                 }
               />
               <Row
-                on={s.public_fetch.enabled ? (s.public_fetch.paused_for_seconds > 0 ? "warn" : true) : false}
-                title="Server reads public pages (optional)"
-                detail={
-                  s.public_fetch.enabled ? (
-                    s.public_fetch.paused_for_seconds > 0 ? (
-                      <>
-                        Paused for {Math.ceil(s.public_fetch.paused_for_seconds / 60)} min after Vinted refused a read ({s.public_fetch.pause_reason}). No
-                        workaround is attempted; the extension takes over.
-                      </>
-                    ) : (
-                      <>
-                        On: {s.public_fetch.used_today}/{s.public_fetch.daily_cap} reads today, one every {s.public_fetch.min_interval_seconds}s at most.
-                      </>
-                    )
-                  ) : (
-                    <>Off (default). Vinted&apos;s terms forbid automated reading: turn it on only if you accept that (VINTED_PUBLIC_FETCH_ENABLED).</>
-                  )
-                }
-              />
-              <Row
                 on={s.email.enabled ? (s.email.last_error ? "warn" : true) : s.email.listings > 0}
                 title="Vinted notification emails"
                 detail={
@@ -141,8 +121,7 @@ export function DataSourcesCard() {
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-fg-3">
               <Badge tone="outline">Parser config {s.parser_config_version}</Badge>
               <span>
-                {plural(s.tracked_due_now, "tracked listing")} due for a check
-                {s.public_fetch.enabled ? "" : " (refreshed when you open them with the extension)"}
+                {plural(s.tracked_due_now, "tracked listing")} due for a check (refreshed when you open them on Vinted with the extension)
               </span>
             </div>
             {s.recent_failures.length > 0 && (

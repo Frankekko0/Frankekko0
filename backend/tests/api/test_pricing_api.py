@@ -242,9 +242,11 @@ async def test_own_records_sync_failure_is_never_shown(
     assert r.json()["title"] == "Polo Ralph Lauren"
 
 
-async def test_purchase_from_vinted_joins_the_concluded_sales(
+async def test_purchase_registered_by_hand_joins_the_concluded_sales(
     auth_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """FlipFinder no longer clicks on Vinted: the purchase is recorded by the user ("I bought it")."""
+
     async def none_status(session: Any) -> dict[str, Any]:
         return {}
 
@@ -258,13 +260,17 @@ async def test_purchase_from_vinted_joins_the_concluded_sales(
         "condition": "Ottime condizioni",
         "price": 35,
     }
-    assert (
-        await auth_client.post(f"{API}/capture/item", json={"item": card}, headers=headers)
-    ).status_code == 200
+    captured = await auth_client.post(f"{API}/capture/item", json={"item": card}, headers=headers)
+    assert captured.status_code == 200
+    listing_id = captured.json()["evaluation"]["listing_id"]
     r = await auth_client.post(
-        f"{API}/capture/vinted-actions",
-        json={"vinted_id": "7002", "kind": "purchased", "price": 39.45, "source": "checkout"},
-        headers=headers,
+        f"{API}/purchases",
+        json={
+            "title": "Nike Air Max 90",
+            "listing_id": listing_id,
+            "purchase_price": 39.45,
+            "purchase_date": "2026-09-01",
+        },
     )
     assert r.status_code == 201, r.text
     assert await _own_counts(auth_client) == (1, 0)

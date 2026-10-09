@@ -76,9 +76,7 @@ export function PasteLinksCard({ index = 0 }: { index?: number }) {
               </li>
             ))}
           </ul>
-          {!result.public_fetch_enabled && (
-            <p className="mt-2 text-xs text-fg-3">Open them on Vinted with the extension installed to fill in price, photos and status.</p>
-          )}
+          <p className="mt-2 text-xs text-fg-3">FlipFinder reads no Vinted page by itself: open them on Vinted with the extension installed to fill in price, photos and status.</p>
         </div>
       )}
     </Card>

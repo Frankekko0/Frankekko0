@@ -92,9 +92,8 @@ async def test_cards_seen_while_scrolling_are_stored_and_evaluated(
     assert sync["last_sync"] and sync["listings"] == 2
 
 
-async def test_cards_read_by_the_automatic_scanner_are_marked_as_such(
-    auth_client: httpx.AsyncClient, make_listing
-) -> None:
+async def test_cards_from_an_automatic_scan_are_refused(auth_client: httpx.AsyncClient, make_listing) -> None:
+    """The extension reads only pages the user opens: a capture claiming to come from a scan is refused."""
     await seed_deal(make_listing)
     headers = await _paired(auth_client)
     card = {**CARD, "url": "https://www.vinted.it/items/9201-polo", "title": "Polo Ralph Lauren", "price": 9}
@@ -107,12 +106,8 @@ async def test_cards_read_by_the_automatic_scanner_are_marked_as_such(
         },
         headers=headers,
     )
-    assert r.status_code == 200, r.text
-    assert r.json()["stored"] == 1 and r.json()["evaluations"][0]["analysis_depth"] == "quick"
-    item = (await auth_client.get(f"{API}/items/9201")).json()
-    assert item["item"]["acquisition_mode"] == "extension_scan"
-    extension = (await auth_client.get(f"{API}/acquisition/status")).json()["extension"]
-    assert extension["listings"] >= 1
+    assert r.status_code == 422
+    assert (await auth_client.get(f"{API}/items/9201")).status_code == 404  # nothing was stored
 
 
 async def test_item_capture_full_analysis_and_track(auth_client: httpx.AsyncClient, make_listing) -> None:
@@ -155,13 +150,14 @@ async def test_item_capture_full_analysis_and_track(auth_client: httpx.AsyncClie
     assert tr.json()["tracked"] is True and tr.json()["evaluation"]["tracked"] is True
     assert (await auth_client.get(f"{API}/items/9100")).json()["tracking"]["next_check_at"]
 
-    # A deep analysis on command tracks by default.
-    deep = await auth_client.post(
-        f"{API}/capture/item",
-        json={"item": {**item, "url": "https://www.vinted.it/items/9101-x"}, "mode": "extension_deep"},
-        headers=headers,
-    )
-    assert deep.json()["evaluation"]["tracked"] is True
+    # Only pages the user opened: other capture modes are refused.
+    for mode in ("extension_deep", "extension_refresh"):
+        refused = await auth_client.post(
+            f"{API}/capture/item",
+            json={"item": {**item, "url": "https://www.vinted.it/items/9101-x"}, "mode": mode},
+            headers=headers,
+        )
+        assert refused.status_code == 422, mode
     # Unknown link: tracking creates a link-only record.
     unknown = await auth_client.post(
         f"{API}/capture/track", json={"url": "https://www.vinted.fr/items/9200-abc"}, headers=headers
@@ -169,33 +165,14 @@ async def test_item_capture_full_analysis_and_track(auth_client: httpx.AsyncClie
     assert unknown.json()["evaluation"]["capture_level"] == "link"
 
 
-async def test_slow_refresh_queue_and_results(auth_client: httpx.AsyncClient, make_listing) -> None:
-    await seed_deal(make_listing)
+async def test_nothing_reads_vinted_in_the_background(auth_client: httpx.AsyncClient) -> None:
+    """The slow-refresh queue is gone: the extension does not read Vinted pages on its own."""
     headers = await _paired(auth_client)
-    for vid in ("9301", "9302"):
-        await auth_client.post(
-            f"{API}/listings/import/links", json={"text": f"https://www.vinted.it/items/{vid}-a"}
-        )
-    q = (await auth_client.get(f"{API}/capture/refresh-queue", params={"limit": 5}, headers=headers)).json()
-    assert {i["vinted_id"] for i in q["items"]} == {"9301", "9302"}
-    # Leased: not handed out twice.
-    assert (await auth_client.get(f"{API}/capture/refresh-queue", headers=headers)).json()["items"] == []
-
+    assert (await auth_client.get(f"{API}/capture/refresh-queue", headers=headers)).status_code == 404
     gone = await auth_client.post(
-        f"{API}/capture/refresh-result",
-        json={"vinted_id": "9301", "outcome": "not_found", "http_status": 404},
-        headers=headers,
+        f"{API}/capture/refresh-result", json={"vinted_id": "9301", "outcome": "not_found"}, headers=headers
     )
-    assert gone.json()["status"] == "removed"  # never "sold" without evidence
-    blocked = await auth_client.post(
-        f"{API}/capture/refresh-result",
-        json={"vinted_id": "9302", "outcome": "blocked", "http_status": 403},
-        headers=headers,
-    )
-    assert blocked.json()["status"] == "unknown"
-    detail = (await auth_client.get(f"{API}/items/9302")).json()
-    assert detail["tracking"]["check_failures"] == 1
-    assert detail["attempts"][0]["outcome"] == "blocked"
+    assert gone.status_code in (404, 405)
 
 
 async def test_market_summary_for_the_instant_verdict(auth_client: httpx.AsyncClient, make_listing) -> None:
@@ -219,52 +196,15 @@ async def test_market_summary_for_the_instant_verdict(auth_client: httpx.AsyncCl
     assert again["costs"]["shipping_in"] == 7.5 and again["version"] != m["version"]
 
 
-async def test_vinted_favourite_and_purchase_are_recorded(
-    auth_client: httpx.AsyncClient, make_listing
-) -> None:
-    from app.db.session import session_scope
-    from app.domain.enums import AcquisitionMode
-    from app.ingestion.service import IngestionService
-    from tests.conftest import NOW
-
-    async with session_scope() as s:
-        res = await IngestionService(s, "vinted", AcquisitionMode.EXTENSION_ITEM).ingest(
-            [make_listing(price=20, external_id="5551112223")], now=NOW
-        )
-    lid = str(res.new_ids[0])
-    empty = (await auth_client.get(f"{API}/listings/{lid}/vinted")).json()
-    assert empty == {"favourite": None, "checkout_opened": None, "purchased": None}
-
-    on = (
-        await auth_client.post(f"{API}/listings/{lid}/vinted", json={"kind": "favourite", "value": True})
-    ).json()
-    assert on["favourite"]["value"] is True and on["favourite"]["source"] == "click"
-    off = (
-        await auth_client.post(f"{API}/listings/{lid}/vinted", json={"kind": "favourite", "value": False})
-    ).json()
-    assert off["favourite"]["value"] is False  # the latest state wins
-    started = (
-        await auth_client.post(f"{API}/listings/{lid}/vinted", json={"kind": "checkout_opened", "price": 20})
-    ).json()
-    assert started["checkout_opened"]["price"] == 20 and started["purchased"] is None
-
-    # The extension sees the completed checkout (user confirmed the payment on Vinted).
+async def test_flipfinder_no_longer_clicks_on_vinted(auth_client: httpx.AsyncClient) -> None:
+    """Favourite and Buy are the user's own clicks on Vinted (decision Q1): no endpoint records them."""
     headers = await _paired(auth_client)
-    body = {
-        "vinted_id": "5551112223",
-        "kind": "purchased",
-        "price": 25.19,
-        "source": "checkout",
-        "detail": {"item_price": 20},
-    }
-    done = (await auth_client.post(f"{API}/capture/vinted-actions", json=body, headers=headers)).json()
-    assert done["purchased"]["price"] == 25.19
-    again = await auth_client.post(f"{API}/capture/vinted-actions", json=body, headers=headers)
-    assert again.status_code == 201
-    flips = (await auth_client.get(f"{API}/flips")).json()
-    assert len(flips) == 1  # recorded once, however many times the success page is seen
-    assert flips[0]["purchase_price"] == 20 and abs(flips[0]["total_cost"] - 25.19) < 0.01  # the total paid
-    unknown = await auth_client.post(
-        f"{API}/capture/vinted-actions", json={**body, "vinted_id": "999"}, headers=headers
+    fake_id = "11111111-1111-1111-1111-111111111111"
+    assert (await auth_client.get(f"{API}/listings/{fake_id}/vinted")).status_code == 404
+    post = await auth_client.post(
+        f"{API}/listings/{fake_id}/vinted", json={"kind": "favourite", "value": True}
     )
-    assert unknown.status_code == 404
+    assert post.status_code in (404, 405)
+    body = {"vinted_id": "5551112223", "kind": "purchased", "price": 25.19, "source": "checkout"}
+    rec = await auth_client.post(f"{API}/capture/vinted-actions", json=body, headers=headers)
+    assert rec.status_code in (404, 405)

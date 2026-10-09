@@ -25,8 +25,8 @@ Ogni annuncio visto finisce in un **archivio permanente**.
 | ![Dettaglio](docs/screenshots/deal-detail-dark.jpg) | ![Mercato](docs/screenshots/market-analysis-dark.jpg) | ![Mobile](docs/screenshots/mobile-deals.jpg) |
 
 > **Principi.**
-> - FlipFinder legge ciò che **tu** apri: estensione, link, email di notifica, import manuale, feed autorizzati. Se lo attivi tu, anche le ricerche che salvi nello scanner automatico. Nessun dato simulato: senza dati sufficienti mostra "dati insufficienti".
-> - Le letture automatiche di pagine pubbliche sono facoltative, spente di default e lente; si fermano al primo rifiuto.
+> - FlipFinder legge ciò che **tu** apri: estensione sulle pagine che guardi, link, email di notifica, import manuale, feed autorizzati. Nessun dato simulato: senza dati sufficienti mostra "dati insufficienti".
+> - Non legge Vinted da solo: niente scanner, niente letture automatiche dal server o in background (i Termini di Vinted in vigore dall'8/10/2026 le vietano; sono state rimosse, non solo spente).
 > - Non aggira mai CAPTCHA, rate limit, anti-bot o autenticazioni.
 > - Non acquista, non invia offerte e non contatta venditori: la decisione finale resta sempre all'utente. Non
 > dichiara mai autentico un prodotto senza prove (certo / probabile / non verificabile) e non
@@ -189,21 +189,18 @@ Il confronto completo (affidabilità, copertura, costi, rischio di blocco, confo
 
 | Modalità | Stato | Come si attiva |
 |---|---|---|
-| **Estensione browser** (schede viste, annunci aperti, analisi su comando) | attiva | carica `extension/` e associala con una chiave da *Settings → Browser extension* |
-| **Scanner automatico delle ricerche salvate** (estensione, browser aperto) | **spento di default** | opzioni dell'estensione → *Scanner automatico*, poi "Aggiungi questa ricerca allo scanner" dal popup. Prima pagina di ogni ricerca, senza cookie, una lettura al minuto al massimo (30/h, 300/giorno), notifica per gli annunci nuovi sopra le soglie, stop di 6 ore al primo rifiuto. I termini di Vinted vietano la raccolta automatica: la scelta è tua. Vedi [`extension/README.md`](extension/README.md). |
+| **Estensione browser** (schede viste e annunci che apri tu) | attiva | carica `extension/` e associala con una chiave da *Settings → Browser extension* |
 | **Link** incollati (uno o tanti) e **bookmarklet** | attiva | *Analyze a listing* → *Paste links* / bookmarklet |
 | **Import manuale** (modulo) e **pagina di ricerca** | attiva | *Analyze a listing*, `/import` |
 | **Email di notifica Vinted** ("preferito venduto", "prezzo ridotto") | attiva su richiesta | upload `.eml` in *Settings → Data sources*; lettura automatica con `IMAP_HOST`/`IMAP_USER`/`IMAP_PASSWORD` (sola lettura) |
-| **Lettura pubblica lenta delle pagine degli articoli tracciati** | **spenta di default** | `VINTED_PUBLIC_FETCH_ENABLED=true`. Rispetta robots.txt, non usa cookie, fa al massimo una lettura ogni 30 s e 300 al giorno, usa una cache e si ferma 6 ore al primo rifiuto. I termini di Vinted vietano la raccolta automatica: la scelta è tua. |
 | **Feed autorizzato** | `MARKETPLACE_PROVIDER=feed` | vedi [Fonti dati](#fonti-dati-e-adapter) |
 | Vinted Pro Integrations, provider terzi | non implementati | API riservata ai venditori Pro e senza catalogo; i provider terzi fanno scraping senza licenza (vedi `docs/ACQUISITION.md`) |
 
 **Ordine di fallback** per aggiornare un articolo:
-1. feed o provider;
-2. lettura pubblica, se attiva;
-3. estensione: lettura lenta facoltativa, oppure quando riapri la pagina (lo scanner delle ricerche scopre annunci nuovi, non aggiorna quelli noti);
-4. email;
-5. altrimenti l'articolo resta in attesa, con il motivo visibile nella pagina di tracking.
+1. feed o provider autorizzato;
+2. estensione, quando riapri tu la pagina su Vinted;
+3. email di notifica;
+4. altrimenti l'articolo resta in attesa (poi "da verificare"), con il motivo visibile nella pagina di tracking.
 
 ## Controlli periodici dello stato
 
@@ -215,7 +212,6 @@ I controlli girano nel **worker**, che va avviato insieme all'API.
 | Job | Quando | Cosa controlla | Si attiva con |
 |---|---|---|---|
 | `refresh_listings` | ogni 10 minuti | annunci del feed autorizzato arrivati al loro prossimo controllo | `MARKETPLACE_PROVIDER=feed` |
-| `refresh_tracked_public` | ogni minuto (una lettura al massimo ogni 30 s) | articoli Vinted **tracciati** arrivati al prossimo controllo | `VINTED_PUBLIC_FETCH_ENABLED=true` |
 | `poll_email` | ogni `IMAP_POLL_MINUTES` (15) | nuove email di Vinted: vendite, ribassi, articoli nuovi | `IMAP_HOST`, `IMAP_USER`, `IMAP_PASSWORD` |
 | `archive_images` | dopo ogni acquisizione | copia locale delle foto (solo domini immagini di Vinted, 3 tentativi) | `IMAGE_ARCHIVE_ENABLED=true` (default) |
 
@@ -234,12 +230,11 @@ Ultimo e prossimo controllo sono sempre visibili nella pagina di tracking e nell
 
 ## Estensione browser e pannello live
 
-[`extension/`](extension/README.md) (Manifest V3, v1.1).
-- **Dove e cosa legge:** gira solo sui domini `www.vinted.*` e legge le pagine che **tu** apri e scorri. In più, solo se lo attivi, lo **scanner automatico** rilegge le ricerche che salvi (vedi sotto).
-- **Scanner automatico (facoltativo):** con il browser aperto rilegge la prima pagina delle tue ricerche salvate, senza cookie e con ritmo prudente, salva gli annunci nuovi e ti avvisa con una notifica se superano le soglie. Non acquista, non invia offerte e non contatta venditori.
+[`extension/`](extension/README.md) (Manifest V3, v1.2).
+- **Dove e cosa legge:** gira solo sui domini `www.vinted.*` e legge le pagine che **tu** apri e scorri. Non fa letture automatiche e non agisce sul tuo account Vinted (niente clic su Preferiti o Acquista, niente offerte né messaggi).
 - **Ricerche, armadi e preferiti:** ogni scheda viene valutata quando entra a schermo; sulla scheda compare un **badge** con score, margine netto e "già tracciato".
 - **Annuncio aperto:** viene letto tutto e analizzato a fondo.
-- **Azioni rapide**, solo su tuo clic: *Traccia*, *Analisi approfondita* (una lettura di quella pagina, senza cookie) e *Apri nella pagina di tracking*.
+- **Azioni rapide**, solo su tuo clic: *Traccia*, *Apri su Vinted* (un link che si apre in una nuova scheda) e *Apri nella pagina di tracking*.
 - **Invio dei dati:** una coda locale, con nuovi tentativi e deduplica per ID Vinted; un indicatore sull'icona mostra lo stato.
 - **Configurazione del parser:** è il file `vinted_parser.json`, condiviso con il server e scaricato da FlipFinder, quindi si aggiorna senza ripubblicare l'estensione.
 - **Pannello live** (pannello laterale del browser):
@@ -366,8 +361,6 @@ repository). Un valore vuoto equivale a "non impostato". Le principali:
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | — | Web Push |
 | `BACKEND_URL` (frontend, build) | `http://localhost:8000` | destinazione del proxy `/api` (in Docker: `http://backend:8000`) |
 | `ALGORITHM_VERSION` | `2026.10-2` | versione registrata con ogni analisi |
-| `VINTED_PUBLIC_FETCH_ENABLED` | `false` | lettura pubblica lenta degli articoli tracciati (vedi [Modalità di acquisizione](#modalità-di-acquisizione)) |
-| `VINTED_PUBLIC_FETCH_MIN_INTERVAL_SECONDS` / `_DAILY_CAP` / `_CACHE_HOURS` / `_BLOCK_PAUSE_HOURS` / `_CONTACT` | `30` / `300` / `6` / `6` / — | ritmo, limite giornaliero, cache, pausa dopo un rifiuto, contatto nello User-Agent |
 | `IMAP_HOST` / `IMAP_PORT` / `IMAP_USER` / `IMAP_PASSWORD` / `IMAP_FOLDER` / `IMAP_POLL_MINUTES` | — / `993` / — / — / `INBOX` / `15` | lettura (sola lettura) delle email di notifica di Vinted |
 | `PARSER_CONFIG_PATH` | — | copia aggiornata di `vinted_parser.json` (selettori, etichette, pattern) senza ricostruire nulla |
 | `IMAGE_ARCHIVE_ENABLED` / `MEDIA_DIR` / `IMAGE_ARCHIVE_HOSTS` / `IMAGE_ARCHIVE_MAX_BYTES` | `true` / `var/media` / `vinted.net,vinted.com` / `10485760` | copia locale delle foto per la pagina di tracking (in Docker: volume `media`) |
@@ -435,7 +428,6 @@ Job schedulati (UTC):
 | `scan_new_listings` | ogni `SCAN_INTERVAL_SECONDS` (30 s) | legge gli annunci nuovi dal provider, normalizza, deduplica, accoda le analisi; un lock Redis impedisce scansioni sovrapposte |
 | `recompute_market_statistics` | :00, :15, :30, :45 | statistiche per brand/categoria/modello (database di mercato) |
 | `refresh_listings` | ogni 10 minuti | ciclo di vita degli annunci del provider arrivati al prossimo controllo (cadenza adattiva) |
-| `refresh_tracked_public` | ogni minuto, se `VINTED_PUBLIC_FETCH_ENABLED` | stato degli articoli Vinted tracciati, una lettura lenta alla volta |
 | `poll_email` | ogni `IMAP_POLL_MINUTES`, se IMAP è configurato | email di notifica di Vinted (vendite, ribassi) |
 | `recompute_learning` | :07 e :37 | Personal Flip Score dalle performance reali dei flip |
 | `prune` | 03:17 | pulizia: log tecnici oltre 7 giorni e tentativi di acquisizione oltre 180 (lo storico degli annunci resta) |

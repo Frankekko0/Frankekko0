@@ -38,7 +38,7 @@ async def test_quick_check_is_saved_and_dedups_by_vinted_id(
     assert (await auth_client.post(f"{API}/items/321/track")).json()["tracked"] is True
     detail = (await auth_client.get(f"{API}/items/321")).json()
     assert detail["tracking"]["tracked"] is True and detail["tracking"]["next_check_at"]
-    assert "extension_refresh" in detail["tracking"]["refresh_modes"]
+    assert "extension_item" in detail["tracking"]["refresh_modes"]  # updated when you open it
     a = detail["analysis"]
     assert a["algorithm_version"] and a["analysis_depth"] == "full" and a["acquisition_mode"] == "manual_form"
     assert a["economics"]["total_acquisition_cost"] > 9

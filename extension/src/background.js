@@ -5,8 +5,8 @@
  *    per Vinted ID, sent in batches with retry and backoff; the toolbar badge shows the state.
  *  - FlipFinder API client: authenticates with the extension key the user pasted in the
  *    options (a FlipFinder credential). Vinted cookies or tokens are never read or sent.
- *  - Reads of other pages (deep analysis on command, optional slow automatic ones) go through
- *    one paced queue and are performed by a Vinted tab the user has open, without cookies.
+ *  - It reads only the pages the user opens and scrolls: no scanner, no background reads, no
+ *    clicks on Vinted. Buying, favouriting and messaging stay the user's own actions.
  *  - The shared parser configuration is refreshed from FlipFinder.
  *  - Per-tab browsing sessions feed the live panel.
  */
@@ -247,7 +247,7 @@ function searchKey(pageUrl) {
 }
 
 function emptySession(key, pageType) {
-  return { key, pageType, startedAt: Date.now(), locked: false, seen: 0, saved: 0, bestMargin: null, alerted: [], deepAsked: [], evals: {} };
+  return { key, pageType, startedAt: Date.now(), locked: false, seen: 0, saved: 0, bestMargin: null, alerted: [], evals: {} };
 }
 
 // Kept in memory and saved shortly after each change: rewriting every session (up to 1500
@@ -325,19 +325,9 @@ async function addToSession(tabId, evals, fresh) {
   });
 }
 
-/** Evaluations arrived: cache, badges in the tab, live panel, alerts, automatic deep reads. */
-// Favourite states read on a listing page before FlipFinder had recorded that listing.
-const favouriteSeenLater = new Map();
-
+/** Evaluations arrived: cache, badges in the tab, live panel, alerts. */
 async function onEvaluations(evals, { tabIds = [], fresh = true, deep = null, timing = null } = {}) {
   await cacheEvaluations(evals);
-  await scanNotify(evals).catch((err) => logError("scanner", err.message));
-  for (const ev of evals) {
-    if (!favouriteSeenLater.has(ev.vinted_id)) continue;
-    const value = favouriteSeenLater.get(ev.vinted_id);
-    favouriteSeenLater.delete(ev.vinted_id);
-    recordVinted(ev.vinted_id, { kind: "favourite", value, source: "page" });
-  }
   const opts = await getOptions();
   for (const tabId of new Set(tabIds.filter((t) => typeof t === "number"))) {
     await sendToTab(tabId, { type: "ff:evals", evals, deep, timing });
@@ -347,7 +337,6 @@ async function onEvaluations(evals, { tabIds = [], fresh = true, deep = null, ti
       sendToPanel({ type: "ff:hot", tabId, items: hot });
       if (opts.alertsVisual) await sendToTab(tabId, { type: "ff:hot", vids: hot.map((h) => h.vinted_id) });
     }
-    if (opts.autoDeep) await planAutoDeep(tabId, evals, opts);
   }
 }
 
@@ -487,431 +476,16 @@ async function flushOnce() {
   if (next !== null) scheduleFlush(Math.max(1000, next - Date.now()));
 }
 
-// ------------------------------------------------------------------ reads of other pages
-const MAX_DEEP_JOBS = 30;
-
-async function loadDeep() {
-  const { deep } = await local.get("deep");
-  return deep && Array.isArray(deep.jobs) ? deep : { jobs: [], pacing: K.emptyPacing() };
-}
-
-async function deepEnqueue(job) {
-  const res = await exclusive(async () => {
-    const d = await loadDeep();
-    const existing = d.jobs.find((j) => j.vid === job.vid);
-    if (existing) {
-      if (job.kind === "manual") Object.assign(existing, { kind: "manual", tabId: job.tabId });
-    } else {
-      d.jobs.push({ ...job, addedAt: Date.now() });
-    }
-    // Manual requests first, then the oldest; beyond the cap the newest automatic ones wait out.
-    d.jobs.sort((a, b) => (b.kind === "manual") - (a.kind === "manual") || a.addedAt - b.addedAt);
-    while (d.jobs.length > MAX_DEEP_JOBS && d.jobs[d.jobs.length - 1].kind !== "manual") d.jobs.pop();
-    await local.set({ deep: d });
-    return { position: d.jobs.findIndex((j) => j.vid === job.vid) + 1, pacing: d.pacing };
-  });
-  scheduleDeep(0);
-  return res;
-}
-
-let deepTimer = null;
-function scheduleDeep(delayMs) {
-  clearTimeout(deepTimer);
-  if (delayMs <= 25000) deepTimer = setTimeout(() => deepPump().catch((e) => logError("deep", e.message)), Math.max(0, delayMs));
-  else chrome.alarms.create("ff-deep", { when: Date.now() + delayMs });
-}
-
+// ------------------------------------------------------------------ tabs
 async function registeredTabs() {
   const { tabs = {} } = await sessionStore.get("tabs");
   return tabs;
 }
 
-/** A Vinted tab the user has open, to read the page from (the preferred one when still open). */
-async function pickTab(preferred) {
-  const tabs = await registeredTabs();
-  const ids = Object.keys(tabs)
-    .map(Number)
-    .sort((a, b) => (tabs[b].at || 0) - (tabs[a].at || 0));
-  if (typeof preferred === "number") ids.unshift(preferred);
-  for (const id of ids) {
-    try {
-      await chrome.tabs.get(id);
-      return id;
-    } catch {
-      /* closed */
-    }
-  }
-  return null;
-}
-
-let pumping = false;
-
-async function deepPump() {
-  if (pumping) return;
-  pumping = true;
-  try {
-    await deepStep();
-  } finally {
-    pumping = false;
-  }
-}
-
-async function deepStep() {
-  const opts = await getOptions();
-  const step = await exclusive(async () => {
-    const d = await loadDeep();
-    if (!d.jobs.length) return null;
-    const job = d.jobs[0];
-    const check = K.pacingCheck(d.pacing, job.kind, Date.now(), opts);
-    if (!check.ok) return { wait: check.waitMs, reason: check.reason, job };
-    d.jobs.shift();
-    d.pacing = K.pacingRecord(d.pacing, job.kind, Date.now());
-    await local.set({ deep: d });
-    return { job };
-  });
-  if (!step) return;
-  if (step.wait) {
-    if (step.reason === "paused" && step.job.kind === "manual") {
-      await sendToTab(step.job.tabId, { type: "ff:deep-status", vid: step.job.vid, state: "paused", waitMs: step.wait });
-    }
-    scheduleDeep(step.wait);
-    return;
-  }
-  const job = step.job;
-  const tabId = await pickTab(job.tabId);
-  if (tabId === null) {
-    // No Vinted tab open: automatic reads wait for one (they only run while you browse).
-    if (job.kind !== "manual") await deepEnqueue({ ...job, tabId: null });
-    return;
-  }
-  await sendToTab(job.tabId ?? tabId, { type: "ff:deep-status", vid: job.vid, state: "reading" });
-  const r = (await sendToTab(tabId, { type: "ff:read-page", url: job.url, vid: job.vid })) || { outcome: "error", message: "Scheda non disponibile." };
-  await handleRead(job, tabId, r);
-  const d = await loadDeep();
-  if (d.jobs.length) scheduleDeep(1000);
-}
-
-async function handleRead(job, tabId, r) {
-  const notifyTab = job.tabId ?? tabId;
-  if (r.outcome === "ok" && r.payload) {
-    const mode = job.kind === "refresh" ? "extension_refresh" : "extension_deep";
-    // Deep analyses on command are tracked (explicit interest); automatic ones are not.
-    const track = job.kind === "manual" ? null : false;
-    await enqueue("items", [{ vid: job.vid, payload: r.payload, mode, track, tabId: notifyTab, pageType: "item" }], 0);
-    return;
-  }
-  if (r.outcome === "blocked") {
-    await exclusive(async () => {
-      const d = await loadDeep();
-      d.pacing = K.pacingPause(d.pacing, Date.now(), r.message || "rifiuto di Vinted");
-      await local.set({ deep: d });
-    });
-    await logError("lettura", `Vinted ha rifiutato la lettura (${r.status || "?"}): letture sospese per 6 ore.`);
-    sendToPanel({ type: "ff:reads-paused" });
-  }
-  if (job.kind === "refresh" || r.outcome === "not_found") {
-    try {
-      await api("/capture/refresh-result", {
-        method: "POST",
-        body: { vinted_id: job.vid, outcome: r.outcome === "ok" ? "error" : r.outcome, http_status: r.status || null, message: r.message || null },
-      });
-    } catch (err) {
-      if (err.status !== 404) await logError("lettura", err.message);
-    }
-  }
-  if (r.outcome !== "ok") await logError("lettura", `${job.vid}: ${r.message || r.outcome}`);
-  await sendToTab(notifyTab, { type: "ff:deep-status", vid: job.vid, state: r.outcome, message: r.message || "" });
-}
-
-/** Slow automatic deep reads: the best few quick evaluations of what you are scrolling. */
-async function planAutoDeep(tabId, evals, opts) {
-  const candidates = evals.filter(
-    (e) => e.analysis_depth === "quick" && e.status === "active" && K.isHot(e, opts) && K.passesFilters(e, opts),
-  );
-  if (!candidates.length) return;
-  const picked = await withSession(tabId, (s) => {
-    if (!s) return [];
-    const out = [];
-    for (const e of candidates) {
-      if (s.deepAsked.includes(e.vinted_id) || s.deepAsked.length >= 6) continue;
-      s.deepAsked.push(e.vinted_id);
-      out.push(e);
-    }
-    return out;
-  });
-  for (const e of picked.slice(0, 3)) await deepEnqueue({ vid: e.vinted_id, url: e.url, kind: "auto", tabId });
-}
-
-/** Optional slow status checks of tracked items (only while a Vinted tab is open). */
-async function pollRefreshQueue() {
-  const opts = await getOptions();
-  if (!opts.slowRefresh || !(await getKey()) || (await pickTab(null)) === null) return;
-  const d = await loadDeep();
-  if (d.jobs.some((j) => j.kind === "refresh") || d.pacing.pausedUntil > Date.now()) return;
-  try {
-    const res = await api("/capture/refresh-queue?limit=2");
-    for (const it of res.items || []) await deepEnqueue({ vid: it.vinted_id, url: it.url, kind: "refresh", tabId: null });
-  } catch (err) {
-    await logError("aggiornamento", err.message);
-  }
-}
-
-// ------------------------------------------------------------------ automatic scanner (opt-in)
-// Re-reads page 1 (newest first) of the Vinted searches you saved, while the browser is open.
-// Cautious by construction: one read at a time, at least a minute apart, 30 an hour and 300 a
-// day, without cookies, and a 6-hour pause at the first refusal or anti-bot page (for every
-// automatic read). New items go through the normal capture queue; the ones that are new AND above
-// your thresholds raise a notification. Nothing is bought, offered or sent to a seller.
-const SCAN_STATUS_MAX = 160;
-
-async function loadScanner() {
-  const { scanner } = await local.get("scanner");
-  const ok = scanner && Array.isArray(scanner.searches);
-  return { searches: ok ? scanner.searches : [], pacing: ok && scanner.pacing ? scanner.pacing : K.emptyScanPacing(), watch: ok && scanner.watch ? scanner.watch : {} };
-}
-
-/** The parser configuration in use as plain data (the offscreen reader compiles it itself). */
+/** The parser configuration in use as plain data. */
 async function rawParserConfig() {
   const { parserConfig } = await local.get("parserConfig");
   return parserConfig && parserConfig.version ? parserConfig : globalThis.FF_PARSER_CONFIG;
-}
-
-async function ensureOffscreen() {
-  if (!chrome.offscreen) throw new Error("Questa versione del browser non supporta lo scanner (serve Chrome 120 o successivo).");
-  const open = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
-  if (open.length) return;
-  await chrome.offscreen.createDocument({
-    url: "src/scan.html",
-    reasons: ["DOM_PARSER"],
-    justification: "Legge l'HTML delle ricerche salvate di Vinted per lo scanner automatico (analisi della pagina, senza eseguirla).",
-  });
-}
-
-async function readSearchPage(search) {
-  await ensureOffscreen();
-  try {
-    const config = await rawParserConfig();
-    const timeout = new Promise((resolve) => setTimeout(() => resolve({ outcome: "error", message: "Lettura troppo lenta." }), 40000));
-    return await Promise.race([chrome.runtime.sendMessage({ type: "ff:scan-read", url: search.url, config }), timeout]).then((r) => r || { outcome: "error", message: "Nessuna risposta dal lettore." });
-  } finally {
-    chrome.offscreen.closeDocument().catch(() => {});
-  }
-}
-
-let scanning = false;
-async function scanTick() {
-  if (scanning) return;
-  scanning = true;
-  try {
-    await scanStep();
-  } catch (err) {
-    await logError("scanner", err.message);
-  } finally {
-    scanning = false;
-  }
-}
-
-async function scanStep() {
-  const opts = await getOptions();
-  if (!opts.scanEnabled || !(await getKey())) return;
-  const now = Date.now();
-  if ((await loadDeep()).pacing.pausedUntil > now) return; // a refusal anywhere pauses every automatic read
-  const sc = await loadScanner();
-  if (K.scanPacingCheck(sc.pacing, now).ok === false) return;
-  const due = K.scanPickDue(sc.searches, now, opts.scanIntervalMin);
-  if (!due.length) return;
-
-  // The first due search whose site you allowed. Without the permission nothing is read.
-  let search = null;
-  for (const s of due) {
-    const origin = new URL(s.url).origin;
-    if (await chrome.permissions.contains({ origins: [`${origin}/*`] })) {
-      search = s;
-      break;
-    }
-    await scanMark(s.id, { lastError: `Serve il permesso di leggere ${new URL(s.url).hostname}: aggiungila di nuovo dalle opzioni.` });
-  }
-  if (!search) return;
-
-  // Reserve the slot before reading: a crash in the middle never makes the same read repeat at once.
-  await exclusive(async () => {
-    const cur = await loadScanner();
-    cur.pacing = K.scanPacingRecord(cur.pacing, now);
-    const s = cur.searches.find((x) => x.id === search.id);
-    if (s) s.lastScanAt = now;
-    await local.set({ scanner: cur });
-  });
-
-  const result = await readSearchPage(search);
-  await scanResult(search, result, opts);
-}
-
-/** Updates one saved search under the lock. */
-function scanMark(id, patch) {
-  return exclusive(async () => {
-    const sc = await loadScanner();
-    const s = sc.searches.find((x) => x.id === id);
-    if (!s) return null;
-    Object.assign(s, patch);
-    await local.set({ scanner: sc });
-    return s;
-  });
-}
-
-async function scanResult(search, r, opts) {
-  const now = Date.now();
-  if (r.outcome === "blocked") {
-    await exclusive(async () => {
-      const sc = await loadScanner();
-      sc.pacing = K.scanPacingPause(sc.pacing, now, r.message || "rifiuto di Vinted");
-      const s = sc.searches.find((x) => x.id === search.id);
-      if (s) s.lastError = r.message || "Vinted ha rifiutato la lettura.";
-      await local.set({ scanner: sc });
-      const d = await loadDeep();
-      d.pacing = K.pacingPause(d.pacing, now, "scanner: rifiuto di Vinted");
-      await local.set({ deep: d });
-    });
-    await logError("scanner", `Vinted ha rifiutato la lettura (${r.status || "?"}): tutte le letture automatiche sono sospese per 6 ore.`);
-    sendToPanel({ type: "ff:reads-paused" });
-    if (opts.scanNotify) notify("ff-scan-paused", "Scanner in pausa per 6 ore", "Vinted ha rifiutato una lettura. FlipFinder si ferma e non ritenta: riparte da solo dopo la pausa.");
-    return;
-  }
-  if (r.outcome !== "ok") {
-    const updated = await exclusive(async () => {
-      const sc = await loadScanner();
-      const s = sc.searches.find((x) => x.id === search.id);
-      if (!s) return null;
-      s.failures = (s.failures || 0) + 1;
-      s.lastError = r.message || "Lettura non riuscita.";
-      s.diag = r.diag ? { ...r.diag, at: now, search: s.url } : s.diag;
-      if (s.failures >= K.SCAN.maxFailures) {
-        s.enabled = false;
-        s.lastError = `${s.lastError} Ricerca sospesa dopo ${K.SCAN.maxFailures} tentativi falliti: riattivala dalle opzioni.`.slice(0, SCAN_STATUS_MAX + 60);
-      }
-      await local.set({ scanner: sc });
-      return s;
-    });
-    await logError("scanner", `${search.name}: ${(updated && updated.lastError) || r.message || r.outcome}`);
-    return;
-  }
-
-  // Read: what is new against what this search showed before. The first read of a search only
-  // builds the baseline (everything on it counts as already seen, no notification).
-  const vids = r.cards.map((c) => c.vid);
-  const fresh = await exclusive(async () => {
-    const sc = await loadScanner();
-    const s = sc.searches.find((x) => x.id === search.id);
-    if (!s) return [];
-    const diff = K.scanDiff(s.seen, vids);
-    const wasPrimed = Boolean(s.primed);
-    s.seen = diff.seen;
-    s.primed = true;
-    s.failures = 0;
-    s.lastError = "";
-    s.lastOkAt = now;
-    s.lastCount = vids.length;
-    s.lastNew = wasPrimed ? diff.fresh.length : 0;
-    s.totalNew = (s.totalNew || 0) + s.lastNew;
-    if (wasPrimed && opts.scanNotify) {
-      for (const vid of diff.fresh) sc.watch[vid] = { name: s.name, at: now };
-    }
-    for (const [vid, w] of Object.entries(sc.watch)) if (now - w.at > K.SCAN.watchTtlMs) delete sc.watch[vid];
-    await local.set({ scanner: sc });
-    return wasPrimed ? diff.fresh : [];
-  });
-  const entries = r.cards.map((c) => ({ vid: c.vid, payload: c.payload, pageType: "scan", pageUrl: search.url.slice(0, 1000), tabId: null }));
-  await enqueue("cards", entries, 0);
-  if (fresh.length) sendToPanel({ type: "ff:scan-new", name: search.name, count: fresh.length });
-}
-
-// ------------------------------------------------------------------ scanner notifications
-// notification id -> the Vinted item page it opens (session storage: survives the worker being stopped)
-async function scanLinksUpdate(fn) {
-  return exclusive(async () => {
-    const { scanLinks = {} } = await sessionStore.get("scanLinks");
-    const out = fn(scanLinks);
-    await sessionStore.set({ scanLinks });
-    return out;
-  });
-}
-
-function notify(id, title, message) {
-  chrome.notifications.create(id, { type: "basic", iconUrl: chrome.runtime.getURL("icons/icon-128.png"), title: title.slice(0, 80), message: message.slice(0, 240), priority: 1 }).catch(() => {});
-}
-
-/** Evaluations arrived: the items that were new in a scan and pass your thresholds raise a notification. */
-async function scanNotify(evals) {
-  if (!evals.length) return;
-  const opts = await getOptions();
-  const hits = await exclusive(async () => {
-    const sc = await loadScanner();
-    const watched = evals.filter((e) => sc.watch[e.vinted_id]);
-    if (!watched.length) return [];
-    const picked = opts.scanNotify ? K.scanHotPick(watched, sc.watch, opts) : [];
-    const out = picked.map((e) => ({ ev: e, name: sc.watch[e.vinted_id].name }));
-    for (const e of watched) delete sc.watch[e.vinted_id]; // answered, hot or not
-    await local.set({ scanner: sc });
-    return out;
-  });
-  for (const { ev, name } of hits) {
-    const id = `ff-scan-${ev.vinted_id}`;
-    await scanLinksUpdate((links) => {
-      links[id] = ev.url;
-      const ids = Object.keys(links);
-      for (const old of ids.slice(0, Math.max(0, ids.length - 50))) delete links[old];
-    });
-    const profit = ev.net_margin !== null && ev.net_margin !== undefined ? ` · margine ${K.eur(ev.net_margin, true)}` : "";
-    notify(id, `Nuova occasione${ev.brand ? ` · ${ev.brand}` : ""}`, `${ev.title}\n${K.eur(ev.price)}${profit} · score ${ev.flip_score} · ${name}`);
-  }
-}
-
-chrome.notifications?.onClicked.addListener(async (id) => {
-  const url = await scanLinksUpdate((links) => {
-    const found = links[id];
-    delete links[id];
-    return found;
-  });
-  chrome.notifications.clear(id).catch(() => {});
-  // Opens the item page on Vinted; buying, offering and messaging stay your decision.
-  if (url && /^https:\/\/www\.vinted\.[a-z.]+\/items\//.test(url)) chrome.tabs.create({ url });
-});
-
-/** The scanner as shown in the options and the popup (no private data: only the search list and counters). */
-async function scanSummary() {
-  const [sc, opts, key] = await Promise.all([loadScanner(), getOptions(), getKey()]);
-  const now = Date.now();
-  const active = sc.searches.filter((s) => s.enabled !== false);
-  const permitted = {};
-  for (const s of sc.searches) {
-    const origin = new URL(s.url).origin;
-    if (!(origin in permitted)) permitted[origin] = await chrome.permissions.contains({ origins: [`${origin}/*`] });
-  }
-  const effective = K.scanIntervalMin(active.length, opts.scanIntervalMin);
-  return {
-    enabled: opts.scanEnabled,
-    paired: Boolean(key),
-    intervalMin: opts.scanIntervalMin,
-    effectiveIntervalMin: effective,
-    requestsPerHour: active.length ? Math.round((active.length * 60) / effective) : 0,
-    pausedUntil: sc.pacing.pausedUntil > now ? sc.pacing.pausedUntil : 0,
-    pauseReason: sc.pacing.pausedUntil > now ? sc.pacing.pauseReason : "",
-    usedToday: now - sc.pacing.dayStart < 86400000 ? sc.pacing.dayCount : 0,
-    limits: { perHour: K.SCAN.perHour, perDay: K.SCAN.perDay, maxSearches: K.SCAN.maxSearches, gapSeconds: K.SCAN.gapMs / 1000 },
-    searches: sc.searches.map((s) => ({
-      id: s.id,
-      name: s.name,
-      url: s.url,
-      enabled: s.enabled !== false,
-      allowed: permitted[new URL(s.url).origin] === true,
-      lastScanAt: s.lastScanAt || 0,
-      lastOkAt: s.lastOkAt || 0,
-      lastCount: s.lastCount ?? null,
-      lastNew: s.lastNew ?? 0,
-      totalNew: s.totalNew || 0,
-      lastError: s.lastError || "",
-      diag: s.diag || null,
-    })),
-  };
 }
 
 // ------------------------------------------------------------------ shared parser configuration
@@ -925,299 +499,6 @@ async function updateParserConfig() {
   } catch (err) {
     await logError("config", `Configurazione del parser non aggiornata: ${err.message}`);
   }
-}
-
-// The parser configuration in use: FlipFinder's latest copy, else the one shipped with the extension.
-let compiledConf = null;
-async function parserConf() {
-  const { parserConfig } = await local.get("parserConfig");
-  const raw = parserConfig && parserConfig.version ? parserConfig : globalThis.FF_PARSER_CONFIG;
-  if (!compiledConf || compiledConf.version !== raw.version) {
-    try {
-      compiledConf = { version: raw.version, C: P.compileConfig(raw) };
-    } catch {
-      compiledConf = { version: raw.version, C: P.compileConfig(globalThis.FF_PARSER_CONFIG) };
-    }
-  }
-  return compiledConf.C;
-}
-
-// ------------------------------------------------------------------ actions on Vinted (favourite, buy)
-// Only on your click in FlipFinder (or in the panel): the item page opens in your browser, in your
-// Vinted session, and the content script clicks Vinted's own button once. Nothing is paid here:
-// the checkout waits for your confirmation. FlipFinder only receives what happened.
-const BUY_TTL_MS = 3 * 3600 * 1000;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// vid -> tabId of the item page opened for a purchase. In session storage: the service worker
-// may be stopped between the check and the checkout, the tab must still be found.
-async function buyTabOf(vid) {
-  const { buyTabs = {} } = await sessionStore.get("buyTabs");
-  const tabId = buyTabs[String(vid)];
-  if (typeof tabId !== "number") return null;
-  return chrome.tabs.get(tabId).then(() => tabId, () => null);
-}
-
-function setBuyTab(vid, tabId) {
-  // Read and written in one step: two purchases started at once never overwrite each other.
-  return exclusive(async () => {
-    const { buyTabs = {} } = await sessionStore.get("buyTabs");
-    if (tabId === null) delete buyTabs[String(vid)];
-    else buyTabs[String(vid)] = tabId;
-    await sessionStore.set({ buyTabs });
-  });
-}
-
-async function appOrigin() {
-  try {
-    return new URL((await getOptions()).appUrl).origin;
-  } catch {
-    return null;
-  }
-}
-
-/** Requests come from FlipFinder's own pages (through the bridge) or from this extension's pages. */
-async function trustedSender(sender) {
-  if (sender.id !== chrome.runtime.id) return false;
-  if (String(sender.url || "").startsWith(chrome.runtime.getURL(""))) return true; // panel, popup, options
-  const origin = sender.origin || (sender.url ? new URL(sender.url).origin : null);
-  return Boolean(origin) && origin === (await appOrigin());
-}
-
-async function itemUrlOf(url, vid) {
-  const C = await parserConf();
-  try {
-    const u = new URL(String(url));
-    if (!P.isVintedUrl(u.href, C) || P.itemId(u.pathname, C) !== String(vid)) return null;
-    return u.origin + u.pathname;
-  } catch {
-    return null;
-  }
-}
-
-// Checkouts being opened: tab id -> resolve(true when the tab shows Vinted's checkout).
-// Listening starts before the click; the time limit counts from the click.
-const checkoutWaits = new Map();
-function watchCheckout(tabId) {
-  let resolveSeen;
-  const seen = new Promise((resolve) => {
-    resolveSeen = resolve;
-  });
-  const settle = (v) => {
-    if (checkoutWaits.get(tabId) === onSeen) checkoutWaits.delete(tabId);
-    resolveSeen(v);
-  };
-  const onSeen = () => settle(true);
-  checkoutWaits.set(tabId, onSeen);
-  return {
-    wait: (timeoutMs = 15000) => Promise.race([seen, sleep(timeoutMs).then(() => false)]).then((v) => (settle(v), v)),
-    cancel: () => settle(false),
-  };
-}
-
-/**
- * Asks the content script of a tab, waiting for it to be there: a tab just opened (even in the
- * background, even on a slow page) answers once its document exists. Time-bound, not count-bound.
- */
-async function askTab(tabId, message, timeoutMs = 30000) {
-  const until = Date.now() + timeoutMs;
-  for (;;) {
-    try {
-      const r = await chrome.tabs.sendMessage(tabId, message);
-      if (r) return r;
-    } catch (err) {
-      if (/No tab with id/i.test(String(err && err.message))) return { ok: false, code: "no_page", message: "La scheda di Vinted è stata chiusa." };
-      /* content script not there yet */
-    }
-    if (Date.now() > until) return { ok: false, code: "no_page", message: "La pagina di Vinted non risponde: riprova." };
-    await sleep(250);
-  }
-}
-
-/**
- * The item page in a tab for an action: the tab already opened for that purchase (sent again to
- * the listing, so the page is fresh) or a new one. `after`: answers only from the page loaded now.
- */
-async function itemTab(vid, url, { active, reuse }) {
-  const after = Date.now();
-  const known = reuse ? await buyTabOf(vid) : null;
-  if (known !== null) {
-    const ok = await chrome.tabs.update(known, { url, ...(active ? { active: true } : {}) }).then(() => true, () => false);
-    if (ok) return { tabId: known, created: false, after };
-  }
-  const tab = await chrome.tabs.create({ url, active });
-  return { tabId: tab.id, created: true, after };
-}
-
-async function recordVinted(vid, body) {
-  try {
-    return await api("/capture/vinted-actions", { method: "POST", body: { vinted_id: String(vid), ...body } });
-  } catch (err) {
-    await logError("vinted", err.message);
-    return null;
-  }
-}
-
-// Tabs opened to change a favourite: their own page reading must not race the click's result.
-const favouriteTabs = new Set();
-
-async function vintedFavourite(msg) {
-  const url = await itemUrlOf(msg.url, msg.vid);
-  if (!url) return { ok: false, code: "bad_url", message: "Annuncio non valido." };
-  const tab = await chrome.tabs.create({ url, active: false });
-  favouriteTabs.add(tab.id);
-  try {
-    const want = Boolean(msg.want);
-    let r = await askTab(tab.id, { type: "ff:vinted-act", action: "favourite", vid: String(msg.vid), want });
-    if (r.code === "verify" && r.clicked) {
-      // Clicked once; the page didn't show the result: give Vinted a moment, then read it again.
-      await sleep(1500);
-      const reloadedAt = Date.now();
-      const reloaded = await chrome.tabs.reload(tab.id, { bypassCache: true }).then(() => true, () => false);
-      let s = reloaded ? await askTab(tab.id, { type: "ff:vinted-act", action: "state", vid: String(msg.vid), after: reloadedAt }) : { ok: false };
-      if (s.ok && typeof s.favourite === "boolean" && s.favourite !== want) {
-        // Vinted didn't get the click (the page was not ready for it): one more, on this fresh
-        // page, after reading the state again - never a click that could undo the first one.
-        const again = await askTab(tab.id, { type: "ff:vinted-act", action: "favourite", vid: String(msg.vid), want, after: reloadedAt });
-        if (again.ok) s = { ...again, favourite: want };
-      }
-      if (s.ok && s.favourite === want) r = { ...s, ok: true, changed: true };
-      else {
-        if (s.ok && typeof s.favourite === "boolean") await recordVinted(msg.vid, { kind: "favourite", value: s.favourite, source: "page" });
-        return { ok: false, code: "not_confirmed", message: "Vinted non ha confermato il cambio: controlla l'annuncio su Vinted.", favourite: s.ok ? s.favourite : null };
-      }
-    }
-    if (r.ok) await recordVinted(msg.vid, { kind: "favourite", value: Boolean(r.favourite), source: "click" });
-    return r;
-  } finally {
-    favouriteTabs.delete(tab.id);
-    chrome.tabs.remove(tab.id).catch(() => {});
-  }
-}
-
-async function vintedBuyCheck(msg) {
-  const url = await itemUrlOf(msg.url, msg.vid);
-  if (!url) return { ok: false, code: "bad_url", message: "Annuncio non valido." };
-  // In front: if you go ahead, the checkout continues in this tab.
-  const { tabId, after } = await itemTab(String(msg.vid), url, { active: true, reuse: true });
-  await setBuyTab(msg.vid, tabId);
-  return askTab(tabId, { type: "ff:vinted-act", action: "state", vid: String(msg.vid), after });
-}
-
-/** One click on Acquista in the item's tab, then the checkout in front (confirmed by you on Vinted). */
-async function clickBuy(vid, tabId, extra) {
-  const checkout = watchCheckout(tabId); // listening before the click
-  const r = await askTab(tabId, { type: "ff:vinted-act", action: "buy", vid, ...extra });
-  if (!r.ok) {
-    checkout.cancel();
-    return r;
-  }
-  // A purchase completed later in this tab belongs to this listing.
-  const { pendingBuys = {} } = await local.get("pendingBuys");
-  pendingBuys[vid] = { at: Date.now(), price: r.price, tabId };
-  await local.set({ pendingBuys });
-  await chrome.tabs.update(tabId, { active: true }).catch(() => {});
-  if (!(await checkout.wait(15000))) return { ok: false, code: "checkout_not_seen", message: "Ho premuto Acquista su Vinted ma il checkout non si è aperto: controlla la scheda di Vinted.", price: r.price };
-  await recordVinted(vid, { kind: "checkout_opened", price: r.price, source: "click" });
-  return r;
-}
-
-async function vintedBuyOpen(msg) {
-  const vid = String(msg.vid);
-  let tabId = await buyTabOf(vid);
-  if (tabId === null) {
-    const check = await vintedBuyCheck(msg);
-    if (!check.ok) return check;
-    tabId = await buyTabOf(vid);
-    if (tabId === null) return { ok: false, code: "no_page", message: "La scheda di Vinted è stata chiusa." };
-  }
-  const expect = Number(msg.expect_price);
-  return clickBuy(vid, tabId, expect > 0 ? { expect_price: expect } : {});
-}
-
-/**
- * Buy at the price you saw, in one click: the listing opens (in the background while it is read),
- * Acquista is clicked only if it is still on sale at exactly that price, then the checkout comes
- * to the front. Otherwise nothing is clicked and the reason comes back (price_changed with the
- * new price, sold, reserved, removed, signed_out...).
- */
-async function vintedBuy(msg) {
-  const vid = String(msg.vid);
-  const url = await itemUrlOf(msg.url, vid);
-  if (!url) return { ok: false, code: "bad_url", message: "Annuncio non valido." };
-  const expect = Number(msg.expect_price);
-  if (!(expect > 0)) return { ok: false, code: "bad_price", message: "Prezzo dell'analisi mancante." };
-  const { tabId, created, after } = await itemTab(vid, url, { active: false, reuse: true });
-  await setBuyTab(vid, tabId);
-  const r = await clickBuy(vid, tabId, { expect_price: expect, after });
-  if (!r.ok && r.code !== "price_changed" && r.code !== "checkout_not_seen" && created) {
-    // Nothing to do on that page: the tab you didn't open yourself goes away. With a new price it
-    // stays, ready for "open the checkout at the new price".
-    await setBuyTab(vid, null);
-    chrome.tabs.remove(tabId).catch(() => {});
-  }
-  return r;
-}
-
-/** The tab of a started checkout moved on to another listing: that checkout is abandoned. */
-async function forgetBuyIfLeft(tabId, url) {
-  const { pendingBuys = {} } = await local.get("pendingBuys");
-  let vid = null;
-  try {
-    vid = P.itemId(new URL(String(url)).pathname, await parserConf());
-  } catch {
-    return;
-  }
-  const stale = Object.keys(pendingBuys).filter((k) => pendingBuys[k].tabId === tabId && k !== vid);
-  if (!stale.length) return;
-  for (const k of stale) delete pendingBuys[k];
-  await local.set({ pendingBuys });
-}
-
-async function onPurchaseDone(msg, sender) {
-  const { pendingBuys = {} } = await local.get("pendingBuys");
-  const now = Date.now();
-  // Only the checkout started from FlipFinder in this very tab: a purchase is never attributed
-  // to another item (record it by hand with "I bought it" when it was completed elsewhere).
-  const match = Object.entries(pendingBuys).find(([, p]) => now - p.at < BUY_TTL_MS && sender.tab && p.tabId === sender.tab.id);
-  if (!match) return { ok: false };
-  const [vid, pending] = match;
-  delete pendingBuys[vid];
-  await local.set({ pendingBuys });
-  const paid = typeof msg.total === "number" && msg.total > 0 ? msg.total : pending.price;
-  await recordVinted(vid, { kind: "purchased", price: paid, source: "checkout", detail: { item_price: pending.price, total_read: msg.total ?? null } });
-  return { ok: true, vid };
-}
-
-// ------------------------------------------------------------------ bridge to FlipFinder's pages
-// One registration at a time: the worker start-up, a permission just granted and a changed address
-// can all ask at once, and two concurrent runs both try to register the same script ID
-// ("Duplicate script ID 'ff-app-bridge'").
-let bridgeRun = Promise.resolve();
-function registerAppBridge() {
-  bridgeRun = bridgeRun.then(registerAppBridgeNow, registerAppBridgeNow);
-  return bridgeRun;
-}
-
-async function registerAppBridgeNow() {
-  const origin = await appOrigin();
-  const allowed = Boolean(origin) && (await chrome.permissions.contains({ origins: [`${origin}/*`] }).catch(() => false));
-  const want = allowed ? [`${origin}/*`] : null;
-  const [current] = await chrome.scripting.getRegisteredContentScripts({ ids: ["ff-app-bridge"] }).catch(() => []);
-  // Left as it is when nothing changed: the service worker starts often (every wake-up), and a
-  // FlipFinder page loading while the script is re-registered would miss its bridge.
-  if (!(current && want && JSON.stringify(current.matches) === JSON.stringify(want))) {
-    if (current) await chrome.scripting.unregisterContentScripts({ ids: ["ff-app-bridge"] }).catch(() => {});
-    if (!want) return;
-    await chrome.scripting
-      .registerContentScripts([{ id: "ff-app-bridge", matches: want, js: ["src/app-bridge.js"], runAt: "document_start", persistAcrossSessions: true }])
-      .catch((err) => logError("bridge", err.message));
-  }
-  // FlipFinder pages already open (address just set, extension just installed or updated, a
-  // page loaded while the worker was restarting) get the bridge now, without a reload. Once per
-  // page: the script checks it itself.
-  const open = await chrome.tabs.query({ url: want[0] }).catch(() => []);
-  for (const tab of open) chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["src/app-bridge.js"] }).catch(() => {});
 }
 
 // ------------------------------------------------------------------ messages
@@ -1246,63 +527,8 @@ function scheduleLookup() {
 }
 
 const HANDLERS = {
-  async "ff:bridge-hello"(msg, sender) {
-    if (!(await trustedSender(sender))) return { ok: false };
-    return { ok: true, version: VERSION, paired: Boolean(await getKey()) };
-  },
-
-  async "ff:vinted-favourite"(msg, sender) {
-    if (!(await trustedSender(sender))) return { ok: false, code: "forbidden", message: "Richiesta non autorizzata." };
-    if (!(await getKey())) return { ok: false, code: "unpaired", message: "Estensione non associata a FlipFinder." };
-    return vintedFavourite(msg);
-  },
-
-  async "ff:vinted-buy-check"(msg, sender) {
-    if (!(await trustedSender(sender))) return { ok: false, code: "forbidden", message: "Richiesta non autorizzata." };
-    if (!(await getKey())) return { ok: false, code: "unpaired", message: "Estensione non associata a FlipFinder." };
-    return vintedBuyCheck(msg);
-  },
-
-  async "ff:vinted-buy-open"(msg, sender) {
-    if (!(await trustedSender(sender))) return { ok: false, code: "forbidden", message: "Richiesta non autorizzata." };
-    return vintedBuyOpen(msg);
-  },
-
-  async "ff:vinted-buy"(msg, sender) {
-    if (!(await trustedSender(sender))) return { ok: false, code: "forbidden", message: "Richiesta non autorizzata." };
-    if (!(await getKey())) return { ok: false, code: "unpaired", message: "Estensione non associata a FlipFinder." };
-    return vintedBuy(msg);
-  },
-
-  async "ff:purchase-done"(msg, sender) {
-    return onPurchaseDone(msg, sender);
-  },
-
-  async "ff:favourite-seen"(msg, sender) {
-    if (sender.tab && favouriteTabs.has(sender.tab.id)) return { ok: true };
-    if (!/^\d+$/.test(String(msg.vid)) || typeof msg.value !== "boolean") return { ok: false };
-    try {
-      await api("/capture/vinted-actions", { method: "POST", body: { vinted_id: String(msg.vid), kind: "favourite", value: msg.value, source: "page" } });
-    } catch (err) {
-      if (err.status === 404) favouriteSeenLater.set(String(msg.vid), msg.value); // listing still being recorded
-      else await logError("vinted", err.message);
-    }
-    return { ok: true };
-  },
-
   async "ff:hello"(msg, sender) {
     const tabId = sender.tab && sender.tab.id;
-    if (typeof tabId === "number" && msg.pageType === "item") forgetBuyIfLeft(tabId, msg.url);
-    if (typeof tabId === "number" && checkoutWaits.has(tabId)) {
-      const C = await parserConf();
-      let path = "";
-      try {
-        path = new URL(String(msg.url)).pathname;
-      } catch {
-        /* not a URL */
-      }
-      if (C.patterns.page_checkout && C.patterns.page_checkout.test(path)) checkoutWaits.get(tabId)();
-    }
     if (typeof tabId === "number") {
       // Bookkeeping for the live panel, without making the page wait for it.
       exclusive(async () => {
@@ -1376,13 +602,6 @@ const HANDLERS = {
     return res;
   },
 
-  async "ff:deep"(msg, sender) {
-    const tabId = sender.tab ? sender.tab.id : msg.tabId;
-    if (!/^\d+$/.test(String(msg.vid)) || !msg.url) return { error: "Annuncio non valido." };
-    if (!(await getKey())) return { error: "Associa prima l'estensione a FlipFinder (opzioni)." };
-    return deepEnqueue({ vid: String(msg.vid), url: msg.url, kind: "manual", tabId });
-  },
-
   async "ff:open"(msg) {
     const opts = await getOptions();
     const path = String(msg.path || "");
@@ -1417,54 +636,16 @@ const HANDLERS = {
   },
 
   async "ff:status"() {
-    const [sync, q, d, key, opts, store] = await Promise.all([getSync(), loadQueue(), loadDeep(), getKey(), getOptions(), local.get(["errors", "parserConfig", "account"])]);
+    const [sync, q, key, opts, store] = await Promise.all([getSync(), loadQueue(), getKey(), getOptions(), local.get(["errors", "parserConfig", "account"])]);
     return {
       version: VERSION,
       paired: Boolean(key),
       account: store.account || null,
       appUrl: opts.appUrl,
       sync: { ...sync, pending: K.queueSize(q) },
-      deep: { queued: d.jobs.length, pausedUntil: d.pacing.pausedUntil, pauseReason: d.pacing.pauseReason },
       parserVersion: (store.parserConfig && store.parserConfig.version) || globalThis.FF_PARSER_CONFIG.version,
       errors: (store.errors || []).slice(0, 10),
     };
-  },
-
-  // ---- automatic scanner (the page asking has just obtained the site permission)
-  async "ff:scan-state"() {
-    return scanSummary();
-  },
-
-  async "ff:scan-add"(msg) {
-    const n = K.normalizeSearchUrl(msg.url);
-    if (n.error) return { error: n.error };
-    if (!(await chrome.permissions.contains({ origins: [`${n.origin}/*`] }))) return { error: `Serve il permesso di leggere ${new URL(n.origin).hostname}.` };
-    const name = String(msg.name || "").trim().slice(0, 60) || n.name;
-    const res = await exclusive(async () => {
-      const sc = await loadScanner();
-      if (sc.searches.some((s) => K.normalizeSearchUrl(s.url).key === n.key)) return { error: "Questa ricerca è già nello scanner." };
-      if (sc.searches.length >= K.SCAN.maxSearches) return { error: `Al massimo ${K.SCAN.maxSearches} ricerche: toglierne una prima di aggiungerne un'altra.` };
-      sc.searches.push({ id: crypto.randomUUID(), name, url: n.url, enabled: true, addedAt: Date.now(), lastScanAt: 0, failures: 0, seen: [], primed: false });
-      await local.set({ scanner: sc });
-      return { ok: true };
-    });
-    if (res.ok) scanTick();
-    return res.ok ? { ok: true, summary: await scanSummary() } : res;
-  },
-
-  async "ff:scan-remove"(msg) {
-    await exclusive(async () => {
-      const sc = await loadScanner();
-      sc.searches = sc.searches.filter((s) => s.id !== msg.id);
-      await local.set({ scanner: sc });
-    });
-    return { ok: true, summary: await scanSummary() };
-  },
-
-  async "ff:scan-toggle"(msg) {
-    await scanMark(String(msg.id), msg.enabled ? { enabled: true, failures: 0, lastError: "" } : { enabled: false });
-    if (msg.enabled) scanTick();
-    return { ok: true, summary: await scanSummary() };
   },
 
   async "ff:pair"(msg) {
@@ -1558,23 +739,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "ff-flush") flush().catch((e) => logError("flush", e.message));
-  else if (alarm.name === "ff-deep") deepPump().catch((e) => logError("deep", e.message));
-  else if (alarm.name === "ff-refresh") pollRefreshQueue();
-  else if (alarm.name === "ff-scan") scanTick();
   else if (alarm.name === "ff-config") updateParserConfig();
   else if (alarm.name === "ff-market") updateMarketCache();
 });
-
-chrome.permissions.onAdded.addListener(() => registerAppBridge());
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if ((area === "sync" && changes.options) || (area === "local" && (changes.paired || changes.parserConfig || changes.marketCache))) publishBoot();
   if (area === "sync" && changes.options) {
     scheduleFlush(0);
-    registerAppBridge();
-    // Switched on: the first read starts at once (the pacing still applies).
-    const before = changes.options.oldValue && changes.options.oldValue.scanEnabled;
-    if (changes.options.newValue && changes.options.newValue.scanEnabled && !before) scanTick();
   }
   if (area === "local" && changes.apiKey) {
     // Pages only see whether the extension is paired, never the key.
@@ -1588,10 +760,7 @@ async function startup() {
   await sessionStore.setAccessLevel?.({ accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" }).catch(() => {});
   chrome.alarms.create("ff-config", { periodInMinutes: 360, delayInMinutes: 1 });
   chrome.alarms.create("ff-market", { periodInMinutes: 180, delayInMinutes: 180 });
-  chrome.alarms.create("ff-refresh", { periodInMinutes: 10, delayInMinutes: 2 });
-  chrome.alarms.create("ff-scan", { periodInMinutes: 1, delayInMinutes: 1 }); // does nothing unless the scanner is on
   if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
-  registerAppBridge();
   const key = await getKey();
   // Pages read this flag (never the key) to know whether to score their cards.
   if (Boolean(key) !== Boolean((await local.get("paired")).paired)) await local.set({ paired: Boolean(key) });
@@ -1603,7 +772,6 @@ async function startup() {
     updateParserConfig();
     updateMarketCache();
     scheduleFlush(500);
-    scheduleDeep(2000);
   }
 }
 

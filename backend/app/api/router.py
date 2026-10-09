@@ -14,7 +14,6 @@ from app.api.v1 import (
     pricing,
     settings,
     system,
-    vinted,
 )
 from app.core.rate_limit import RateLimit
 
@@ -34,6 +33,5 @@ for module in (
     pricing,
     settings,
     analytics,
-    vinted,
 ):
     api_router.include_router(module.router, dependencies=_limited)

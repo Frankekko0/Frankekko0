@@ -290,47 +290,12 @@ function renderDetail() {
     }
   });
   bar.append(track);
-  if (ev.analysis_depth !== "full") {
-    const deep = el("button", { class: "btn small", type: "button", text: "Analisi approfondita" });
-    deep.addEventListener("click", async () => {
-      deep.disabled = true;
-      const r = await send({ type: "ff:deep", vid: detail.vid, url: d.item.url, tabId });
-      deep.textContent = r && r.error ? r.error : "In coda: lettura lenta della pagina…";
-    });
-    bar.append(deep);
-  }
   const open = el("button", { class: "btn small", type: "button", text: "Pagina di tracking" });
   open.addEventListener("click", () => send({ type: "ff:open", path: `/items/${detail.vid}` }));
   bar.append(open);
-  if (d.tracking.status === "active") bar.append(buyButton(d));
+  // The listing on Vinted: a plain link. Favouriting, buying and messaging are yours to do there.
+  bar.append(el("a", { class: "btn small", href: d.item.url, target: "_blank", rel: "noopener noreferrer", text: "Apri su Vinted" }));
   root.append(bar);
-  root.append(el("p", { class: "muted buy-note", role: "status", "aria-live": "polite" }));
-}
-
-/** Buy: check availability and price on Vinted, then one more click opens Vinted's checkout. */
-function buyButton(d) {
-  const btn = el("button", { class: "btn small", type: "button", text: "Acquista su Vinted" });
-  const note = () => $("detail").querySelector(".buy-note");
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    note().textContent = "Verifico disponibilità e prezzo su Vinted…";
-    const r = await send({ type: "ff:vinted-buy-check", vid: detail.vid, url: d.item.url });
-    btn.disabled = false;
-    if (!r || !r.ok) return (note().textContent = (r && r.message) || "Verifica non riuscita.");
-    if (r.signedIn === false) return (note().textContent = "Non sei collegato a Vinted: accedi e riprova.");
-    if (r.status !== "active") return (note().textContent = `Non acquistabile: ${STATUS[r.status] || r.status}.`);
-    const changed = r.price != null && Math.abs(r.price - d.item.price) >= 0.01;
-    note().textContent = changed ? `Attenzione: prezzo cambiato da ${K.eur(d.item.price)} a ${K.eur(r.price)}.` : `Disponibile a ${K.eur(r.price)}.`;
-    const go = el("button", { class: "btn small primary", type: "button", text: changed ? `Apri il checkout a ${K.eur(r.price)}` : "Apri il checkout" });
-    go.addEventListener("click", async () => {
-      go.disabled = true;
-      const o = await send({ type: "ff:vinted-buy-open", vid: detail.vid, url: d.item.url });
-      note().textContent = o && o.ok ? "Checkout aperto su Vinted: conferma tu il pagamento." : (o && o.message) || "Checkout non aperto.";
-      go.remove();
-    });
-    btn.after(go);
-  });
-  return btn;
 }
 
 // ------------------------------------------------------------------ alerts

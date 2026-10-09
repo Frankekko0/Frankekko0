@@ -1,9 +1,8 @@
 /*
  * FlipFinder for Vinted - reading search cards out of a document.
  *
- * Shared by the content script (the page you opened) and the scanner's offscreen document (a saved
- * search fetched as HTML and parsed inert: no script runs, no image loads). Selectors and labels
- * come from the parser configuration, so a change on Vinted is fixed by updating that file.
+ * Used by the content script on the page you opened. Selectors and labels come from the parser
+ * configuration, so a change on Vinted is fixed by updating that file.
  */
 (function (root, factory) {
   const api = factory();

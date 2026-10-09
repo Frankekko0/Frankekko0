@@ -31,7 +31,7 @@ test("the extension runs on exactly the Vinted domains of the configuration", ()
   // pairing time (unknown at build time); it adds no site access by itself.
   // offscreen: a hidden page that parses the HTML of the searches saved for the optional scanner
   // (the service worker has no DOM); notifications: the scanner's alerts. Neither adds site access.
-  assert.deepEqual(manifest.permissions.sort(), ["alarms", "notifications", "offscreen", "scripting", "sidePanel", "storage"]);
+  assert.deepEqual(manifest.permissions.sort(), ["alarms", "sidePanel", "storage"]); // no scripting, offscreen or notifications
   // FlipFinder's address is asked at pairing time, and a Vinted site when you add a search to the scanner.
   assert.equal(manifest.host_permissions, undefined);
 });

@@ -11,8 +11,8 @@ from pydantic import BaseModel, Field
 from app.marketplace.base import ManualListingInput
 from app.schemas.common import Money, Ratio, Schema
 
-# "scan": a saved search read by the extension's optional automatic scanner (not a page the user opened).
-PageType = Literal["catalog", "closet", "favourites", "item", "other", "scan"]
+# Only pages the user opened and scrolled: the extension reads nothing on its own.
+PageType = Literal["catalog", "closet", "favourites", "item", "other"]
 
 
 class ApiKeyIn(BaseModel):
@@ -89,11 +89,9 @@ class CaptureCardsOut(BaseModel):
 
 class CaptureItemIn(BaseModel):
     item: ManualListingInput
-    # extension_item: an item page the user opened; extension_deep: deep analysis the user asked
-    # for (or a slow automatic one on a top candidate); extension_refresh: status check of a
-    # tracked item.
-    mode: Literal["extension_item", "extension_deep", "extension_refresh"] = "extension_item"
-    # None keeps the default of the mode (deep analyses on command are tracked).
+    # An item page the user opened (the extension reads nothing else).
+    mode: Literal["extension_item"] = "extension_item"
+    # None keeps the default of the mode.
     track: bool | None = None
     extension_version: str | None = Field(default=None, max_length=20)
     parser_version: str | None = Field(default=None, max_length=24)
@@ -111,13 +109,6 @@ class TrackIn(BaseModel):
 
 class EvaluationsIn(BaseModel):
     vinted_ids: list[str] = Field(min_length=1, max_length=200)
-
-
-class RefreshResultIn(BaseModel):
-    vinted_id: str = Field(pattern=r"^\d{1,20}$")
-    outcome: Literal["not_found", "blocked", "error"]
-    http_status: int | None = Field(default=None, ge=100, le=599)
-    message: str | None = Field(default=None, max_length=300)
 
 
 MAX_PAGE_STATS_ITEMS = 120
