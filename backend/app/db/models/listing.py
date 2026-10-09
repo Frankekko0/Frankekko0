@@ -40,7 +40,8 @@ class Listing(Base):
         CheckConstraint("price >= 0", name="price_non_negative"),
         CheckConstraint("btrim(url) <> ''", name="url_not_empty"),
         CheckConstraint(
-            "published_at_kind IN ('exact', 'relative', 'reported', 'unknown')", name="published_at_kind_valid"
+            "published_at_kind IN ('exact', 'relative', 'reported', 'unknown')",
+            name="published_at_kind_valid",
         ),
         Index("ix_listings_segment", "brand_id", "category_id", "status"),
         Index("ix_listings_published_at", "published_at"),

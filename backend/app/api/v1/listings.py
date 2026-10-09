@@ -122,9 +122,7 @@ async def list_listings(
     total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
     rows = (
         await db.execute(
-            stmt.order_by(Listing.listed_at.desc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
+            stmt.order_by(Listing.listed_at.desc()).offset((page - 1) * page_size).limit(page_size)
         )
     ).all()
     items = [
