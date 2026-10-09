@@ -548,7 +548,7 @@ Q1–Q10 e C1–C5 (§2) · formula del Flip Score da farti vedere prima di fiss
 ### 11.5 Avanzamento Fase 2
 
 - [x] 2.1 Vincoli e dati dedotti (migrazione 0010: `published_at_kind`, URL non vuoto, niente data di pubblicazione inventata; primo prezzo datato alla prima osservazione)
-- [ ] 2.2 Osservazioni
+- [x] 2.2 Osservazioni (migrazione 0011: snapshot tipizzati con motivo, versioni di estensione e parser, serie foto; una riga solo se cambia qualcosa o dopo 6 h; `last_verified_at`; `listing_price_history` ora è una vista sugli snapshot, nessun prezzo perso)
 - [ ] 2.3 Immagini
 - [ ] 2.4 "Da verificare"
 - [ ] 2.5 Venditore

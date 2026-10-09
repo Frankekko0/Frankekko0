@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.db.models import AcquisitionAttempt, Listing, ListingSnapshot, Opportunity
-from app.domain.enums import AcquisitionMode, ListingStatus
+from app.domain.enums import AcquisitionMode, ListingStatus, StatusEvidence
 from app.tracking.policy import schedule
 from app.tracking.status import Observation, StatusState, StatusUpdate, apply_observation
 
@@ -102,6 +102,11 @@ class TrackingService:
             }
             if upd.reachable:
                 values["last_seen_at"] = obs.observed_at
+                if (
+                    obs.status not in (None, ListingStatus.UNKNOWN)
+                    or obs.evidence == StatusEvidence.NOT_FOUND
+                ):
+                    values["last_verified_at"] = obs.observed_at
             if upd.changed:
                 values["status_changed_at"] = obs.observed_at
             if obs.price is not None and upd.reachable:

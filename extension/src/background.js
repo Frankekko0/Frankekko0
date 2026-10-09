@@ -373,19 +373,20 @@ async function enqueue(kind, entries, delayMs) {
 }
 
 async function sendBatch(kind, batch) {
+  const parser_version = String((await rawParserConfig()).version || "").slice(0, 24) || null;
   const timing = { ep: kind === "items" ? "item" : "cards", n: batch.entries.length };
   if (kind === "items") {
     const e = batch.entries[0];
     const res = await api("/capture/item", {
       method: "POST",
-      body: { item: e.payload, mode: e.mode || "extension_item", track: e.track ?? null, extension_version: VERSION },
+      body: { item: e.payload, mode: e.mode || "extension_item", track: e.track ?? null, extension_version: VERSION, parser_version },
       timing,
     });
     return { evaluations: res.evaluation ? [res.evaluation] : [], analysis: res.analysis, timing };
   }
   const res = await api("/capture/cards", {
     method: "POST",
-    body: { page_type: batch.pageType.split("#")[0], page_url: batch.entries[0].pageUrl || "", items: batch.entries.map((e) => e.payload), extension_version: VERSION },
+    body: { page_type: batch.pageType.split("#")[0], page_url: batch.entries[0].pageUrl || "", items: batch.entries.map((e) => e.payload), extension_version: VERSION, parser_version },
     timing,
   });
   return { ...res, timing };

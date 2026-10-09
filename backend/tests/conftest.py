@@ -76,7 +76,7 @@ async def _seeded(_migrated_database: None) -> AsyncIterator[None]:
 
 DATA_TABLES = (
     "alert_deliveries, alerts, favorites, inventory, sales, purchases, user_affinities, market_comparables, "
-    "opportunity_scores, opportunities, analysis_jobs, listing_price_history, listing_snapshots, "
+    "opportunity_scores, opportunities, analysis_jobs, listing_snapshots, "
     "acquisition_attempts, listing_images, listings, products, "
     "sellers, market_statistics, watchlists, push_subscriptions, notification_settings, user_preferences, users, "
     "system_state, sold_sales, external_prices, external_searches, model_price_stats"

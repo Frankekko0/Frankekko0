@@ -115,6 +115,9 @@ class Listing(Base):
     published_at_kind: Mapped[str] = mapped_column(String(8), default="unknown", server_default="unknown")
     first_seen_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
+    # Last time a capture read the listing's state (price/status) from the page or a card; link-only
+    # records and unreachable checks do not count.
+    last_verified_at: Mapped[datetime | None] = mapped_column()
     status_changed_at: Mapped[datetime | None] = mapped_column()
     # Sale: estimated moment (midpoint of the window below), first observation of "sold",
     # last price seen while open, days from publication to the estimated sale.
@@ -215,9 +218,21 @@ class ListingSnapshot(Base):
     view_count: Mapped[int | None] = mapped_column(Integer)
     photo_count: Mapped[int | None] = mapped_column(SmallInteger)
     note: Mapped[str | None] = mapped_column(String(200))
+    # Why this row exists: first, price, status, favourites, photos, richer, heartbeat (comma list).
+    reason: Mapped[str | None] = mapped_column(String(40))
+    # The fields the observation contained, each typed observed / declared / inferred.
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Photo keys in the original order, and whether the set is the item's complete gallery.
+    image_set: Mapped[list[str] | None] = mapped_column(JSONB)
+    image_set_complete: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    extension_version: Mapped[str | None] = mapped_column(String(20))
+    parser_version: Mapped[str | None] = mapped_column(String(24))
 
 
 class ListingPriceHistory(Base):
+    """Read-only view (migration 0011): the price points of ``listing_snapshots`` - the first one
+    seen and every change. There is no second copy to keep in step; never insert here."""
+
     __tablename__ = "listing_price_history"
     __table_args__ = (Index("ix_price_history_listing_observed", "listing_id", "observed_at"),)
 

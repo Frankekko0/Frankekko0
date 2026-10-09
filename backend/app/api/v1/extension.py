@@ -219,7 +219,13 @@ async def capture_cards(
         pl.external_id: pl for pl in (manual_to_provider(i, mode.value, CaptureLevel.CARD) for i in items)
     }
     result, outcomes = await persist_observations(
-        db, list(by_id.values()), mode, track=False, reuse_recent=True
+        db,
+        list(by_id.values()),
+        mode,
+        track=False,
+        reuse_recent=True,
+        extension_version=body.extension_version,
+        parser_version=body.parser_version,
     )
     vision = vision_order(outcomes)
     await _touch_sync(db, body.extension_version, "cards", len(by_id))
@@ -244,7 +250,14 @@ async def capture_item(
         raise AppError("Solo annunci Vinted.", code="not_vinted")
     mode = AcquisitionMode(body.mode)
     pl = manual_to_provider(body.item, mode.value, CaptureLevel.FULL)
-    result, outcomes = await persist_observations(db, [pl], mode, track=body.track)
+    result, outcomes = await persist_observations(
+        db,
+        [pl],
+        mode,
+        track=body.track,
+        extension_version=body.extension_version,
+        parser_version=body.parser_version,
+    )
     await _touch_sync(db, body.extension_version, "items", 1)
     await db.commit()
     await cache.bump(NS_FEED)

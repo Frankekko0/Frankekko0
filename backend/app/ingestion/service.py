@@ -24,8 +24,9 @@ from sqlalchemy import delete, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.db.models import Listing, ListingImage, ListingPriceHistory, ListingSnapshot, Product, Seller
+from app.db.models import Listing, ListingImage, ListingSnapshot, Product, Seller
 from app.domain.enums import CAPTURE_RANK, AcquisitionMode, CaptureLevel, Condition, ListingStatus
 from app.identification.engine import IdentificationEngine, IdentificationResult, ListingText
 from app.identification.taxonomy import Taxonomy
@@ -36,6 +37,12 @@ from app.ingestion.normalizer import (
     normalize_country,
     normalize_size,
     title_fingerprint,
+)
+from app.ingestion.observations import (
+    LastSnapshot,
+    current_from,
+    snapshot_reasons,
+    snapshot_row,
 )
 from app.marketplace.base import ProviderListing, ProviderSeller
 from app.scoring.seller import SellerProfile, seller_reliability
@@ -217,9 +224,11 @@ def _lifecycle(update: StatusUpdate) -> dict[str, Any]:
 class IngestionService:
     """Persists observations of listings.
 
-    Every observation (new or known listing) appends a :class:`ListingSnapshot`; known listings
-    are updated in place (dedup by ``(provider, external_id)``, i.e. the Vinted ID). A capture
-    richer than what is stored (a full item page after a search card) replaces the descriptive
+    Known listings are updated in place (dedup by ``(provider, external_id)``, i.e. the Vinted ID)
+    and always get their "last seen / verified" refreshed. History is append-only but sparing:
+    a :class:`ListingSnapshot` is added for a new listing and then only when the price, status,
+    favourites or photos changed, a richer capture arrived, or the last row is older than the
+    heartbeat (see ``app.ingestion.observations``). A capture richer than what is stored (a full item page after a search card) replaces the descriptive
     data and photos; a poorer one never downgrades them.
     """
 
@@ -229,8 +238,13 @@ class IngestionService:
         provider: str,
         mode: AcquisitionMode | str = AcquisitionMode.PROVIDER_SCAN,
         track: bool | None = None,
+        *,
+        extension_version: str | None = None,
+        parser_version: str | None = None,
     ) -> None:
         self.session = session
+        self.extension_version = extension_version
+        self.parser_version = parser_version
         self.provider = provider
         self.mode = AcquisitionMode(mode)
         self.track = self.mode in TRACKING_MODES if track is None else track
@@ -270,14 +284,16 @@ class IngestionService:
                     Listing.view_count,
                     Listing.photo_count,
                     Listing.seller_id,
+                    Listing.currency,
                 ).where(Listing.provider == self.provider, Listing.external_id.in_(list(by_ext)))
             )
         ).all()
         existing = {r.external_id: r for r in existing_rows}
+        last_seen_rows = await self._last_snapshots([r.id for r in existing_rows])
+        heartbeat = timedelta(hours=get_settings().snapshot_heartbeat_hours)
 
         new_rows: list[dict[str, Any]] = []
         new_images: list[dict[str, Any]] = []
-        history_rows: list[dict[str, Any]] = []
         snapshot_rows: list[dict[str, Any]] = []
         updates: list[dict[str, Any]] = []
         enrich_updates: list[dict[str, Any]] = []
@@ -311,6 +327,7 @@ class IngestionService:
                     obs,
                 )
                 was_link_only = ex.capture_level == CaptureLevel.LINK
+                link_capture = pl.capture_level == CaptureLevel.LINK
                 price_changed = pl.price != ex.price and not was_link_only
                 if price_changed and upd_status.unchanged_checks:
                     # A price change is a change: the listing is alive, check it sooner.
@@ -330,6 +347,7 @@ class IngestionService:
                     ),
                     "tracked_at": tracked_at,
                     "status_changed_at": now if upd_status.changed else None,
+                    **({} if link_capture else {"last_verified_at": now}),
                     "next_check_at": schedule(
                         status=upd_status.status,
                         tracked_at=tracked_at,
@@ -348,9 +366,6 @@ class IngestionService:
                 updates.append(upd)
                 result.updated_ids.append(ex.id)
                 if price_changed:
-                    history_rows.append(
-                        {"listing_id": ex.id, "price": pl.price, "currency": pl.currency, "observed_at": now}
-                    )
                     result.price_changes.append(PriceChange(ex.id, ex.price, pl.price))
                 if upd_status.changed:
                     result.status_changes.append((ex.id, ex.status, upd_status.status.value))
@@ -388,7 +403,10 @@ class IngestionService:
                         {"id": ex.id, **cols, **({"seller_id": seller_id} if seller_id else {})}
                     )
                     result.enriched_ids.append(ex.id)
-                snapshot_rows.append(self._snapshot(ex.id, pl, upd_status.status, now))
+                prev = self._previous(ex, last_seen_rows.get(ex.id), was_link_only)
+                reasons = snapshot_reasons(prev, current_from(pl, upd_status.status.value), now, heartbeat)
+                if reasons:
+                    snapshot_rows.append(self._snapshot(ex.id, pl, upd_status.status, now, reasons))
                 continue
 
             ident = identify_listing(engine, pl)
@@ -403,6 +421,7 @@ class IngestionService:
             row["acquisition_mode"] = self.mode.value
             row["tracked_at"] = now if self.track else None
             row["last_checked_at"] = now
+            row["last_verified_at"] = None if pl.capture_level == CaptureLevel.LINK else now
             row["next_check_at"] = schedule(
                 status=first.status,
                 tracked_at=row["tracked_at"],
@@ -416,16 +435,7 @@ class IngestionService:
             result.status_updates[row["id"]] = first
             if pl.status == ListingStatus.ACTIVE:
                 result.new_active_ids.add(row["id"])
-            if pl.capture_level != CaptureLevel.LINK:
-                history_rows.append(
-                    {
-                        "listing_id": row["id"],
-                        "price": pl.price,
-                        "currency": pl.currency,
-                        "observed_at": now,
-                    }
-                )
-            snapshot_rows.append(self._snapshot(row["id"], pl, first.status, now))
+            snapshot_rows.append(self._snapshot(row["id"], pl, first.status, now, ["first"]))
             for pos, img in enumerate(pl.images[:20]):
                 new_images.append(
                     {
@@ -471,8 +481,6 @@ class IngestionService:
             await self.session.execute(stmt, sorted(new_rows, key=lambda r: r["external_id"]))
         if new_images:
             await self.session.execute(pg_insert(ListingImage.__table__).on_conflict_do_nothing(), new_images)
-        if history_rows:
-            await self.session.execute(pg_insert(ListingPriceHistory.__table__), history_rows)
         if updates:
             # Bulk UPDATE by primary key groups parameter sets with the same keys.
             for group in _group_by_keys(updates):
@@ -503,22 +511,69 @@ class IngestionService:
             await record_vinted_sold(self.session, ids)
 
     def _snapshot(
-        self, listing_id: uuid.UUID, pl: ProviderListing, status: ListingStatus, now: datetime
+        self,
+        listing_id: uuid.UUID,
+        pl: ProviderListing,
+        status: ListingStatus,
+        now: datetime,
+        reasons: list[str],
     ) -> dict[str, Any]:
-        link_only = pl.capture_level == CaptureLevel.LINK
-        return {
-            "listing_id": listing_id,
-            "observed_at": now,
-            "acquisition_mode": self.mode.value,
-            "capture_level": CaptureLevel(pl.capture_level).value,
-            "status": None if link_only else status.value,
-            "price": None if link_only else pl.price,
-            "currency": pl.currency,
-            "favourite_count": pl.favourite_count,
-            "view_count": pl.view_count,
-            "photo_count": len(pl.images) if pl.images else None,
-            "note": None,
-        }
+        return snapshot_row(
+            listing_id,
+            pl,
+            status.value,
+            now,
+            self.mode.value,
+            reasons,
+            extension_version=self.extension_version,
+            parser_version=self.parser_version,
+        )
+
+    @staticmethod
+    def _previous(ex: Any, last: Any, was_link_only: bool) -> LastSnapshot | None:
+        """What the previous observation looked like: values from the listing row (the last known
+        price/status/favourites), time and photos from its newest snapshot."""
+        if last is None:
+            return None
+        return LastSnapshot(
+            observed_at=last.observed_at,
+            status=ex.status,
+            price=None if was_link_only else ex.price,
+            favourite_count=ex.favourite_count,
+            capture_level=ex.capture_level,
+            image_keys=tuple(last.image_set or ()),
+            images_complete=bool(last.image_set_complete),
+        )
+
+    async def _last_snapshots(self, listing_ids: list[uuid.UUID]) -> dict[uuid.UUID, Any]:
+        """Newest snapshot per listing, with the newest photo set seen (older rows may predate it)."""
+        if not listing_ids:
+            return {}
+        snap = ListingSnapshot
+        newest = (
+            await self.session.execute(
+                select(snap.listing_id, snap.observed_at)
+                .where(snap.listing_id.in_(listing_ids))
+                .distinct(snap.listing_id)
+                .order_by(snap.listing_id, snap.observed_at.desc(), snap.id.desc())
+            )
+        ).all()
+        photos = (
+            await self.session.execute(
+                select(snap.listing_id, snap.image_set, snap.image_set_complete)
+                .where(snap.listing_id.in_(listing_ids), snap.image_set.is_not(None))
+                .distinct(snap.listing_id)
+                .order_by(snap.listing_id, snap.observed_at.desc(), snap.id.desc())
+            )
+        ).all()
+        by_photos = {p.listing_id: p for p in photos}
+        out: dict[uuid.UUID, Any] = {}
+        for n in newest:
+            p = by_photos.get(n.listing_id)
+            out[n.listing_id] = _Last(
+                n.observed_at, p.image_set if p else None, bool(p.image_set_complete) if p else False
+            )
+        return out
 
     async def _upsert_sellers(self, sellers: list[ProviderSeller], now: datetime) -> dict[str, uuid.UUID]:
         if not sellers:
@@ -698,6 +753,13 @@ def _group_by_keys(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     for r in rows:
         groups[tuple(sorted(r))].append(r)
     return list(groups.values())
+
+
+@dataclass
+class _Last:
+    observed_at: datetime
+    image_set: list[str] | None
+    image_set_complete: bool
 
 
 @dataclass

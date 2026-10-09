@@ -3,6 +3,7 @@ observation; every record has a URL (database constraint) and a date."""
 
 import uuid
 from datetime import timedelta
+from decimal import Decimal
 
 import asyncpg
 import pytest
@@ -12,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from app.db.models import Listing, ListingPriceHistory
 from app.domain.enums import AcquisitionMode, CaptureLevel
 from app.ingestion.service import IngestionService
+from app.marketplace.base import ProviderImage
 from tests.conftest import NOW, ROOT, TEST_DB  # noqa: F401
 from tests.integration.test_migration import ADMIN_DSN, MIG_DB, MIG_DSN, alembic
 from tests.integration.test_tracking_ingest import card
@@ -102,6 +104,157 @@ async def test_migration_drops_dates_that_were_only_the_observation_time() -> No
         assert rows[real]["days_to_sell"] is not None
         alembic("downgrade", "0009")
         assert await c.fetchval("SELECT count(*) FROM listings") == 2
+    finally:
+        if c is not None:
+            await c.close()
+        admin = await asyncpg.connect(ADMIN_DSN)
+        await admin.execute(f"DROP DATABASE IF EXISTS {MIG_DB}")
+        await admin.close()
+
+
+# ---------------------------------------------------------------- 2.2 observations
+async def _snapshots(session, external_id):
+    from app.db.models import ListingSnapshot
+
+    return (
+        (
+            await session.execute(
+                select(ListingSnapshot)
+                .join(Listing, Listing.id == ListingSnapshot.listing_id)
+                .where(Listing.external_id == external_id)
+                .order_by(ListingSnapshot.observed_at, ListingSnapshot.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def test_scrolling_past_the_same_card_adds_one_row_not_ten(session, make_listing) -> None:
+    pl = card(make_listing(external_id="3001"))
+    svc = IngestionService(
+        session,
+        "vinted",
+        AcquisitionMode.EXTENSION_CARD,
+        extension_version="1.2.0",
+        parser_version="2026.10.1",
+    )
+    for i in range(10):
+        await svc.ingest([pl], now=NOW + timedelta(minutes=5 * i))
+    await session.commit()
+    snaps = await _snapshots(session, "3001")
+    assert len(snaps) == 1 and snaps[0].reason == "first"
+    assert snaps[0].extension_version == "1.2.0" and snaps[0].parser_version == "2026.10.1"
+    assert snaps[0].payload["fields"]["price"]["t"] == "observed"
+    assert snaps[0].image_set and len(snaps[0].image_set) == 1
+    li = (await session.execute(select(Listing).where(Listing.external_id == "3001"))).scalar_one()
+    # The listing row still says it was seen and verified at the last pass.
+    assert li.last_seen_at == NOW + timedelta(minutes=45)
+    assert li.last_verified_at == NOW + timedelta(minutes=45)
+
+
+async def test_a_heartbeat_row_after_six_hours_and_rows_for_changes(session, make_listing) -> None:
+    pl = card(make_listing(external_id="3002", price=30))
+    svc = IngestionService(session, "vinted", AcquisitionMode.EXTENSION_CARD)
+    await svc.ingest([pl], now=NOW)
+    await svc.ingest([pl], now=NOW + timedelta(hours=7))
+    await svc.ingest([pl.model_copy(update={"price": Decimal("25")})], now=NOW + timedelta(hours=8))
+    await svc.ingest(
+        [pl.model_copy(update={"price": Decimal("25"), "favourite_count": 9})], now=NOW + timedelta(hours=9)
+    )
+    await session.commit()
+    snaps = await _snapshots(session, "3002")
+    assert [s.reason for s in snaps] == ["first", "heartbeat", "price", "favourites"]
+    # The price history is a view over the same rows: first price and the change, once each.
+    li = (await session.execute(select(Listing).where(Listing.external_id == "3002"))).scalar_one()
+    points = (
+        await session.execute(
+            select(ListingPriceHistory.price, ListingPriceHistory.observed_at)
+            .where(ListingPriceHistory.listing_id == li.id)
+            .order_by(ListingPriceHistory.observed_at)
+        )
+    ).all()
+    assert [(p.price, p.observed_at) for p in points] == [
+        (Decimal("30"), NOW),
+        (Decimal("25"), NOW + timedelta(hours=8)),
+    ]
+
+
+async def test_a_changed_gallery_is_recorded_and_a_card_cover_is_not_a_change(session, make_listing) -> None:
+    base = make_listing(external_id="3003", photos=4)
+    svc = IngestionService(session, "vinted", AcquisitionMode.EXTENSION_DEEP)
+    full = base.model_copy(update={"images_authoritative": True})
+    await svc.ingest([full], now=NOW)
+    # The same item seen later as a card (cover only): nothing changed.
+    await IngestionService(session, "vinted", AcquisitionMode.EXTENSION_CARD).ingest(
+        [card(base)], now=NOW + timedelta(minutes=10)
+    )
+    # The seller added a photo: the complete gallery has one more.
+    more = make_listing(external_id="3003", photos=5, phash_seed=1).model_copy(
+        update={
+            "images_authoritative": True,
+            "images": [*base.images, ProviderImage(url="/img/3003/new.jpg")],
+        }
+    )
+    await svc.ingest([more], now=NOW + timedelta(minutes=20))
+    await session.commit()
+    snaps = await _snapshots(session, "3003")
+    assert [s.reason for s in snaps] == ["first", "photos"]
+    assert len(snaps[1].image_set) == 5 and snaps[1].image_set_complete
+
+
+async def test_a_link_only_record_is_not_verified(session) -> None:
+    from app.acquisition.service import import_links
+
+    await import_links(session, [("https://www.vinted.it/items/3004-felpa", "3004")], now=NOW)
+    await session.commit()
+    li = (await session.execute(select(Listing).where(Listing.external_id == "3004"))).scalar_one()
+    assert li.last_verified_at is None
+    snaps = await _snapshots(session, "3004")
+    assert len(snaps) == 1 and snaps[0].price is None and snaps[0].status is None
+    assert "price" not in snaps[0].payload["fields"]
+
+
+async def test_migration_keeps_legacy_price_points_in_the_view() -> None:
+    admin = await asyncpg.connect(ADMIN_DSN)
+    await admin.execute(f"DROP DATABASE IF EXISTS {MIG_DB}")
+    await admin.execute(f"CREATE DATABASE {MIG_DB}")
+    await admin.close()
+    c = None
+    try:
+        alembic("upgrade", "0010")
+        c = await asyncpg.connect(MIG_DSN)
+        lid = uuid.uuid4()
+        await c.execute(
+            "INSERT INTO listings (id, provider, external_id, url, title, price, status, capture_level)"
+            " VALUES ($1, 'vinted', '9100', 'https://www.vinted.it/items/9100', 'Felpa', 18, 'active', 'full')",
+            lid,
+        )
+        # One price is carried by a snapshot; the earlier one only by the old history table.
+        await c.execute(
+            "INSERT INTO listing_snapshots (listing_id, observed_at, acquisition_mode, price)"
+            " VALUES ($1, now() - interval '1 day', 'extension_item', 18)",
+            lid,
+        )
+        for price, days in ((25, 4), (18, 1)):
+            await c.execute(
+                "INSERT INTO listing_price_history (listing_id, price, observed_at)"
+                " VALUES ($1, $2, now() - make_interval(days => $3::int))",
+                lid,
+                price,
+                days,
+            )
+        alembic("upgrade", "0011")
+        rows = await c.fetch(
+            "SELECT price FROM listing_price_history WHERE listing_id = $1 ORDER BY observed_at", lid
+        )
+        assert [float(r["price"]) for r in rows] == [25.0, 18.0]
+        assert await c.fetchval("SELECT count(*) FROM listing_snapshots WHERE reason = 'migrated'") == 1
+        alembic("downgrade", "0010")
+        rows = await c.fetch(
+            "SELECT price FROM listing_price_history WHERE listing_id = $1 ORDER BY observed_at", lid
+        )
+        assert [float(r["price"]) for r in rows] == [25.0, 18.0]
     finally:
         if c is not None:
             await c.close()

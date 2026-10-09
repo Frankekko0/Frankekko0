@@ -78,6 +78,7 @@ class CaptureCardsIn(BaseModel):
     page_url: str = Field(default="", max_length=2000)
     items: list[ManualListingInput] = Field(min_length=1, max_length=100)
     extension_version: str | None = Field(default=None, max_length=20)
+    parser_version: str | None = Field(default=None, max_length=24)
 
 
 class CaptureCardsOut(BaseModel):
@@ -95,6 +96,7 @@ class CaptureItemIn(BaseModel):
     # None keeps the default of the mode (deep analyses on command are tracked).
     track: bool | None = None
     extension_version: str | None = Field(default=None, max_length=20)
+    parser_version: str | None = Field(default=None, max_length=24)
 
 
 class CaptureItemOut(BaseModel):

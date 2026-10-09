@@ -236,6 +236,8 @@ async def persist_observations(
     mode: AcquisitionMode,
     track: bool | None = None,
     reuse_recent: bool = False,
+    extension_version: str | None = None,
+    parser_version: str | None = None,
 ) -> tuple[IngestResult, list[Any]]:
     """Store observations (grouped by provider) and analyse every listing they touch.
 
@@ -250,7 +252,14 @@ async def persist_observations(
         by_provider.setdefault(listing_identity(pl.url)[0], []).append(pl)
     merged = IngestResult(received=len(listings))
     for provider, items in by_provider.items():
-        res = await IngestionService(db, provider, mode, track=track).ingest(items)
+        res = await IngestionService(
+            db,
+            provider,
+            mode,
+            track=track,
+            extension_version=extension_version,
+            parser_version=parser_version,
+        ).ingest(items)
         merged.new_ids += res.new_ids
         merged.updated_ids += res.updated_ids
         merged.price_changes += res.price_changes
