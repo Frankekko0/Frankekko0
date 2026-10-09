@@ -527,7 +527,9 @@ def config_dict(cfg: DecisionConfig = DEFAULT_CONFIG) -> dict[str, Any]:
     return {k: str(v) if isinstance(v, Decimal) else v for k, v in asdict(cfg).items()}
 
 
-def apply_review_ceiling(decision: dict[str, Any], ceiling: DecisionVerdict, label: str) -> dict[str, Any]:
+def apply_review_ceiling(
+    decision: dict[str, Any], ceiling: DecisionVerdict, label: str, code: str = "analyst_review"
+) -> dict[str, Any]:
     """Lower a stored decision to ``ceiling`` (an analyst's review found a reason); never raise it.
 
     The verdict, its three-valued form and the action follow, and the reason is added as a binding
@@ -545,7 +547,7 @@ def apply_review_ceiling(decision: dict[str, Any], ceiling: DecisionVerdict, lab
         "action": action_for(ceiling, None).value,
         "vetoes": [
             *decision.get("vetoes", []),
-            {"code": "analyst_review", "label": label, "ceiling": ceiling.value, "binding": True},
+            {"code": code, "label": label, "ceiling": ceiling.value, "binding": True},
         ],
         "warnings": [label, *decision.get("warnings", [])],
         "reviewed_from": current.value,

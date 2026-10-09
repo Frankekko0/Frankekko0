@@ -5,6 +5,8 @@ from app.api.v1 import (
     agent,
     analytics,
     auth,
+    autonomy,
+    business,
     extension,
     items,
     listings,
@@ -39,5 +41,7 @@ for module in (
     settings,
     analytics,
     agent,
+    autonomy,
+    business,
 ):
     api_router.include_router(module.router, dependencies=_limited)

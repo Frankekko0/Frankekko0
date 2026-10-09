@@ -431,3 +431,86 @@ async def negotiation(
         ),
     )
     return {"opportunity_id": str(o.id), **plan.as_dict()}
+
+
+# ------------------------------------------------------------------ learning on real records
+@router.get("/learning/report", response_model=dict[str, Any])
+async def learning_report(
+    user: CurrentUser, econ: Economics, db: DB, register: bool = False
+) -> dict[str, Any]:
+    """False negatives, drift, probability calibration and the baseline comparison, on real records.
+    What cannot be measured says so. ``register`` writes the evaluations to the experiment registry."""
+    from app.intelligence import learning_report as lr
+
+    args = (db, user.id, float(econ.targets.min_profit), float(econ.targets.min_roi))
+    out = await (lr.run_and_register(*args) if register else _built(lr, *args))
+    if register:
+        await db.commit()
+    return out
+
+
+async def _built(lr: Any, db: Any, user_id: uuid.UUID, min_profit: float, min_roi: float) -> dict[str, Any]:
+    return lr._plain(await lr.build(db, user_id, min_profit, min_roi))
+
+
+@router.get("/learning/experiments", response_model=list[dict[str, Any]])
+async def experiments(user: CurrentUser, db: DB) -> list[dict[str, Any]]:
+    from app.db.models import Experiment
+
+    rows = (
+        (
+            await db.execute(
+                select(Experiment)
+                .where(Experiment.user_id == user.id)
+                .order_by(Experiment.created_at.desc())
+                .limit(100)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "id": str(e.id),
+            "name": e.name,
+            "hypothesis": e.hypothesis,
+            "kind": e.kind,
+            "status": e.status,
+            "config": e.config,
+            "created_at": e.created_at.isoformat(),
+        }
+        for e in rows
+    ]
+
+
+@router.get("/selling/liquidation", response_model=dict[str, Any])
+async def liquidation(user: CurrentUser, econ: Economics, db: DB, threshold_days: int = 45) -> dict[str, Any]:
+    """Items that have sat too long: a firmer markdown (down to the floor), or a bundle, to free the capital."""
+    rows = (
+        await db.execute(
+            select(Purchase, InventoryItem)
+            .join(InventoryItem, InventoryItem.purchase_id == Purchase.id)
+            .where(Purchase.user_id == user.id, InventoryItem.stage.in_(("listed", "unsold")))
+        )
+    ).all()
+    out: list[dict[str, Any]] = []
+    for p, i in rows:
+        held = (datetime.now(UTC).date() - p.purchase_date).days
+        if held < threshold_days or p.sale is not None:
+            continue
+        plan, _fit, _ref = await service.resale_plan(db, p, econ.costs, float(econ.targets.min_profit))
+        floor = float(i.min_price) if i.min_price is not None else (plan.floor if plan else None)
+        out.append(
+            {
+                "purchase_id": str(p.id), "title": p.title, "days_held": held, "cost": float(p.total_cost),
+                "listed_price": float(i.listed_price) if i.listed_price is not None else None, "floor": floor,
+                "action": "ribasso fino al minimo, oppure inseriscilo in un lotto" if floor is not None else "nessun prezzo di riferimento: valuta un lotto o la rimozione",
+                "capital_freed": float(p.total_cost),
+            }
+        )  # fmt: skip
+    out.sort(key=lambda x: -x["days_held"])
+    return {
+        "threshold_days": threshold_days,
+        "items": out,
+        "capital_tied_up": round(sum(x["cost"] for x in out), 2),
+    }

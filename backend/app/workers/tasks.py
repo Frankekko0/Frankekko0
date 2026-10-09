@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from arq import Retry
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, OperationalError
 
@@ -363,6 +363,74 @@ async def review_candidates_task(ctx: dict[str, Any]) -> dict[str, Any]:
     if run is not None:
         await cache.bump(NS_FEED)
     return summary
+
+
+async def autonomy_cycle_task(ctx: dict[str, Any]) -> dict[str, int]:
+    """One autonomy cycle for every user who switched it on (limits, kill switch and suspension are
+    checked inside; each user has its own transaction so one failure does not stop the others)."""
+    from app.autonomy.engine import run_cycle
+    from app.db.models import AutonomySettings
+
+    llm = get_llm()
+    async with session_scope() as s:
+        users = (
+            (await s.execute(select(AutonomySettings.user_id).where(AutonomySettings.enabled.is_(True))))
+            .scalars()
+            .all()
+        )
+    ran = proposed = failed = 0
+    for uid in users:
+        try:
+            async with session_scope() as s:
+                res = await run_cycle(s, uid, llm=llm if llm.enabled else None)
+            ran += res.state == "ran"
+            proposed += res.proposed
+        except Exception:  # one user's failure must not stop the others, it is logged
+            failed += 1
+            log.exception("autonomy.cycle_failed", user_id=str(uid))
+    return {"users": len(users), "ran": ran, "proposed": proposed, "failed": failed}
+
+
+async def business_daily_task(ctx: dict[str, Any]) -> dict[str, int]:
+    """Once a day: fiscal-threshold notices for users who configured thresholds, and the learning report (written
+    to the experiment registry) for users with closed sales. One user's failure does not stop the others."""
+    from app.business.service import raise_tax_alerts
+    from app.db.models import BusinessGoals, PredictionOutcome
+    from app.intelligence.learning_report import run_and_register
+
+    async with session_scope() as s:
+        tax_users = (
+            (
+                await s.execute(
+                    select(BusinessGoals.user_id).where(
+                        func.jsonb_array_length(BusinessGoals.tax_thresholds) > 0
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        learn_users = (await s.execute(select(PredictionOutcome.user_id).distinct())).scalars().all()
+    alerts = reports = failed = 0
+    for uid in tax_users:
+        try:
+            async with session_scope() as s:
+                alerts += await raise_tax_alerts(s, uid)
+        except Exception:
+            failed += 1
+            log.exception("business.tax_failed", user_id=str(uid))
+    settings = get_settings()
+    for uid in learn_users:
+        try:
+            async with session_scope() as s:
+                await run_and_register(
+                    s, uid, float(settings.default_min_profit), float(settings.default_min_roi)
+                )
+            reports += 1
+        except Exception:
+            failed += 1
+            log.exception("business.learning_failed", user_id=str(uid))
+    return {"tax_users": len(tax_users), "alerts": alerts, "learning_reports": reports, "failed": failed}
 
 
 async def deliver_alert_task(ctx: dict[str, Any], alert_id: str, channel: str) -> None:
