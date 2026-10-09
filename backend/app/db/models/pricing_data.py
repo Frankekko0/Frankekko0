@@ -55,6 +55,12 @@ class SoldSale(Base):
     __table_args__ = (
         UniqueConstraint("dedupe_key"),
         CheckConstraint("price > 0", name="price_positive"),
+        CheckConstraint(
+            "(price_kind = 'last_seen' AND asking_price IS NOT NULL AND realized_price IS NULL)"
+            " OR (price_kind IN ('paid', 'received') AND realized_price IS NOT NULL AND asking_price IS NULL)"
+            " OR (price_kind = 'reported' AND asking_price IS NULL AND realized_price IS NULL)",
+            name="price_kind_columns",
+        ),
         Index(
             "ix_sold_sales_segment", "brand_id", "category_id", "model_name", "size_normalized", "condition"
         ),
@@ -85,12 +91,20 @@ class SoldSale(Base):
     size_normalized: Mapped[str | None] = mapped_column(String(20))
     condition: Mapped[str] = mapped_column(String(24), default="unknown", server_default="unknown")
 
-    price: Mapped[Decimal] = mapped_column()  # as observed, in ``currency``
+    price: Mapped[Decimal] = mapped_column()  # the evidence figure, in ``currency``; see ``price_kind``
+    # Never mixed: what was asked (last price seen on sale) vs what was really paid or received.
+    asking_price: Mapped[Decimal | None] = mapped_column()
+    realized_price: Mapped[Decimal | None] = mapped_column()
     currency: Mapped[str] = mapped_column(String(3), default="EUR", server_default="EUR")
     price_eur: Mapped[Decimal] = mapped_column()  # converted (same as price for EUR)
     sold_at: Mapped[datetime] = mapped_column()
     published_at: Mapped[datetime | None] = mapped_column()
     days_to_sell: Mapped[Decimal | None] = mapped_column(Numeric(7, 1))
+    # A sale noticed on Vinted happened between these two moments; ``sold_at`` is their midpoint.
+    window_start: Mapped[datetime | None] = mapped_column()
+    window_end: Mapped[datetime | None] = mapped_column()
+    # First sighting -> sale: a lower bound of the days online (the publication date may be unknown).
+    observed_days: Mapped[Decimal | None] = mapped_column(Numeric(7, 1))
     source_name: Mapped[str] = mapped_column(String(80))  # "tracking", "vinted", "ebay.it", ...
     source_url: Mapped[str | None] = mapped_column(Text)
     # Outlier cleaning (robust, per model segment): excluded rows stay for traceability.

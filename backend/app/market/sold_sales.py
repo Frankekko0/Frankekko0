@@ -27,6 +27,7 @@ from typing import Any
 
 from sqlalchemy import (
     ColumnElement,
+    Numeric,
     Select,
     String,
     and_,
@@ -38,6 +39,7 @@ from sqlalchemy import (
     literal,
     literal_column,
     not_,
+    null,
     or_,
     select,
     true,
@@ -79,11 +81,16 @@ _UPDATABLE = (
     "size_normalized",
     "condition",
     "price",
+    "asking_price",
+    "realized_price",
     "currency",
     "price_eur",
     "sold_at",
+    "window_start",
+    "window_end",
     "published_at",
     "days_to_sell",
+    "observed_days",
     "source_name",
     "source_url",
 )
@@ -174,7 +181,12 @@ def own_rows(purchases: Sequence[Any], catalog: Catalog) -> list[dict[str, Any]]
                     "purchase_id": r.id,
                     "sale_id": None,
                     "price": r.purchase_price,
+                    "asking_price": None,
+                    "realized_price": r.purchase_price,
                     "price_eur": r.purchase_price,
+                    "window_start": None,
+                    "window_end": None,
+                    "observed_days": None,
                     "sold_at": bought_at,
                     "published_at": published,
                     "days_to_sell": Decimal(
@@ -201,7 +213,12 @@ def own_rows(purchases: Sequence[Any], catalog: Catalog) -> list[dict[str, Any]]
                     "purchase_id": r.id,
                     "sale_id": r.sale_id,
                     "price": r.sale_price,
+                    "asking_price": None,
+                    "realized_price": r.sale_price,
                     "price_eur": r.sale_price,
+                    "window_start": None,
+                    "window_end": None,
+                    "observed_days": None,
                     "sold_at": sold_at,
                     "published_at": listed,
                     "days_to_sell": Decimal(days) if days is not None and days >= 0 else None,
@@ -291,6 +308,9 @@ async def sync_own_records(
 # ---------------------------------------------------------------------------- Vinted sales
 def _vinted_select(where: ColumnElement[bool] | None) -> Select[Any]:
     price = func.coalesce(Listing.last_active_price, Listing.price)
+    sold_at = func.coalesce(
+        Listing.sold_at, Listing.sold_detected_at, Listing.status_changed_at, Listing.last_seen_at
+    )
     bought = exists().where(Purchase.listing_id == Listing.id)
     stmt = select(
         case(
@@ -308,13 +328,25 @@ def _vinted_select(where: ColumnElement[bool] | None) -> Select[Any]:
         Listing.size_normalized,
         Listing.condition,
         price.label("price"),
+        # The last price asked while on sale: not a price paid.
+        price.label("asking_price"),
+        cast(null(), Numeric(12, 2)).label("realized_price"),
         Listing.currency,
         price.label("price_eur"),
-        func.coalesce(
-            Listing.sold_at, Listing.sold_detected_at, Listing.status_changed_at, Listing.last_seen_at
-        ).label("sold_at"),
+        sold_at.label("sold_at"),
+        Listing.last_active_at.label("window_start"),
+        func.coalesce(Listing.sold_detected_at, sold_at).label("window_end"),
         Listing.published_at,
         Listing.days_to_sell,
+        case(
+            (
+                Listing.first_seen_at <= sold_at,
+                func.round(
+                    cast(func.extract("epoch", sold_at - Listing.first_seen_at) / 86400, Numeric(9, 2)), 1
+                ),
+            ),
+            else_=null(),
+        ).label("observed_days"),
         Listing.provider.label("source_name"),
         Listing.url.label("source_url"),
     ).where(
@@ -341,11 +373,16 @@ _VINTED_COLS = (
     "size_normalized",
     "condition",
     "price",
+    "asking_price",
+    "realized_price",
     "currency",
     "price_eur",
     "sold_at",
+    "window_start",
+    "window_end",
     "published_at",
     "days_to_sell",
+    "observed_days",
     "source_name",
     "source_url",
 )

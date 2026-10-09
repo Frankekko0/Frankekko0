@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response
 
 from app.api.deps import DB, CurrentUser
 from app.core.errors import ProviderUnavailableError
@@ -13,6 +14,7 @@ from app.core.rate_limit import RateLimit
 from app.external.service import external_status
 from app.market.negotiation import current_negotiation_discount
 from app.market.sold_sales import sold_sales_summary
+from app.market.sold_table import EXPORT_LIMIT, sold_price_table, to_csv
 from app.market.state import get_state
 from app.pricing.evidence import GATE_KEY, EvidenceGate
 from app.schemas.pricing import PricingEvidenceOut, RefreshQueued
@@ -74,6 +76,35 @@ async def evidence(user: CurrentUser, db: DB) -> dict[str, Any]:
     }
     external = await _external(db)
     return {"sold_sales": sold, "negotiation": negotiation, "external": external, "accuracy": accuracy}
+
+
+@router.get("/sold-prices")
+async def sold_prices(
+    user: CurrentUser,
+    db: DB,
+    brand: str | None = Query(None, max_length=120, description="Brand slug"),
+    q: str | None = Query(None, max_length=120, description="Part of the model name"),
+    limit: int = Query(200, ge=1, le=1000),
+) -> dict[str, Any]:
+    """Sold prices per model: realized, last asking and reported prices kept apart, time to sell,
+    number of samples. Models with fewer than three sales are marked as insufficient."""
+    return {"models": await sold_price_table(db, brand=brand, q=q, limit=limit)}
+
+
+@router.get("/sold-prices/export.csv")
+async def sold_prices_csv(
+    user: CurrentUser,
+    db: DB,
+    brand: str | None = Query(None, max_length=120),
+    q: str | None = Query(None, max_length=120),
+    delimiter: Literal["comma", "semicolon"] = "comma",
+) -> Response:
+    table = await sold_price_table(db, brand=brand, q=q, limit=EXPORT_LIMIT)
+    return Response(
+        to_csv(table, ";" if delimiter == "semicolon" else ","),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="prezzi-venduti.csv"'},
+    )
 
 
 @router.post(

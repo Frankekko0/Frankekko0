@@ -47,3 +47,21 @@ async def test_analyses_are_listed_and_readable_and_not_duplicated(
     ).json()
     miss = await auth_client.get(f"{API}/items/{other['listing_id']}/analyses/{rows[1]['id']}")
     assert miss.status_code == 404
+
+
+async def test_sold_prices_endpoint_and_csv(auth_client: httpx.AsyncClient, make_listing) -> None:
+    await seed_deal(make_listing)
+    r = await auth_client.get(f"{API}/pricing/sold-prices")
+    assert r.status_code == 200 and "models" in r.json()
+    rows = r.json()["models"]
+    assert rows, "seed_deal records sold listings"
+    first = rows[0]
+    assert set(first) >= {"samples", "realized", "asking", "reported", "days_to_sell", "evidence"}
+    # Seeded sales are sold listings: last asking prices, not prices paid.
+    assert first["asking"] is not None and first["realized"] is None
+    csv_response = await auth_client.get(f"{API}/pricing/sold-prices/export.csv?delimiter=semicolon")
+    assert csv_response.status_code == 200
+    assert csv_response.headers["content-type"].startswith("text/csv")
+    assert "Ultimo prezzo richiesto: mediana" in csv_response.text
+    filtered = await auth_client.get(f"{API}/pricing/sold-prices?q=zzz-no-such-model")
+    assert filtered.json() == {"models": []}
