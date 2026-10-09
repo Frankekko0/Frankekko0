@@ -63,6 +63,8 @@ class ProviderListing(BaseModel):
     seller: ProviderSeller | None = None
     country: str | None = None
     published_at: datetime | None = None
+    # How the date was obtained: exact timestamp, relative text (approximate) or unspecified.
+    published_at_kind: Literal["exact", "relative", "reported"] | None = None
     status: ListingStatus = ListingStatus.ACTIVE
     sold_at: datetime | None = None
     buyer_protection_fee: Decimal | None = Field(default=None, ge=0)
@@ -151,6 +153,7 @@ class ManualListingInput(BaseModel):
     material: str | None = Field(default=None, max_length=120)
     category_path: str | None = Field(default=None, max_length=200)
     published_at: datetime | None = None
+    published_at_kind: Literal["exact", "relative", "reported"] | None = None
     status: Literal["active", "reserved", "sold", "removed"] = "active"
     # Where the data comes from (recorded with the listing and every analysis).
     source: Literal["manual_form", "extension_item", "bookmarklet"] = "manual_form"

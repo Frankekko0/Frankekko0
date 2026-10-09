@@ -473,6 +473,7 @@ class ParsedItem:
     favourite_count: int | None = None
     view_count: int | None = None
     published_at: datetime | None = None
+    published_at_kind: str | None = None  # exact | relative
     status: ListingStatus = ListingStatus.ACTIVE
     status_source: str = "default"
     buyer_protection_fee: Decimal | None = None
@@ -524,6 +525,7 @@ class ParsedItem:
             images=[ProviderImage(url=u) for u in self.images[:20]],
             seller=seller,
             published_at=self.published_at,
+            published_at_kind=self.published_at_kind if self.published_at else None,
             status=self.status,
             buyer_protection_fee=self.buyer_protection_fee,
             shipping_fee=self.shipping_fee,
@@ -669,10 +671,12 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
     if created:
         try:
             item.published_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            item.published_at_kind = "exact"
         except ValueError:
             item.published_at = None
     if item.published_at is None:
         item.published_at = relative_time(pairs.get("uploaded"), now, cfg)
+        item.published_at_kind = "relative" if item.published_at else None
 
     # Fees: protection = total - price. The item's total price element ("19,60 €" next to
     # "incl. la commissione Vinted"), else a text like "€19,60 include la Protezione acquisti".

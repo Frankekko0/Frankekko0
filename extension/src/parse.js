@@ -804,6 +804,7 @@
       favourite_count: null,
       view_count: null,
       published_at: null,
+      published_at_kind: null,
       status: "active",
       status_source: "default",
       buyer_protection_fee: null,
@@ -905,10 +906,12 @@
     if (created) {
       const d = new Date(created);
       item.published_at = Number.isNaN(d.getTime()) ? null : created;
+      if (item.published_at) item.published_at_kind = "exact";
     }
     if (!item.published_at && pairs.uploaded) {
       const d = relativeTime(pairs.uploaded, now, C);
       item.published_at = d ? d.toISOString() : null;
+      if (item.published_at) item.published_at_kind = "relative";
     }
 
     // Fees: protection = total - price. The item's total price element ("19,60 €" next to
@@ -1162,6 +1165,7 @@
 
   // ------------------------------------------------------------------ payload for FlipFinder
   const STATUSES = new Set(["active", "reserved", "sold", "removed"]);
+  const PUBLISHED_AT_KINDS = new Set(["exact", "relative"]);
   const IMAGE_SOURCES = new Set(["item_json", "jsonld", "gallery_dom", "meta", "card"]);
 
   function intOrNull(v, max = 1e9) {
@@ -1217,6 +1221,7 @@
     const views = intOrNull(fields.view_count);
     if (views !== null) out.view_count = views;
     if (fields.published_at && !Number.isNaN(new Date(fields.published_at).getTime())) out.published_at = new Date(fields.published_at).toISOString();
+    if (out.published_at && PUBLISHED_AT_KINDS.has(fields.published_at_kind)) out.published_at_kind = fields.published_at_kind;
     if (STATUSES.has(fields.status)) out.status = fields.status;
     return out;
   }

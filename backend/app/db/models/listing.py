@@ -21,6 +21,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, utcnow
@@ -37,6 +38,10 @@ class Listing(Base):
     __table_args__ = (
         UniqueConstraint("provider", "external_id"),
         CheckConstraint("price >= 0", name="price_non_negative"),
+        CheckConstraint("btrim(url) <> ''", name="url_not_empty"),
+        CheckConstraint(
+            "published_at_kind IN ('exact', 'relative', 'reported', 'unknown')", name="published_at_kind_valid"
+        ),
         Index("ix_listings_segment", "brand_id", "category_id", "status"),
         Index("ix_listings_published_at", "published_at"),
         Index("ix_listings_status_last_seen", "status", "last_seen_at"),
@@ -102,7 +107,11 @@ class Listing(Base):
     photo_count: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")
 
     status: Mapped[str] = mapped_column(String(16), default="active", server_default="active")
+    # Publication date, only when the source gave one. ``published_at_kind`` says how: exact (a
+    # timestamp read from the page), relative ("3 days ago", approximate), reported (a source that
+    # does not say how it knows) or unknown (NULL: never replaced by the moment we first saw it).
     published_at: Mapped[datetime | None] = mapped_column()
+    published_at_kind: Mapped[str] = mapped_column(String(8), default="unknown", server_default="unknown")
     first_seen_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
     status_changed_at: Mapped[datetime | None] = mapped_column()
@@ -135,6 +144,20 @@ class Listing(Base):
     raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow, onupdate=utcnow)
+
+    @hybrid_property
+    def listed_at(self) -> datetime:
+        """When it appeared: the publication date if known, else the first observation.
+
+        For recency (sorting, "published within"). Never use it as a publication date: ages and
+        days-to-sell come from ``published_at`` only.
+        """
+        return self.published_at or self.first_seen_at
+
+    @listed_at.inplace.expression
+    @classmethod
+    def _listed_at_expression(cls) -> Any:
+        return func.coalesce(cls.published_at, cls.first_seen_at)
 
     images: Mapped[list[ListingImage]] = relationship(
         back_populates="listing",

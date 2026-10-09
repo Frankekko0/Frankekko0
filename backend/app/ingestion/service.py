@@ -145,7 +145,9 @@ def listing_columns(
         "view_count": pl.view_count or 0,
         "photo_count": len(pl.images),
         "status": ListingStatus(pl.status).value,
-        "published_at": pl.published_at or now,
+        # Never replaced by the observation instant: an unknown date stays unknown.
+        "published_at": pl.published_at,
+        "published_at_kind": (pl.published_at_kind or "reported") if pl.published_at else "unknown",
         "first_seen_at": now,
         "last_seen_at": now,
         "status_changed_at": now if pl.status != ListingStatus.ACTIVE else None,
@@ -194,6 +196,7 @@ def descriptive_columns(pl: ProviderListing, ident: IdentificationResult, catalo
     out = {k: cols[k] for k in keep}
     if pl.published_at is not None:
         out["published_at"] = pl.published_at
+        out["published_at_kind"] = pl.published_at_kind or "reported"
     return out
 
 
@@ -419,7 +422,7 @@ class IngestionService:
                         "listing_id": row["id"],
                         "price": pl.price,
                         "currency": pl.currency,
-                        "observed_at": row["published_at"],
+                        "observed_at": now,
                     }
                 )
             snapshot_rows.append(self._snapshot(row["id"], pl, first.status, now))
@@ -638,7 +641,7 @@ class IngestionService:
 
         # Process oldest first so a repost inside the same batch points to its original.
         batch_seen: list[dict[str, Any]] = []
-        for row in sorted(new_rows, key=lambda r: r["published_at"]):
+        for row in sorted(new_rows, key=lambda r: r["published_at"] or r["first_seen_at"]):
             dup_of: tuple[uuid.UUID, str, uuid.UUID | None] | None = None  # (id, status, root)
             if (u := by_url.get(row["url"])) is not None:
                 dup_of = (u.id, u.status, u.duplicate_of_id)

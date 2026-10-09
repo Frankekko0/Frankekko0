@@ -122,7 +122,7 @@ async def list_listings(
     total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
     rows = (
         await db.execute(
-            stmt.order_by(Listing.published_at.desc().nulls_last())
+            stmt.order_by(Listing.listed_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -219,6 +219,7 @@ def manual_to_provider(
         seller=seller_for(body, url),
         country=body.country,
         published_at=body.published_at,
+        published_at_kind=body.published_at_kind if body.published_at else None,
         status=ListingStatus(body.status),
         shipping_fee=body.shipping_fee,
         # Only the fee actually shown on the listing; otherwise the user's cost profile applies.

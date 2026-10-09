@@ -313,11 +313,11 @@ class OpportunityQueries:
             stmt = stmt.where(Opportunity.velocity_score >= params["min_velocity"])
         now = datetime.now(UTC)
         if params["published_within_hours"]:
-            stmt = stmt.where(Listing.published_at >= now - timedelta(hours=params["published_within_hours"]))
+            stmt = stmt.where(Listing.listed_at >= now - timedelta(hours=params["published_within_hours"]))
         if params["published_after"]:
-            stmt = stmt.where(Listing.published_at >= params["published_after"])
+            stmt = stmt.where(Listing.listed_at >= params["published_after"])
         if params["published_before"]:
-            stmt = stmt.where(Listing.published_at <= params["published_before"])
+            stmt = stmt.where(Listing.listed_at <= params["published_before"])
         if params["vintage_only"]:
             stmt = stmt.where(Listing.is_vintage.is_(True))
         if params["ultra_only"]:
@@ -335,7 +335,7 @@ class OpportunityQueries:
             "personal": [personal.desc(), Opportunity.flip_score.desc()],
             "profit": [profit.desc().nulls_last()],
             "roi": [roi.desc().nulls_last()],
-            "newest": [Listing.published_at.desc().nulls_last()],
+            "newest": [Listing.listed_at.desc()],
             "discount": [Opportunity.discount_vs_market.desc().nulls_last()],
             "confidence": [Opportunity.confidence_score.desc(), Opportunity.flip_score.desc()],
             "velocity": [Opportunity.velocity_score.desc().nulls_last(), Opportunity.flip_score.desc()],

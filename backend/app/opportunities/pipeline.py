@@ -309,8 +309,8 @@ class AnalysisPipeline:
             .limit(limit)
         )
         active_stmt = (
-            base.where(Listing.status == ListingStatus.ACTIVE.value, Listing.published_at >= since)
-            .order_by(Listing.published_at.desc(), Listing.id)
+            base.where(Listing.status == ListingStatus.ACTIVE.value, Listing.listed_at >= since)
+            .order_by(Listing.listed_at.desc(), Listing.id)
             .limit(limit)
         )
         removed_stmt = (
