@@ -448,6 +448,8 @@ export interface OpportunityDetail {
   score: {
     flip_score: number;
     personal_flip_score: number | null;
+    /** The same score with the weights set in Settings; null while the default weights are in use. */
+    weighted_flip_score: number | null;
     confidence_score: number;
     deal_tier: DealTier;
     is_ultra_deal: boolean;
@@ -497,6 +499,7 @@ export interface OpportunityFilters {
   published_within_hours?: number;
   vintage_only?: boolean;
   ultra_only?: boolean;
+  verdicts?: DecisionVerdict[];
   include_inactive?: boolean;
   state?: FavoriteState;
   preset?: string;
@@ -689,6 +692,8 @@ export interface Preferences {
   min_profit: number;
   min_roi: number;
   max_purchase_price: number | null;
+  total_budget: number | null;
+  max_owned_items: number | null;
   min_flip_score: number | null;
   max_risk_score: number | null;
   min_confidence: number | null;
@@ -1001,6 +1006,7 @@ export interface AnalysisSummary {
   risk_score: number;
   risk_level: RiskLevel;
   verdict: "BUY" | "CONSIDER" | "SKIP" | null;
+  decision_verdict?: DecisionVerdict | null;
   recommended_action: Action;
   headline: string | null;
   market: Partial<MarketComparison> & {
@@ -1310,4 +1316,34 @@ export interface Dossier {
   top_reasons: { kind: "veto" | "contradiction" | "positive" | "lead" | "warning" | "missing"; text: string }[];
   changed_passes: string[];
   delta?: string[];
+}
+
+export interface PlanItem {
+  opportunity_id: string;
+  title: string;
+  image_url: string | null;
+  verdict: DecisionVerdict;
+  price: number;
+  total_cost: number;
+  risk_adjusted_profit: number | null;
+  risk_score: number;
+  last_seen_at: string;
+}
+
+/** What to buy with the budget, and where the capital stands (``GET /plan``). */
+export interface Plan {
+  budget: number | null;
+  max_owned_items: number | null;
+  invested: number;
+  available: number | null;
+  owned_items: number;
+  realized_profit: number;
+  potential_profit: number;
+  selected: PlanItem[];
+  total_cost: number;
+  left: number | null;
+  considered: number;
+  not_selected: { opportunity_id: string; why: string }[];
+  reason: string | null;
+  method: string;
 }

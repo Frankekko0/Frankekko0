@@ -18,6 +18,17 @@ export const VERDICT_STYLE: Record<DecisionVerdict, { label: string; tone: Badge
   INSUFFICIENT_EVIDENCE: { label: "Insufficient evidence", tone: "outline", icon: <CircleHelp />, hint: "Not enough to judge" },
 };
 
+/** The verdict as a small badge (cards, lists). Nothing when the listing has no decision yet. */
+export function VerdictBadge({ verdict, className }: { verdict: DecisionVerdict | null | undefined; className?: string }) {
+  if (!verdict) return null;
+  const v = VERDICT_STYLE[verdict];
+  return (
+    <Badge tone={v.tone} className={className}>
+      {v.icon} {v.label}
+    </Badge>
+  );
+}
+
 const SCORES: { key: keyof DecisionInfo["scores"]; label: string; hint: string; invert?: boolean }[] = [
   { key: "flip", label: "Flip", hint: "how attractive" },
   { key: "confidence", label: "Confidence", hint: "how sure the analysis is" },

@@ -15,7 +15,7 @@ Deploy: Docker Compose (`docker-compose*.yml`), Caddy HTTPS, backup in `deploy/`
 `demand` · `profit` calcolatore+offerte · `scoring` (Flip Score a 8 componenti, confidenza, rischio) · `decision` (verdetti, completezza, veti, classifica, allocazione del capitale) · `opportunities` pipeline/engine/query · `tracking` ciclo di vita e "da verificare" · `alerts` ·
 `analytics` portfolio/calibrazione · `ai` analista, ricerca NL, client del modello con **budget** e interruttore · `agent` strumenti, ciclo, guardrail, revisione, fasi S0–S5 · `analysis` plugin per categoria, condizioni, etichette, copertura, testo multilingua, matrice di coerenza, dossier · `workers` arq · `api/v1` REST · `tools` CLI. Frontend: `frontend/src/app/(app)/*`.
 
-## Schema DB (38 tabelle, migrazioni `0001`–`0020`, prossima **0021**)
+## Schema DB (38 tabelle, migrazioni `0001`–`0021`, prossima **0022**)
 Annunci: `listings` `listing_snapshots`(osservazioni tipizzate) `listing_price_history`(vista) `listing_images` `sellers`. Catalogo: `brands` `categories` `products`.
 Analisi: `analyses`(immutabili, 5 blocchi) `opportunities`(= analisi corrente) `opportunity_scores` `market_comparables` `market_statistics` `analysis_jobs`.
 Prezzi: `sold_sales`(prezzo richiesto ≠ reale) `model_price_stats` `external_prices` `external_searches`. Utente: `users` `user_preferences` `notification_settings` `push_subscriptions` `api_keys` `watchlists` `favorites` `user_affinities`.
@@ -46,7 +46,7 @@ Parser Vinted per ID (niente foto profilo/suggeriti) · verdetto rapido locale `
 | 4/4b Vision e dossier | **fatta** (foto via Q3-B: opt-in, non provato su Vinted reale, L21) | `analysis/` (dossier P0–P12, coverage, matrice di coerenza, condizioni, etichette), OCR locale RapidOCR, cache delle analisi, difetti con zona/riquadro, ruoli delle foto; migrazioni 0019–0020; test B, C, D, F, T, U, V, W. Foto caricate dall'estensione: `PUT /capture/photos/…`, `media/archive.py` (validazione), analisi sui byte |
 | 5 Decisione | **fatta** | `decision/` (6 verdetti, 4 punteggi separati, veti, STRONG BUY a requisiti, classifica, zaino esatto), Flip Score a 8 componenti, migrazione 0017; casi A, C, E, G, H e B (lato decisione) |
 | 6 Agente orchestratore | **fatta** (perimetro v3) | registro di 9 strumenti, ciclo con tool use, guardrail nel codice, budget AI con tetti e stop, interruttore, traccia in `agent_runs`, `events` append-only, ricalcolo incrementale (35→23: solo decisione, un avviso), avvisi coalescenti e legati al verdetto, revisione con ripiego a regole. Strumenti delle fasi successive: L16 |
-| 7 Dashboard | da fare | PIANO Fase 8 (serve Q5, lingua) |
+| 7 Dashboard | **fatta** (lingua: D55) | home per verdetto (Acquisto forte, Da guardare), capitale e profitto *guadagnato* separato dal *previsto*, piano d'acquisto (`GET /plan`, zaino esatto), badge del verdetto sulle schede, «Perché» con i pesi dell'utente, `verdicts`/preset sul feed, budget nelle impostazioni; migrazione 0021. Verificata a 390 px e 1280 px (nessun overflow) |
 | 8 Vendita e portfolio | parziale | PIANO Fase 9; `purchases/sales/inventory` esistono |
 | 8b Autonomia · 8c Intelligenza avanzata · 8d Imprenditore | da fare | nuovi in v3; esecuzione su Vinted solo dry-run/assistita (LIMITATIONS L01) |
 | 9–10 Hardening e release | da fare | PIANO Fase 10 |

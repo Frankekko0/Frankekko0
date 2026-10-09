@@ -1,8 +1,9 @@
 "use client";
 
-import { ArrowRight, BellRing, Flame, Gauge, Layers, Radar, RefreshCw, ScanSearch, Sparkles, Timer, TrendingDown, TrendingUp, Wallet } from "lucide-react";
+import { ArrowRight, BellRing, Binoculars, Gauge, Layers, Radar, RefreshCw, ScanSearch, ShieldCheck, Sparkles, Timer, TrendingDown, TrendingUp, Wallet } from "lucide-react";
 import Link from "next/link";
 import { DealCard, DealCardSkeleton, DealRow, EAGER_CARDS } from "@/components/deal/deal-card";
+import { MoneyStrip, PurchasePlan } from "@/components/home/money";
 import { GlobalSearch, ScanStatus } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +11,7 @@ import { EmptyState, SectionHeader } from "@/components/ui/feedback";
 import { AnimatedNumber } from "@/components/ui/motion";
 import { StatTile } from "@/components/ui/stat";
 import { compactNum, eur, pct, plural, timeAgo } from "@/lib/format";
-import { useAlerts, useInsights, useMe, useOpportunities, useQuickStats, useSystemStatus, useTriggerScan } from "@/lib/queries";
+import { useAlerts, useInsights, useMe, useOpportunities, usePlan, useQuickStats, useSystemStatus, useTriggerScan } from "@/lib/queries";
 import type { OpportunityCard } from "@/lib/types";
 
 const EXAMPLES = [
@@ -109,7 +110,9 @@ export default function DashboardPage() {
   const { data: me } = useMe();
   const stats = useQuickStats();
   const top = useOpportunities({ preset: "best_deals", page_size: 14 }, { live: true });
-  const ultra = useOpportunities({ preset: "ultra", page_size: 6 }, { live: true });
+  const strong = useOpportunities({ preset: "strong_buy", page_size: 6 }, { live: true });
+  const watch = useOpportunities({ preset: "to_watch", page_size: 5 }, { live: true });
+  const plan = usePlan();
   const roi = useOpportunities({ preset: "high_roi", page_size: 5 }, { live: true });
   const fast = useOpportunities({ preset: "fast_flip", page_size: 5 }, { live: true });
   const recent = useOpportunities({ preset: "just_listed", min_flip: 50, page_size: 5 }, { live: true });
@@ -119,8 +122,8 @@ export default function DashboardPage() {
   const status = useSystemStatus();
   const sourceConfigured = Boolean(status.data?.provider.configured);
   const s = stats.data;
-  const ultraIds = new Set((ultra.data?.items ?? []).map((d) => d.id));
-  const topItems = top.data?.items.filter((d) => !ultraIds.has(d.id)).slice(0, 8);
+  const strongIds = new Set((strong.data?.items ?? []).map((d) => d.id));
+  const topItems = top.data?.items.filter((d) => !strongIds.has(d.id)).slice(0, 8);
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 
@@ -205,12 +208,12 @@ export default function DashboardPage() {
         />
         <StatTile
           index={4}
-          label="Ultra deals found"
-          value={s ? <AnimatedNumber value={s.ultra_deals} /> : "—"}
-          sub="Flip > 90 · Conf. > 80 · ROI > 60%"
-          icon={<Flame />}
-          tone="ultra"
-          loading={stats.isLoading}
+          label="Strong buys"
+          value={strong.data ? <AnimatedNumber value={strong.data.total} /> : "—"}
+          sub="every requirement verified"
+          icon={<ShieldCheck />}
+          tone="success"
+          loading={strong.isLoading}
         />
         <StatTile
           index={5}
@@ -223,27 +226,45 @@ export default function DashboardPage() {
         />
       </section>
 
-      {(ultra.data?.items.length ?? 0) > 0 && (
-        <section className="reveal">
-          <SectionHeader
-            icon={<Flame className="text-ultra" />}
-            title="Ultra Deals"
-            description="Rare: Flip Score above 90 with high confidence and ROI above 60%. Move fast."
-            action={
-              <Link href="/deals?preset=ultra" className="group inline-flex items-center gap-1 text-[13px] font-medium text-accent">
-                All ultra deals <ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />
-              </Link>
-            }
-          />
+      {plan.data && <MoneyStrip plan={plan.data} />}
+
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {plan.data ? <PurchasePlan plan={plan.data} /> : <div className="skeleton h-64 rounded-2xl" />}
+        <ListCard title="To watch" icon={<Binoculars />} items={watch.data?.items} metric="roi" href="/deals?preset=to_watch" loading={watch.isLoading} />
+      </section>
+
+      <section className="reveal">
+        <SectionHeader
+          icon={<ShieldCheck className="text-success" />}
+          title="Strong buys"
+          description="Only when everything is verified: price against real sales, ROI, risk, listing freshness, photos analysed and the label seen."
+          action={
+            <Link href="/deals?preset=strong_buy" className="group inline-flex items-center gap-1 whitespace-nowrap text-[13px] font-medium text-accent">
+              See all <ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />
+            </Link>
+          }
+        />
+        {(strong.data?.items.length ?? 0) > 0 ? (
           <div className="scrollbar-none -mx-4 flex snap-x gap-4 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0">
-            {ultra.data!.items.map((d, i) => (
+            {strong.data!.items.map((d, i) => (
               <div key={d.id} className="w-[280px] shrink-0 snap-start py-1">
                 <DealCard deal={d} index={i} eagerImage={i < EAGER_CARDS} />
               </div>
             ))}
           </div>
-        </section>
-      )}
+        ) : (
+          <EmptyState
+            icon={<ShieldCheck />}
+            title="No strong buy right now"
+            description="A Strong buy needs the photos analysed by a model and the label seen, on top of a good price. Listings that are good on price alone appear as Buy or Watchlist until the rest is verified."
+            action={
+              <Button asChild size="sm" variant="outline">
+                <Link href="/deals?preset=best_deals">See the best deals</Link>
+              </Button>
+            }
+          />
+        )}
+      </section>
 
       <section className="reveal">
         <SectionHeader
@@ -256,7 +277,7 @@ export default function DashboardPage() {
             </Link>
           }
         />
-        <DealGrid items={topItems} loading={top.isLoading} sourceConfigured={sourceConfigured} eagerCount={(ultra.data?.items.length ?? 0) > 0 ? 0 : EAGER_CARDS} />
+        <DealGrid items={topItems} loading={top.isLoading} sourceConfigured={sourceConfigured} eagerCount={(strong.data?.items.length ?? 0) > 0 ? 0 : EAGER_CARDS} />
       </section>
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">

@@ -170,6 +170,32 @@ def compute_flip_score(inp: FlipInput, weights: dict[str, float] | None = None) 
     return FlipResult(max(0, min(100, round(score))), round(base, 2), components, [], cap)
 
 
+def rescore(stored: dict[str, Any] | None, weights: dict[str, float] | None) -> int | None:
+    """The Flip Score of an already analysed listing with the user's weights.
+
+    Uses the stored 0-100 score of each component (``score_breakdown["components"]``) and the same
+    economic-pillar rule and caps as ``compute_flip_score``. ``None`` when the breakdown is missing
+    or incomplete. It changes only this displayed number: the verdict is decided once, for everyone."""
+    comps = (stored or {}).get("components") or {}
+    if not all(isinstance(comps.get(k), dict) and "score" in comps[k] for k in DEFAULT_WEIGHTS):
+        return None
+    w = normalize_weights(weights)
+    raw = {k: float(comps[k]["score"]) for k in DEFAULT_WEIGHTS}
+    pillar_weight = sum(w[k] for k in ECONOMIC_PILLAR)
+    weighted = {k: w[k] * raw[k] for k in ECONOMIC_PILLAR}
+    if pillar_weight > 0:
+        mean = sum(weighted.values()) / pillar_weight
+        weakest = min(raw[k] for k in ECONOMIC_PILLAR if w[k] > 0)
+        pillar_points = pillar_weight * (PILLAR_MEAN_SHARE * mean + (1 - PILLAR_MEAN_SHARE) * weakest)
+    else:
+        pillar_points = 0.0
+    score = pillar_points + sum(raw[k] * w[k] for k in raw if k not in ECONOMIC_PILLAR)
+    cap = (stored or {}).get("cap")
+    if isinstance(cap, dict) and isinstance(cap.get("max"), (int, float)):
+        score = min(score, float(cap["max"]))
+    return max(0, min(100, round(score)))
+
+
 def deal_tier(score: int) -> DealTier:
     if score >= 90:
         return DealTier.EXCEPTIONAL

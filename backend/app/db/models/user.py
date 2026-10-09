@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, Integer, SmallInteger, String, Text, func
+from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, SmallInteger, String, Text, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -44,6 +44,9 @@ class UserPreferences(Base):
     min_profit: Mapped[Decimal] = mapped_column(default=Decimal("10"), server_default="10")
     min_roi: Mapped[Decimal] = mapped_column(Ratio, default=Decimal("0.40"), server_default="0.40")
     max_purchase_price: Mapped[Decimal | None] = mapped_column()
+    # Capital rules for the purchase plan (all optional): the whole budget, and how many items to hold.
+    total_budget: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    max_owned_items: Mapped[int | None] = mapped_column(SmallInteger)
     min_flip_score: Mapped[int | None] = mapped_column(SmallInteger)
     max_risk_score: Mapped[int | None] = mapped_column(SmallInteger)
     min_confidence: Mapped[int | None] = mapped_column(SmallInteger)

@@ -119,6 +119,12 @@ function PreferencesForm({ initial }: { initial: Preferences }) {
           <Field label="Maximum purchase price">
             <NumberInput prefix="€" nullable value={p.max_purchase_price} onChange={(v) => set({ max_purchase_price: v })} />
           </Field>
+          <Field label="Total budget" hint="Used for “What to buy with your budget” on the home page">
+            <NumberInput prefix="€" nullable value={p.total_budget} onChange={(v) => set({ total_budget: v })} />
+          </Field>
+          <Field label="Most items in stock" hint="Items bought and not sold yet">
+            <NumberInput nullable value={p.max_owned_items} onChange={(v) => set({ max_owned_items: v })} />
+          </Field>
           <Field label="Minimum Flip Score">
             <NumberInput nullable value={p.min_flip_score} onChange={(v) => set({ min_flip_score: v })} />
           </Field>
@@ -240,7 +246,7 @@ function PreferencesForm({ initial }: { initial: Preferences }) {
         </div>
       </Block>
 
-      <Block icon={<Scale />} title="Flip Score weights" description="Tune what matters to you. Weights are normalised to 100%.">
+      <Block icon={<Scale />} title="Flip Score weights" description="Tune what matters to you. Weights are normalised to 100%. They change the score you see in “Why” on each deal; the verdict (Strong buy, Buy…) is decided by shared rules and does not depend on them.">
         <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
           {Object.keys(DEFAULT_WEIGHTS).map((k) => (
             <RangeSlider

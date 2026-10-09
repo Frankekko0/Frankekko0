@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Tip } from "@/components/ui/misc";
 import { ListingImage } from "./listing-image";
 import { RiskBadge, ScoreRing } from "./score";
+import { VerdictBadge } from "./verdict";
 
 /** Cards whose photo is fetched eagerly at the top of a list (roughly the first row on screen). */
 export const EAGER_CARDS = 4;
@@ -151,6 +152,7 @@ export function DealCard({
         <ProfitLine deal={deal} />
 
         <div className="flex flex-wrap items-center gap-1.5">
+          <VerdictBadge verdict={deal.decision_verdict} />
           <Tip content="How sure the system is about this analysis">
             <span>
               <Badge tone="outline">Confidence {deal.confidence_score}</Badge>

@@ -19,6 +19,8 @@ Preset = Literal[
     "hidden_gems",
     "under_20",
     "ultra",
+    "strong_buy",
+    "to_watch",
 ]
 SortKey = Literal[
     "expected",
@@ -58,6 +60,10 @@ class OpportunityFilters(Schema):
     published_before: datetime | None = None
     vintage_only: bool = False
     ultra_only: bool = False
+    # Verdicts of the decision engine (STRONG_BUY, BUY, NEGOTIATE, WATCHLIST, PASS, INSUFFICIENT_EVIDENCE).
+    verdicts: list[
+        Literal["STRONG_BUY", "BUY", "NEGOTIATE", "WATCHLIST", "PASS", "INSUFFICIENT_EVIDENCE"]
+    ] = Field(default_factory=list)
     include_inactive: bool = False
     include_ignored: bool = False
     # Listings without a reliable estimate (too few comparables) are hidden from the feed.

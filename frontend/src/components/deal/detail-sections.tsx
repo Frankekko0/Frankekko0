@@ -102,6 +102,11 @@ export function ExplanationSection({ d }: { d: OpportunityDetail }) {
       title={`Why ${d.score.flip_score}/100?`}
       description="Every point of the Flip Score, explained. Positive factors add points; penalties subtract them."
     >
+      {d.score.weighted_flip_score !== null && d.score.weighted_flip_score !== undefined && (
+        <p className="mb-3 rounded-xl bg-accent-soft px-3 py-2 text-[13px] text-fg-2">
+          With the weights you set in Settings this scores <b className="text-fg tnum">{d.score.weighted_flip_score}/100</b>. The shared score above and the verdict do not change with your weights.
+        </p>
+      )}
       <ul className="divide-y divide-line">
         {d.explanation.map((r, i) => (
           <ReasonRow key={`${r.code}-${i}`} r={r} />

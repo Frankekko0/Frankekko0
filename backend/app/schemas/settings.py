@@ -15,6 +15,8 @@ class PreferencesIO(Schema):
     min_profit: Money = Field(ge=0, le=10_000)
     min_roi: Ratio = Field(ge=0, le=20)
     max_purchase_price: Money | None = Field(default=None, gt=0, le=100_000)
+    total_budget: Money | None = Field(default=None, gt=0, le=1_000_000)
+    max_owned_items: int | None = Field(default=None, ge=1, le=500)
     min_flip_score: int | None = Field(default=None, ge=0, le=100)
     max_risk_score: int | None = Field(default=None, ge=0, le=100)
     min_confidence: int | None = Field(default=None, ge=0, le=100)

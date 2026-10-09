@@ -52,6 +52,7 @@ from app.schemas.opportunity import (
     SellerOut,
     SmartBuyOut,
 )
+from app.scoring.flip import normalize_weights, rescore
 
 PRICE_BANDS: tuple[tuple[float, float | None, str], ...] = (
     (0, 20, "<20"),
@@ -71,6 +72,8 @@ PRESETS: dict[str, dict[str, Any]] = {
     "hidden_gems": {"min_flip": 60, "sort": "flip", "_hidden_gems": True},
     "under_20": {"max_price": 20, "min_profit": 5, "sort": "flip"},
     "ultra": {"ultra_only": True, "sort": "flip"},
+    "strong_buy": {"verdicts": ["STRONG_BUY"], "sort": "expected"},
+    "to_watch": {"verdicts": ["WATCHLIST"], "sort": "flip"},
 }
 
 
@@ -170,6 +173,12 @@ class OpportunityQueries:
         self.user_id = user_id
         self.econ = econ
 
+    def _weighted_flip(self, breakdown: dict[str, Any]) -> int | None:
+        weights = getattr(self.econ.preferences, "score_weights", None)
+        if not weights or normalize_weights(weights) == normalize_weights(None):
+            return None
+        return rescore(breakdown, weights)
+
     # ------------------------------------------------------------------ feed
     def _personal_expr(self) -> tuple[ColumnElement[Any], list[Any]]:
         prefs = self.econ.preferences
@@ -210,7 +219,7 @@ class OpportunityQueries:
             for k, v in PRESETS[f.preset].items():
                 if k == "_hidden_gems":
                     hidden_gems = True
-                elif k == "sort" or params.get(k) in (None, False):
+                elif k == "sort" or params.get(k) in (None, False, []):
                     params[k] = v
         tac, profit, roi = user_money_sql(self.econ.costs)
         personal, aff_joins = self._personal_expr()
@@ -322,6 +331,8 @@ class OpportunityQueries:
             stmt = stmt.where(Listing.is_vintage.is_(True))
         if params["ultra_only"]:
             stmt = stmt.where(Opportunity.is_ultra_deal.is_(True))
+        if params["verdicts"]:
+            stmt = stmt.where(Opportunity.decision_verdict.in_(params["verdicts"]))
         if hidden_gems:
             # Badly described listings (low identification) that are still clearly undervalued.
             stmt = stmt.where(
@@ -629,6 +640,8 @@ class OpportunityQueries:
             score={
                 "flip_score": o.flip_score,
                 "personal_flip_score": card.personal_flip_score,
+                # The same listing scored with the user's own weights (None: default weights in use).
+                "weighted_flip_score": self._weighted_flip(breakdown),
                 "confidence_score": o.confidence_score,
                 "deal_tier": o.deal_tier,
                 "is_ultra_deal": o.is_ultra_deal,

@@ -636,8 +636,10 @@ frontend: http://localhost:3000/docs) e schema su `/api/v1/openapi.json`.
   `Authorization: Bearer <token>`.
 - Errori uniformi e leggibili: `{"error": {"code", "message", "details", "request_id"}}`.
 
-Aree principali: `auth`, `opportunities` (feed con filtri e preset, dettaglio, stato
-Save/Ignore/Watching/Purchased/Sold, analisi AI), `listings` (import, ri-analisi, quick check),
+Aree principali: `auth`, `opportunities` (feed con filtri e preset, anche per verdetto
+(`preset=strong_buy`, `verdicts=WATCHLIST`), dettaglio, stato Save/Ignore/Watching/Purchased/Sold,
+analisi AI), `plan` (`GET /plan`: cosa comprare col budget, capitale in giacenza, profitto
+guadagnato e previsto separati), `listings` (import, ri-analisi, quick check),
 `search` (ricerca in linguaggio naturale, es. *"felpe Ralph Lauren sotto 25 euro con almeno 50%
 ROI"*), `watchlists`, `alerts`, `notifications/push`, `flips`/`purchases`/`sales`/`inventory`,
 `analytics` (portfolio, brand, categorie, database di mercato), `settings`, `system`,

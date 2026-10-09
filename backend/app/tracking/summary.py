@@ -30,6 +30,8 @@ def analysis_summary(o: Opportunity, listing: Listing) -> dict[str, Any]:
         "risk_score": o.risk_score,
         "risk_level": o.risk_level,
         "verdict": None if insufficient else o.verdict,
+        # The decision engine's verdict (the one place a verdict is made); None before it existed.
+        "decision_verdict": o.decision_verdict,
         "recommended_action": o.recommended_action,
         "market": {
             "comparables_found": o.comparables_count,

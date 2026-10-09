@@ -50,7 +50,7 @@ async def put_preferences(body: PreferencesIO, user: CurrentUser, db: DB) -> Pre
         db.add(prefs)
     data = body.model_dump(mode="json")
     for key, value in data.items():
-        if key in ("min_profit", "min_roi", "max_purchase_price"):
+        if key in ("min_profit", "min_roi", "max_purchase_price", "total_budget"):
             value = getattr(body, key)
         setattr(prefs, key, value)
     await db.commit()

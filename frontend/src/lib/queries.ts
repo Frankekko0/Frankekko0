@@ -32,6 +32,7 @@ import type {
   OpportunityFilters,
   Page,
   ParsedQuery,
+  Plan,
   Portfolio,
   Preferences,
   PricingEvidence,
@@ -337,6 +338,10 @@ export function useSavePreferences() {
     },
     onError: (e) => toast.error(errorMessage(e)),
   });
+}
+
+export function usePlan() {
+  return useQuery({ queryKey: ["plan"], queryFn: () => api<Plan>("/plan"), refetchInterval: LIVE });
 }
 
 export function useAiUsage() {

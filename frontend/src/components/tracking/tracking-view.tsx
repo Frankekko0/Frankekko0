@@ -19,6 +19,7 @@ import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { toast } from "sonner";
 import { SnapshotChart } from "@/components/charts/lazy";
 import { DataQualityBanner, MarketComparisonView, RiskChecklist, TimeOnlineView } from "@/components/deal/analysis-detail";
+import { VerdictBadge } from "@/components/deal/verdict";
 import { ProvenanceView } from "@/components/deal/provenance";
 import { ScoreRing } from "@/components/deal/score";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
@@ -203,6 +204,10 @@ function AnalysisPanel({ a }: { a: AnalysisSummary }) {
             <ScoreRing score={a.flip_score ?? 0} size={64} stroke={5} label="Score" />
           )}
           <div className="min-w-0">
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              <VerdictBadge verdict={a.decision_verdict} className="px-2.5 py-1 text-[12px]" />
+              {a.is_active ? null : <Badge tone="neutral">Not available to buy</Badge>}
+            </div>
             <p className="text-[15px] font-semibold text-fg">{a.headline ?? "—"}</p>
             <p className="text-[12px] text-fg-3">
               Confidence {a.confidence_score}/100 · {a.analysis_depth === "quick" ? "quick analysis (search card data)" : "full analysis"} · algorithm{" "}

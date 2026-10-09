@@ -1,6 +1,6 @@
 import type { OpportunityFilters } from "./types";
 
-const ARRAY_KEYS = ["brands", "categories", "sizes", "conditions", "countries", "demand_levels"] as const;
+const ARRAY_KEYS = ["brands", "categories", "sizes", "conditions", "countries", "demand_levels", "verdicts"] as const;
 const NUMBER_KEYS = [
   "min_price", "max_price", "min_profit", "min_roi", "min_flip", "min_confidence", "max_risk", "min_velocity",
   "published_within_hours", "page",
@@ -45,8 +45,10 @@ export function activeFilterCount(f: OpportunityFilters): number {
 }
 
 export const PRESETS: { id: string; label: string; hint: string }[] = [
+  { id: "strong_buy", label: "Strong buy", hint: "Every requirement verified, photos included" },
+  { id: "to_watch", label: "To watch", hint: "Promising, not yet a buy" },
   { id: "best_deals", label: "Best Deals", hint: "Flip Score ≥ 70" },
-  { id: "ultra", label: "🔥 Ultra Deals", hint: "Flip > 90 · Confidence > 80 · ROI > 60%" },
+  { id: "ultra", label: "Ultra Deals", hint: "Flip > 90 · Confidence > 80 · ROI > 60%" },
   { id: "high_profit", label: "High Profit", hint: "Profit ≥ €20" },
   { id: "high_roi", label: "High ROI", hint: "ROI ≥ 80%" },
   { id: "fast_flip", label: "Fast Flip", hint: "Velocity ≥ 70" },
