@@ -549,7 +549,7 @@ Q1–Q10 e C1–C5 (§2) · formula del Flip Score da farti vedere prima di fiss
 
 - [x] 2.1 Vincoli e dati dedotti (migrazione 0010: `published_at_kind`, URL non vuoto, niente data di pubblicazione inventata; primo prezzo datato alla prima osservazione)
 - [x] 2.2 Osservazioni (migrazione 0011: snapshot tipizzati con motivo, versioni di estensione e parser, serie foto; una riga solo se cambia qualcosa o dopo 6 h; `last_verified_at`; `listing_price_history` ora è una vista sugli snapshot, nessun prezzo perso)
-- [ ] 2.3 Immagini
+- [x] 2.3 Immagini (migrazione 0012: chiave stabile, prima/ultima vista, `removed_at`, origine; niente cancella-e-reinserisci, copie e hash sopravvivono; SHA-256 e dHash alla copia; riannuncio visivo con prova in `duplicate_evidence`; il fingerprint delle foto entra negli input di rianalisi)
 - [ ] 2.4 "Da verificare"
 - [ ] 2.5 Venditore
 - [ ] 2.6 Analisi immutabili a blocchi

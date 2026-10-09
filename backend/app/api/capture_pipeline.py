@@ -29,13 +29,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from redis.exceptions import RedisError
-from sqlalchemy import event, func, select
+from sqlalchemy import event, func, literal, select
+from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.acquisition.identity import listing_identity
 from app.core.config import get_settings
 from app.core.redis import get_redis
-from app.db.models import Listing, Opportunity
+from app.db.models import Listing, ListingImage, Opportunity
 from app.domain.enums import ListingStatus
 from app.ingestion.catalog import Catalog
 from app.ingestion.service import IngestResult
@@ -150,6 +151,23 @@ def changes_market(result: IngestResult, listings: list[ProviderListing]) -> boo
     ) or any(status in MARKET_CHANGES for _, _, status in result.status_changes)
 
 
+# The current photos in order: a swapped or re-ordered photo changes it even if the count does not.
+_PHOTOS = (
+    select(
+        func.md5(
+            func.coalesce(
+                func.string_agg(
+                    ListingImage.image_key, aggregate_order_by(literal(","), ListingImage.position)
+                ),
+                "",
+            )
+        )
+    )
+    .where(ListingImage.listing_id == Listing.id, ListingImage.removed_at.is_(None))
+    .correlate(Listing)
+    .scalar_subquery()
+)
+
 # What an analysis reads from the listing itself: unchanged values -> same analysis inputs.
 _INPUTS = (
     Listing.price,
@@ -168,6 +186,7 @@ _INPUTS = (
     Listing.is_vintage,
     Listing.capture_level,
     Listing.photo_count,
+    _PHOTOS,
     Listing.seller_id,
     Listing.shipping_fee,
     Listing.buyer_protection_fee,

@@ -41,7 +41,7 @@ class ItemFilters:
 def _cover() -> Any:
     return (
         select(ListingImage.url)
-        .where(ListingImage.listing_id == Listing.id)
+        .where(ListingImage.listing_id == Listing.id, ListingImage.removed_at.is_(None))
         .order_by(ListingImage.position)
         .limit(1)
         .scalar_subquery()

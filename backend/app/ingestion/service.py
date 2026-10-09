@@ -20,7 +20,7 @@ from decimal import Decimal
 from typing import Any
 
 from rapidfuzz import fuzz
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +31,7 @@ from app.domain.enums import CAPTURE_RANK, AcquisitionMode, CaptureLevel, Condit
 from app.identification.engine import IdentificationEngine, IdentificationResult, ListingText
 from app.identification.taxonomy import Taxonomy
 from app.ingestion.catalog import Catalog, load_catalog
+from app.ingestion.images import incoming_rows, sync_images
 from app.ingestion.normalizer import (
     condition_from_text,
     normalize_condition,
@@ -297,7 +298,7 @@ class IngestionService:
         snapshot_rows: list[dict[str, Any]] = []
         updates: list[dict[str, Any]] = []
         enrich_updates: list[dict[str, Any]] = []
-        replace_images: dict[uuid.UUID, list[dict[str, Any]]] = {}
+        replace_images: dict[uuid.UUID, tuple[list[dict[str, Any]], bool]] = {}
         product_specs: dict[str, dict[str, Any]] = {}
         row_product_key: dict[uuid.UUID, str] = {}
 
@@ -385,17 +386,12 @@ class IngestionService:
                         or len(pl.images) >= (ex.photo_count or 0)
                         or incoming_rank > stored_rank
                     ):
-                        replace_images[ex.id] = [
-                            {
-                                "listing_id": ex.id,
-                                "position": pos,
-                                "url": img.url,
-                                "phash": img.phash,
-                                "width": img.width,
-                                "height": img.height,
-                            }
-                            for pos, img in enumerate(pl.images[:20])
-                        ]
+                        # Only reached by a capture at least as rich as what is stored: the photos
+                        # it does not list are retired (kept as history), not deleted.
+                        replace_images[ex.id] = (
+                            incoming_rows(ex.id, pl.images, self._images_source(pl), now),
+                            True,
+                        )
                     else:
                         cols.pop("photo_count")
                     seller_id = seller_ids.get(pl.seller.external_id) if pl.seller else None
@@ -436,17 +432,8 @@ class IngestionService:
             if pl.status == ListingStatus.ACTIVE:
                 result.new_active_ids.add(row["id"])
             snapshot_rows.append(self._snapshot(row["id"], pl, first.status, now, ["first"]))
-            for pos, img in enumerate(pl.images[:20]):
-                new_images.append(
-                    {
-                        "listing_id": row["id"],
-                        "position": pos,
-                        "url": img.url,
-                        "phash": img.phash,
-                        "width": img.width,
-                        "height": img.height,
-                    }
-                )
+            new_images += incoming_rows(row["id"], pl.images, self._images_source(pl), now)
+            row["photo_count"] = len(incoming_rows(row["id"], pl.images, None, now))
             if key := ident.product_key:
                 row_product_key[row["id"]] = key
                 product_specs.setdefault(
@@ -489,12 +476,8 @@ class IngestionService:
             for group in _group_by_keys(enrich_updates):
                 await self.session.execute(update(Listing), sorted(group, key=lambda u: str(u["id"])))
         if replace_images:
-            await self.session.execute(
-                delete(ListingImage).where(ListingImage.listing_id.in_(list(replace_images)))
-            )
-            rows = [img for imgs in replace_images.values() for img in imgs]
-            if rows:
-                await self.session.execute(pg_insert(ListingImage.__table__).on_conflict_do_nothing(), rows)
+            # Photos are added, moved or retired, never deleted: copies and hashes are kept.
+            await sync_images(self.session, replace_images, now)
         if snapshot_rows:
             await self.session.execute(insert(ListingSnapshot.__table__), snapshot_rows)
         await self._record_sales(result, new_rows)
@@ -509,6 +492,13 @@ class IngestionService:
             from app.market.sold_sales import record_vinted_sold
 
             await record_vinted_sold(self.session, ids)
+
+    @staticmethod
+    def _images_source(pl: ProviderListing) -> str | None:
+        src = (pl.raw or {}).get("images_source")
+        if src:
+            return str(src)[:16]
+        return "card" if pl.capture_level == CaptureLevel.CARD else None
 
     def _snapshot(
         self,
@@ -698,8 +688,10 @@ class IngestionService:
         batch_seen: list[dict[str, Any]] = []
         for row in sorted(new_rows, key=lambda r: r["published_at"] or r["first_seen_at"]):
             dup_of: tuple[uuid.UUID, str, uuid.UUID | None] | None = None  # (id, status, root)
+            evidence: dict[str, Any] | None = None
             if (u := by_url.get(row["url"])) is not None:
                 dup_of = (u.id, u.status, u.duplicate_of_id)
+                evidence = {"rule": "url", "of": str(u.id)}
             pool = list(candidates.get(row["seller_id"], [])) if row["seller_id"] else []
             pool += [
                 _Row(
@@ -722,6 +714,14 @@ class IngestionService:
                     similar_price = c.price > 0 and abs(float(row["price"]) / float(c.price) - 1) <= 0.25
                     if same_title and similar_price:
                         dup_of = (c.id, c.status, c.duplicate_of_id)
+                        evidence = {
+                            "rule": "title_price",
+                            "of": str(c.id),
+                            "title_match": "fingerprint"
+                            if c.title_fingerprint == row["title_fingerprint"]
+                            else "fuzzy>=92",
+                            "price_ratio": round(float(row["price"]) / float(c.price), 3),
+                        }
                         break
             reused_by_other = False
             for ph in images_by_listing.get(row["id"], []):
@@ -729,7 +729,9 @@ class IngestionService:
                     if hit.id == row["id"]:
                         continue
                     if row["seller_id"] and hit.seller_id == row["seller_id"]:
-                        dup_of = dup_of or (hit.id, hit.status, hit.duplicate_of_id)
+                        if dup_of is None:
+                            dup_of = (hit.id, hit.status, hit.duplicate_of_id)
+                            evidence = {"rule": "photo_hash", "of": str(hit.id), "phash": ph, "distance": 0}
                     else:
                         reused_by_other = True
             if reused_by_other:
@@ -740,11 +742,13 @@ class IngestionService:
             if dup_of is not None:
                 root = dup_of[2] or dup_of[0]
                 row["duplicate_of_id"] = root
+                row["duplicate_evidence"] = evidence
                 result.duplicates[row["id"]] = root
                 if dup_of[1] == ListingStatus.ACTIVE:
                     result.duplicates_of_active.add(row["id"])
             else:
                 row["duplicate_of_id"] = None
+                row["duplicate_evidence"] = None
             batch_seen.append(row)
 
 

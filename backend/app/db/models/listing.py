@@ -144,6 +144,8 @@ class Listing(Base):
     duplicate_of_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("listings.id", ondelete="SET NULL"), index=True
     )
+    # Why it was judged a repost: {"rule": "url" | "title_price" | "photo_hash", "of": <listing id>, ...}.
+    duplicate_evidence: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     title_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
     raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
@@ -163,11 +165,18 @@ class Listing(Base):
     def _listed_at_expression(cls) -> Any:
         return func.coalesce(cls.published_at, cls.first_seen_at)
 
+    # The photos the listing shows now (retired ones stay in ``all_images`` as history).
     images: Mapped[list[ListingImage]] = relationship(
-        back_populates="listing",
-        cascade="all, delete-orphan",
-        order_by="ListingImage.position",
+        primaryjoin="and_(ListingImage.listing_id == Listing.id, ListingImage.removed_at.is_(None))",
+        order_by="ListingImage.position, ListingImage.id",
         lazy="selectin",
+        viewonly=True,
+    )
+    all_images: Mapped[list[ListingImage]] = relationship(
+        primaryjoin="ListingImage.listing_id == Listing.id",
+        order_by="ListingImage.first_seen_at, ListingImage.position, ListingImage.id",
+        lazy="noload",
+        viewonly=True,
     )
     brand: Mapped[Brand | None] = relationship(lazy="joined")
     category: Mapped[Category | None] = relationship(lazy="joined")
@@ -176,12 +185,29 @@ class Listing(Base):
 
 class ListingImage(Base):
     __tablename__ = "listing_images"
-    __table_args__ = (UniqueConstraint("listing_id", "position"),)
+    __table_args__ = (
+        # One current row per photo; a photo the seller removed stays as history.
+        Index(
+            "uq_listing_images_current_key",
+            "listing_id",
+            "image_key",
+            unique=True,
+            postgresql_where=text("removed_at IS NULL"),
+        ),
+        Index("ix_listing_images_listing_position", "listing_id", "position"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     listing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"))
+    # Stable identity from the URL path (see app.media.keys); the file's SHA-256 is stronger.
+    image_key: Mapped[str] = mapped_column(String(16))
     position: Mapped[int] = mapped_column(SmallInteger)
     url: Mapped[str] = mapped_column(Text)
+    first_seen_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
+    removed_at: Mapped[datetime | None] = mapped_column()
+    # Where the photos were read from: card, item_json, jsonld, gallery_dom, meta, import.
+    source: Mapped[str | None] = mapped_column(String(16))
     phash: Mapped[str | None] = mapped_column(String(16), index=True)
     width: Mapped[int | None] = mapped_column(Integer)
     height: Mapped[int | None] = mapped_column(Integer)
@@ -195,8 +221,6 @@ class ListingImage(Base):
     archive_error: Mapped[str | None] = mapped_column(String(200))
     archive_attempts: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")
     archived_at: Mapped[datetime | None] = mapped_column()
-
-    listing: Mapped[Listing] = relationship(back_populates="images")
 
 
 class ListingSnapshot(Base):

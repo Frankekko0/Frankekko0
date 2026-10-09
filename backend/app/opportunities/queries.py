@@ -216,7 +216,7 @@ class OpportunityQueries:
         personal, aff_joins = self._personal_expr()
         image = (
             select(ListingImage.url)
-            .where(ListingImage.listing_id == Listing.id)
+            .where(ListingImage.listing_id == Listing.id, ListingImage.removed_at.is_(None))
             .order_by(ListingImage.position)
             .limit(1)
             .scalar_subquery()
@@ -468,7 +468,7 @@ class OpportunityQueries:
         comp_listing = aliased(Listing)
         comp_image = (
             select(ListingImage.url)
-            .where(ListingImage.listing_id == comp_listing.id)
+            .where(ListingImage.listing_id == comp_listing.id, ListingImage.removed_at.is_(None))
             .order_by(ListingImage.position)
             .limit(1)
             .scalar_subquery()

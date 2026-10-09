@@ -27,6 +27,7 @@ from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.db.models import ListingImage
 from app.vision.analyzer import is_public_https_url
+from app.vision.phash import dhash, load_image
 
 log = get_logger(__name__)
 EXTENSIONS = {
@@ -84,6 +85,15 @@ async def download(client: httpx.AsyncClient, url: str, settings: Settings) -> D
         return Download(None, None, f"download non riuscito ({type(exc).__name__})")
 
 
+def image_facts(data: bytes) -> dict[str, object]:
+    """Perceptual hash and size of a downloaded photo (empty when it cannot be decoded)."""
+    try:
+        img = load_image(data)
+        return {"phash": dhash(img), "width": img.width, "height": img.height}
+    except Exception:  # corrupt or unsupported file: the copy is kept, the hash is not
+        return {}
+
+
 def store(data: bytes, content_type: str, root: Path) -> tuple[str, str]:
     """Write once under <root>/<aa>/<sha256>.<ext>; returns (relative path, sha256)."""
     digest = hashlib.sha256(data).hexdigest()
@@ -113,6 +123,7 @@ async def archive_listing_images(
                 select(ListingImage)
                 .where(
                     ListingImage.listing_id.in_(listing_ids),
+                    ListingImage.removed_at.is_(None),
                     or_(ListingImage.archive_status.is_(None), ListingImage.archive_status == "failed"),
                     ListingImage.archive_attempts < MAX_ATTEMPTS,
                 )
@@ -133,6 +144,7 @@ async def archive_listing_images(
             values: dict[str, object] = {"archive_attempts": img.archive_attempts + 1}
             if result.data is not None and result.content_type:
                 rel, digest = await asyncio.to_thread(store, result.data, result.content_type, root)
+                values |= await asyncio.to_thread(image_facts, result.data)
                 values |= {
                     "local_path": rel,
                     "sha256": digest,
@@ -153,6 +165,10 @@ async def archive_listing_images(
             await session.execute(update(ListingImage).where(ListingImage.id == img.id).values(**values))
             if result.data is not None:
                 await asyncio.sleep(PER_IMAGE_DELAY)
+    if stats["ok"]:
+        from app.media.reposts import link_visual_reposts
+
+        await link_visual_reposts(session, list(listing_ids))
     return stats
 
 

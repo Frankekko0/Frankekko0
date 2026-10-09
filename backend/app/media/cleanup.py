@@ -142,17 +142,12 @@ async def clean_foreign_data(session: AsyncSession, dry_run: bool = False) -> Cl
 
     if image_ids:
         await session.execute(delete(ListingImage).where(ListingImage.id.in_(image_ids)))
-        # Close the gaps in the gallery order (two steps: (listing, position) is unique).
-        await session.execute(
-            update(ListingImage)
-            .where(ListingImage.listing_id.in_(listings))
-            .values(position=ListingImage.position + 1000)
-        )
+        # Close the gaps in the gallery order (photos the seller retired are not part of it).
         remaining = (
             await session.execute(
                 select(ListingImage.id, ListingImage.listing_id)
-                .where(ListingImage.listing_id.in_(listings))
-                .order_by(ListingImage.listing_id, ListingImage.position)
+                .where(ListingImage.listing_id.in_(listings), ListingImage.removed_at.is_(None))
+                .order_by(ListingImage.listing_id, ListingImage.position, ListingImage.id)
             )
         ).all()
         counter: dict[uuid.UUID, int] = defaultdict(int)
@@ -175,7 +170,7 @@ async def clean_foreign_data(session: AsyncSession, dry_run: bool = False) -> Cl
         (
             await session.execute(
                 select(ListingImage.listing_id, func.count())
-                .where(ListingImage.listing_id.in_(listings))
+                .where(ListingImage.listing_id.in_(listings), ListingImage.removed_at.is_(None))
                 .group_by(ListingImage.listing_id)
             )
         ).all()

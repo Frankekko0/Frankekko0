@@ -191,5 +191,22 @@ async def test_photos_and_capture_with_more_images_replace_in_order(session, mak
     )
     await svc.ingest([more], now=NOW + timedelta(minutes=5))
     await session.commit()
-    urls = (await session.execute(select(ListingImage.url).order_by(ListingImage.position))).scalars().all()
+    urls = (
+        (
+            await session.execute(
+                select(ListingImage.url)
+                .where(ListingImage.removed_at.is_(None))
+                .order_by(ListingImage.position)
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert urls == [f"https://images1.vinted.net/t/x/{i}.jpeg" for i in range(4)]
+    # The two photos it no longer lists are history, not deleted.
+    retired = (
+        (await session.execute(select(ListingImage.url).where(ListingImage.removed_at.is_not(None))))
+        .scalars()
+        .all()
+    )
+    assert sorted(retired) == ["/img/1/0.jpg", "/img/1/1.jpg"]
