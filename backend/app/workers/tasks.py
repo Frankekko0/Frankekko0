@@ -481,14 +481,6 @@ async def refresh_listings(ctx: dict[str, Any]) -> dict[str, int]:
     return stats
 
 
-async def archive_images(ctx: dict[str, Any], listing_ids: list[str]) -> dict[str, int]:
-    """Local copies of the photos of captured listings (kept after a sale or removal)."""
-    from app.media.archive import archive_listing_images
-
-    async with session_scope() as s:
-        return await archive_listing_images(s, [uuid.UUID(i) for i in listing_ids])
-
-
 async def poll_email(ctx: dict[str, Any]) -> dict[str, int] | None:
     """Optional: read new Vinted notification emails (sold / price reduced) from the mailbox."""
     from app.acquisition.imap_poller import poll_mailbox

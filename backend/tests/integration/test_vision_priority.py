@@ -15,10 +15,11 @@ from tests.api.test_extension_api import CARD, _paired
 from tests.integration.test_pipeline import build_market
 
 
-def _outcome(rap: float | None, flip: int, *, photos: str = "https://img/1.jpg", vision: bool = False) -> Any:
+def _outcome(rap: float | None, flip: int, *, uploaded: bool = True, vision: bool = False) -> Any:
     lid = uuid.uuid4()
     listing = SimpleNamespace(
-        images=[SimpleNamespace(url=photos)], identification={"vision": {"x": 1}} if vision else {}
+        images=[SimpleNamespace(url="https://img/1.jpg", local_path="ab/abcd.jpg" if uploaded else None)],
+        identification={"vision": {"x": 1}} if vision else {},
     )
     result = SimpleNamespace(risk_adjusted_profit=rap, flip=SimpleNamespace(score=flip))
     return SimpleNamespace(listing_id=lid, listing=listing, result=result)
@@ -30,9 +31,11 @@ def test_order_best_first_and_only_worth_checking() -> None:
     c = _outcome(12.0, 70)  # same profit as a, better flip
     d = _outcome(None, 65)  # no estimate but a high flip: last among the kept
     e = _outcome(-5.0, 20)  # not worth it
-    f = _outcome(50.0, 80, photos="/img/local.jpg")  # no photo online
+    f = _outcome(50.0, 80, uploaded=False)  # the browser has not uploaded the photos yet
     g = _outcome(50.0, 80, vision=True)  # already checked
-    order = vision_order([a, b, c, d, e, f, g])
+    h = _outcome(50.0, 80)
+    h.listing.images.append(SimpleNamespace(url="https://img/2.jpg", local_path=None))  # half uploaded
+    order = vision_order([a, b, c, d, e, f, g, h])
     assert order == [str(o.listing_id) for o in (b, c, a, d)]
     assert vision_order([a, b], after_vision=True) == []
 
@@ -55,7 +58,7 @@ async def test_queue_top_few_high_then_default_in_order(monkeypatch: pytest.Monk
     assert defers == sorted(defers) and len(set(defers)) == 6
 
 
-async def test_capture_queues_photo_checks_best_first_after_the_response(
+async def test_a_capture_queues_no_photo_check_until_the_browser_has_uploaded_the_photos(
     auth_client: httpx.AsyncClient, make_listing: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from app.db.session import session_scope
@@ -84,19 +87,11 @@ async def test_capture_queues_photo_checks_best_first_after_the_response(
     r = await auth_client.post(f"{API}/capture/cards", json={"items": cards}, headers=headers)
     assert r.status_code == 200, r.text
     evals = [e for e in r.json()["evaluations"] if e["risk_adjusted_profit"] is not None]
-    worth = [e for e in evals if e["risk_adjusted_profit"] > 0 or (e["flip_score"] or 0) >= 60]
-    assert len(worth) >= 3
-    expected = [
-        e["listing_id"]
-        for e in sorted(worth, key=lambda e: (e["risk_adjusted_profit"], e["flip_score"]), reverse=True)
-    ]
-    queued = [c for c in calls if c["function"] == "vision_task"]
-    assert [c["arg"] for c in queued] == expected
-    assert [c["high"] for c in queued] == [i < VISION_HIGH_TOP for i in range(len(queued))]
-
-    # The cheapest polo is the best candidate and goes first.
-    by_price = {e["price"]: e["listing_id"] for e in r.json()["evaluations"]}
-    assert queued[0]["arg"] == by_price[9.0]
+    assert len([e for e in evals if e["risk_adjusted_profit"] > 0 or (e["flip_score"] or 0) >= 60]) >= 3
+    # Promising listings, but the server holds no photo of them (it never downloads from Vinted):
+    # there is nothing to check yet. The check is queued when the last photo is uploaded
+    # (see ``tests/api/test_photo_upload.py``).
+    assert [c for c in calls if c["function"] == "vision_task"] == []
 
 
 async def test_queue_outage_never_fails_a_capture(

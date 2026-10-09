@@ -42,7 +42,6 @@ from app.marketplace.base import (
     ProviderListing,
     ProviderSeller,
 )
-from app.media.archive import schedule_archive
 from app.opportunities.engine import SubjectContext, run_analysis
 from app.opportunities.pipeline import AnalysisPipeline, profile_from_row
 from app.opportunities.queries import OpportunityQueries
@@ -286,7 +285,6 @@ async def import_listing(body: ManualListingInput, user: CurrentUser, db: DB) ->
     await db.commit()
     await cache.bump(NS_FEED)
     listing_id = result.ids_by_external[pl.external_id]
-    await schedule_archive([listing_id])
     outcome = next((o for o in outcomes if o.listing_id == listing_id), None)
     if outcome is None:
         raise InsufficientDataError("Annuncio salvato ma non analizzabile (non è attivo).")
@@ -332,7 +330,6 @@ async def import_batch(body: BatchImportInput, user: CurrentUser, econ: Economic
     result, outcomes = await persist_observations(db, list(by_id.values()), AcquisitionMode.BATCH_IMPORT)
     await db.commit()
     await cache.bump(NS_FEED)
-    await schedule_archive(list(result.ids_by_external.values()))
     cards = await OpportunityQueries(db, user.id, econ).card_by_listing_ids([o.listing_id for o in outcomes])
     cards.sort(
         key=lambda c: (
@@ -381,7 +378,6 @@ async def analyze_adhoc(
     await db.commit()
     await cache.bump(NS_FEED)
     listing_id = result.ids_by_external[pl.external_id]
-    await schedule_archive([listing_id])
     saved = next((o for o in outcomes if o.listing_id == listing_id), None)
     catalog = await load_catalog(db)
     ident = get_engine(catalog.taxonomy).identify(

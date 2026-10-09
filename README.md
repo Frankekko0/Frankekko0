@@ -177,7 +177,7 @@ flowchart LR
    - **Archive** (`/items`): ricerca e filtri per brand, stato, modalità, data e score, più export **CSV**.
    - **Pagina di tracking** (`/items/{id}` o `/items/{ID Vinted}`):
      - tutte le foto nell'ordine originale, con miniature, schermo intero, tastiera e swipe;
-     - copia locale delle foto fatta all'analisi, solo per uso interno e servita solo a chi ha fatto l'accesso;
+     - copia locale delle foto, inviata dal browser (estensione, se l'hai attivato nelle opzioni), solo per uso interno e servita solo a chi ha fatto l'accesso; il server non scarica nulla da Vinted;
      - stato attuale e ultimo controllo, con il pulsante "Update now";
      - grafici di prezzo e preferiti, analisi e link all'annuncio.
 
@@ -213,7 +213,6 @@ I controlli girano nel **worker**, che va avviato insieme all'API.
 |---|---|---|---|
 | `refresh_listings` | ogni 10 minuti | annunci del feed autorizzato arrivati al loro prossimo controllo | `MARKETPLACE_PROVIDER=feed` |
 | `poll_email` | ogni `IMAP_POLL_MINUTES` (15) | nuove email di Vinted: vendite, ribassi, articoli nuovi | `IMAP_HOST`, `IMAP_USER`, `IMAP_PASSWORD` |
-| `archive_images` | dopo ogni acquisizione | copia locale delle foto (solo domini immagini di Vinted, 3 tentativi) | `IMAGE_ARCHIVE_ENABLED=true` (default) |
 
 Sulla cadenza:
 - **Cadenza adattiva** (`backend/app/tracking/schedule.py`), che dipende dall'età dell'annuncio: 2 ore nel primo giorno, poi 6 ore, 1 giorno, 3 giorni, 7 giorni.
@@ -367,7 +366,7 @@ repository). Un valore vuoto equivale a "non impostato". Le principali:
 | `ALGORITHM_VERSION` | `2026.10-2` | versione registrata con ogni analisi |
 | `IMAP_HOST` / `IMAP_PORT` / `IMAP_USER` / `IMAP_PASSWORD` / `IMAP_FOLDER` / `IMAP_POLL_MINUTES` | — / `993` / — / — / `INBOX` / `15` | lettura (sola lettura) delle email di notifica di Vinted |
 | `PARSER_CONFIG_PATH` | — | copia aggiornata di `vinted_parser.json` (selettori, etichette, pattern) senza ricostruire nulla |
-| `IMAGE_ARCHIVE_ENABLED` / `MEDIA_DIR` / `IMAGE_ARCHIVE_HOSTS` / `IMAGE_ARCHIVE_MAX_BYTES` | `true` / `var/media` / `vinted.net,vinted.com` / `10485760` | copia locale delle foto per la pagina di tracking (in Docker: volume `media`) |
+| `IMAGE_ARCHIVE_ENABLED` / `MEDIA_DIR` / `IMAGE_ARCHIVE_MAX_BYTES` | `true` / `var/media` / `10485760` | accetta e conserva le foto caricate dall'estensione, per la pagina di tracking e l'analisi (in Docker: volume `media`); `false`: nessun caricamento |
 
 ---
 
@@ -726,7 +725,7 @@ backend/
     acquisition/    identità Vinted, parser condiviso (vinted_parser.json), link, email,
                     lettura pubblica facoltativa, valutazioni per l'estensione
     tracking/       stati (venduto/rimosso), cadenza adattiva, snapshot, archivio, export CSV
-    media/          copia locale delle foto (download sicuro, servite solo agli utenti)
+    media/          copia locale delle foto caricate dal browser (validate, servite solo agli utenti)
     ingestion/      normalizzazione, deduplica, upsert
     identification/ tassonomia e riconoscimento prodotto
     pricing/        comparabili, statistiche, fair market value

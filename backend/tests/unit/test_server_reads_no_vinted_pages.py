@@ -19,12 +19,8 @@ ALLOWED_NETWORK_CLIENTS = {
     "external/parse.py": "price search results (parsing only)",
     "external/provider.py": "the optional external price search (Serper)",
     "marketplace/feed.py": "an authorized listing feed configured by the user",
-    # Photo copies are still downloaded from Vinted's image CDN by the server. Decision Q3-B replaces
-    # this with photos uploaded by the extension; until then it is the one known exception.
-    "media/archive.py": "Vinted image CDN (known exception, to be replaced by Q3-B)",
-    "media/keys.py": "image key parsing only",
-    "vision/analyzer.py": "Anthropic API",
-}
+    "media/keys.py": "image key parsing only (urllib.parse, no connection)",
+}  # photos are never downloaded: the extension uploads them (decision Q3-B), see the test below
 NETWORK_IMPORT = re.compile(
     r"^\s*(?:import|from)\s+(httpx|aiohttp|requests|urllib|socket|aiosmtplib|anthropic|pywebpush)\b", re.M
 )
@@ -49,3 +45,22 @@ def test_the_page_reader_and_the_automatic_modes_are_gone() -> None:
     assert "vinted_public_fetch" not in settings
     tasks = (APP / "workers" / "tasks.py").read_text(encoding="utf-8")
     assert "refresh_tracked_public" not in tasks
+
+
+def test_photos_are_uploaded_by_the_browser_never_downloaded_by_the_server() -> None:
+    """Decision Q3-B: no code path fetches a photo from Vinted, and the AI gets bytes, not addresses."""
+    source = {str(p.relative_to(APP)): p.read_text(encoding="utf-8") for p in APP.rglob("*.py")}
+    for needle in ("fetch_image", "is_public_https_url", "archive_listing_images", "image_archive_hosts"):
+        users = [name for name, text in source.items() if needle in text]
+        assert not users, f"{needle} is a server-side photo download: still used in {users}"
+    sent_as_address = [
+        name
+        for name, text in source.items()
+        if name.startswith(("vision/", "ai/")) and '"type": "url"' in text
+    ]
+    assert not sent_as_address, (
+        f"photos must reach the model as bytes, not Vinted addresses: {sent_as_address}"
+    )
+    # The one way a photo enters is the extension's upload endpoint.
+    extension_api = source["api/v1/extension.py"]
+    assert '"/capture/photos/{vinted_id}/{image_key}"' in extension_api

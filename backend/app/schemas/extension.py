@@ -100,6 +100,9 @@ class CaptureItemIn(BaseModel):
 class CaptureItemOut(BaseModel):
     evaluation: QuickEval | None
     analysis: dict[str, object] | None
+    # Photos of this item the server has no copy of yet (``image_key``, ``position``, ``url``): the
+    # extension uploads the ones its page has loaded. The server never downloads from Vinted.
+    photos_wanted: list[dict[str, object]] = []
 
 
 class TrackIn(BaseModel):

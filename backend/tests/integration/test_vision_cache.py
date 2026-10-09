@@ -1,5 +1,6 @@
 """Unchanged photos are never analysed twice (measured), and a listing with 12 photos is read whole (test T)."""
 
+import base64
 import copy
 from typing import Any
 
@@ -10,25 +11,29 @@ from app.ai import service
 from app.ai.budget import AiBudget
 from app.ai.llm import LLMClient
 from app.analysis.dossier import build_dossier
+from app.core.config import get_settings
 from app.db.models import AiUsage, Listing, ListingImage
 from app.db.session import session_scope
+from app.domain.enums import AcquisitionMode
 from app.ingestion.service import IngestionService
+from app.media import archive
 from app.vision import analyzer as az
 from app.vision import cache as vc
-from app.vision.analyzer import ClaudeVisionAnalyzer
+from app.vision.analyzer import ClaudeVisionAnalyzer, PhotoInput
 from app.vision.cache import CachedImageAnalyzer, VisionCacheStore, cache_key
 from app.vision.types import ImageAnalysis, PhotoCheck, PhotoQuality
 from tests.conftest import NOW
 from tests.integration.test_ai_budget import FakeAnthropic, text_response
 from tests.integration.test_ai_budget import settings as ai_settings
+from tests.photos import jpeg, photo, photos
 from tests.unit.test_dossier import facts
 from tests.unit.test_vision_parse import ANSWER, StubLLM
 
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def heuristic(self: Any, urls: list[str], hashes: list[Any], ctx: dict[str, Any]) -> ImageAnalysis:
-        n = len(urls)
+    async def heuristic(self: Any, photos: list[PhotoInput], ctx: dict[str, Any]) -> ImageAnalysis:
+        n = len(photos)
         return ImageAnalysis(
             analyzer="heuristic",
             photo_quality=PhotoQuality(photo_count=n, analyzed_count=n),
@@ -37,11 +42,6 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(az.HeuristicImageAnalyzer, "analyze", heuristic)
-    monkeypatch.setattr(az, "is_public_https_url", lambda url: True)
-
-
-def urls(n: int, host: str = "images1.vinted.net", query: str = "") -> list[str]:
-    return [f"https://{host}/t/photo-{i}/f800.jpeg{query}" for i in range(n)]
 
 
 CTX = {"category_slugs": ["sweatshirts", "jackets"], "brand_rules": {"key_photos": ["label"]}}
@@ -54,20 +54,24 @@ def make(stub: StubLLM, model: str = "model-a") -> CachedImageAnalyzer:
 async def test_the_same_photos_cost_one_model_call(clean_db: None) -> None:
     stub = StubLLM(ANSWER)
     a = make(stub)
-    first = await a.analyze(urls(5), [None] * 5, CTX)
-    second = await a.analyze(urls(5), [None] * 5, CTX)
-    again = await a.analyze(urls(5), [None] * 5, CTX)
+    first = await a.analyze(photos(5), CTX)
+    second = await a.analyze(photos(5), CTX)
+    again = await a.analyze(photos(5), CTX)
     assert len(stub.calls) == 1  # the other two came from the cache
     assert first.model_dump() == second.model_dump() == again.model_dump()
     assert (await VisionCacheStore().stats()) == {"entries": 1, "hits": 2}
 
 
-async def test_the_same_photos_under_other_hosts_and_signed_links_are_the_same_photos(clean_db: None) -> None:
+async def test_a_photo_is_its_content_not_the_address_it_was_uploaded_from(clean_db: None) -> None:
     stub = StubLLM(ANSWER)
     a = make(stub)
-    await a.analyze(urls(5), [None] * 5, CTX)
-    await a.analyze(urls(5, host="images2.vinted.net", query="?s=abc123"), [None] * 5, CTX)
+    await a.analyze(photos(5), CTX)
+    # The same bytes under other gallery keys (another host, a signed link): the same photos.
+    renamed = [photo(i, seed=i, key=f"other-key-{i}") for i in range(5)]
+    await a.analyze(renamed, CTX)
     assert len(stub.calls) == 1
+    # A photo the browser has not uploaded yet is not part of what the model sees.
+    assert cache_key([*photos(5), PhotoInput(5, "k5")], "m", CTX) == cache_key(photos(5), "m", CTX)
 
 
 @pytest.mark.parametrize(
@@ -86,16 +90,16 @@ async def test_anything_that_changes_what_the_model_would_see_is_a_new_analysis(
     clean_db: None, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
     stub = StubLLM(ANSWER)
-    base = urls(5)
-    await make(stub).analyze(base, [None] * 5, CTX)
+    base = photos(5)
+    await make(stub).analyze(base, CTX)
     ctx = copy.deepcopy(CTX)
-    model, photos = "model-a", list(base)
+    model, shown = "model-a", list(base)
     if change == "one more photo":
-        photos = urls(6)
+        shown = photos(6)
     elif change == "other order":
-        photos = list(reversed(base))
+        shown = [photo(i, p.data) for i, p in enumerate(reversed(base))]
     elif change == "other photo":
-        photos[2] = "https://images1.vinted.net/t/another/f800.jpeg"
+        shown[2] = photo(2, jpeg(999))
     elif change == "other model":
         model = "model-b"
     elif change == "other prompt version":
@@ -104,18 +108,18 @@ async def test_anything_that_changes_what_the_model_would_see_is_a_new_analysis(
         ctx["brand_rules"] = {"key_photos": ["label", "zip"]}
     elif change == "other categories":
         ctx["category_slugs"] = ["sweatshirts"]
-    await make(stub, model).analyze(photos, [None] * len(photos), ctx)
+    await make(stub, model).analyze(shown, ctx)
     assert len(stub.calls) == 2, change
 
 
 async def test_the_title_is_not_part_of_the_key_because_the_model_is_not_told_it() -> None:
-    assert cache_key(urls(3), "m", {**CTX, "title": "a"}) == cache_key(
-        urls(3), "m", {**CTX, "title": "b", "brand": "x"}
+    assert cache_key(photos(3), "m", {**CTX, "title": "a"}) == cache_key(
+        photos(3), "m", {**CTX, "title": "b", "brand": "x"}
     )
     llm = StubLLM(ANSWER)
-    await ClaudeVisionAnalyzer(llm).analyze(
-        urls(3), [None] * 3, {"title": "TITOLO SEGRETO", "brand": "MARCA SEGRETA"}
-    )  # type: ignore[arg-type]
+    await ClaudeVisionAnalyzer(llm).analyze(  # type: ignore[arg-type]
+        photos(3), {"title": "TITOLO SEGRETO", "brand": "MARCA SEGRETA"}
+    )
     prompt = " ".join(c["text"] for c in llm.calls[0]["content"] if c["type"] == "text")
     assert "TITOLO SEGRETO" not in prompt and "MARCA SEGRETA" not in prompt
 
@@ -129,9 +133,9 @@ async def test_a_broken_cache_costs_a_call_not_the_analysis(clean_db: None) -> N
             raise RuntimeError("down")
 
     stub = StubLLM(ANSWER)
-    out = await CachedImageAnalyzer(ClaudeVisionAnalyzer(stub), "m", Broken()).analyze(
-        urls(3), [None] * 3, CTX
-    )  # type: ignore[arg-type]
+    out = await CachedImageAnalyzer(ClaudeVisionAnalyzer(stub), "m", Broken()).analyze(  # type: ignore[arg-type]
+        photos(3), CTX
+    )
     assert out.analyzer == "claude_vision" and len(stub.calls) == 1
 
 
@@ -148,8 +152,10 @@ async def test_old_unused_entries_are_pruned(clean_db: None) -> None:
 
 # ------------------------------------------------------------------ end to end through run_vision (measured)
 async def test_two_analyses_of_unchanged_photos_make_one_paid_call(
-    clean_db: None, make_listing: Any, monkeypatch: pytest.MonkeyPatch
+    clean_db: None, make_listing: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
+    media = get_settings().model_copy(update={"media_dir": str(tmp_path)})
+    monkeypatch.setattr(archive, "get_settings", lambda: media)
     cfg = ai_settings()
     fake = FakeAnthropic(text_response(ANSWER, tokens=(6000, 1500)))
     llm = LLMClient(cfg, budget=AiBudget(cfg))
@@ -157,18 +163,28 @@ async def test_two_analyses_of_unchanged_photos_make_one_paid_call(
     monkeypatch.setattr(service, "get_llm", lambda: llm)
 
     async with session_scope() as s:
-        res = await IngestionService(s, "test").ingest(
+        res = await IngestionService(s, "vinted", AcquisitionMode.EXTENSION_ITEM).ingest(
             [make_listing(photos=5, published_days_ago=0.05)], now=NOW
         )
         listing_id = res.new_ids[0]
-    async with session_scope() as s:  # the test listing carries relative links: make them photo URLs
-        await s.execute(text("UPDATE listing_images SET url = 'https://images1.vinted.net' || url"))
-        n_images = (
-            await s.execute(
-                select(func.count()).select_from(ListingImage).where(ListingImage.listing_id == listing_id)
+    async with session_scope() as s:  # the browser uploads the five photos
+        listing = await s.get(Listing, listing_id)
+        assert listing is not None
+        keys = (
+            (
+                await s.execute(
+                    select(ListingImage.image_key)
+                    .where(ListingImage.listing_id == listing_id)
+                    .order_by(ListingImage.position)
+                )
             )
-        ).scalar_one()
-    assert n_images == 5
+            .scalars()
+            .all()
+        )
+        assert len(keys) == 5
+        for i, key in enumerate(keys):
+            up = await archive.register_upload(s, listing.external_id, key, jpeg(i), "image/jpeg", media)
+            assert up.stored, up.error
 
     async with session_scope() as s:
         await service.run_vision(s, listing_id)
@@ -211,10 +227,12 @@ async def test_case_t_twelve_photos_are_all_sent_all_get_a_role_and_the_gaps_are
     answer["photo_roles"] = [{"photo": i + 1, "role": r} for i, r in enumerate(ROLES)]
     answer["defects"] = []
     stub = StubLLM(answer)
-    photos = urls(12)
-    out = await ClaudeVisionAnalyzer(stub).analyze(photos, [None] * 12, CTX)  # type: ignore[arg-type]
+    gallery = photos(12)
+    out = await ClaudeVisionAnalyzer(stub).analyze(gallery, CTX)  # type: ignore[arg-type]
     sent = [c for c in stub.calls[0]["content"] if c["type"] == "image"]
-    assert [c["source"]["url"] for c in sent] == photos  # none ignored, none reordered
+    # Every photo goes to the model as the bytes the browser uploaded, none ignored, none reordered.
+    assert [base64.b64decode(c["source"]["data"]) for c in sent] == [p.data for p in gallery]
+    assert all(c["source"]["type"] == "base64" for c in sent)
     assert [r.photo for r in out.photo_roles] == list(range(12))
     assert len(out.photo_checks) == 12  # the technical check covers them all too
 

@@ -21,7 +21,8 @@ Tutto viene salvato in FlipFinder, con la data, la modalità di acquisizione e l
   - Del venditore arrivano a FlipFinder solo valutazione, numero di recensioni e un'impronta non reversibile dell'ID: mai il nome utente.
 - **Permessi minimi:** `storage`, `alarms` (invio e aggiornamento della configurazione) e `sidePanel`. Nessun `scripting`, `offscreen`, `notifications`, `tabs`, `cookies`.
   - Gira solo sui domini `www.vinted.*`.
-  - L'unica richiesta di rete è verso l'indirizzo di FlipFinder; il suo accesso viene chiesto al momento dell'associazione, non all'installazione.
+  - La richiesta di rete è verso l'indirizzo di FlipFinder; il suo accesso viene chiesto al momento dell'associazione, non all'installazione.
+  - **Foto (opzionale, spenta di base).** Se attivi «Invia a FlipFinder le foto degli annunci che apri» il browser ti chiede il permesso di leggere i file foto di Vinted (`*.vinted.net`). L'estensione invia a FlipFinder solo le foto che il server non ha ancora e che la pagina aperta mostra, senza cookie né referrer; il server di FlipFinder non contatta mai Vinted. Senza foto l'analisi usa solo testo e dati e non può dare «Acquisto forte».
   - Un test (`tests/no-automation.test.mjs`) legge i sorgenti e fallisce se tornano permessi, messaggi o chiamate di rete di queste funzioni.
 
 ## Installazione e associazione (Chrome, Edge, Brave)
@@ -69,7 +70,7 @@ Senza associazione resta il pulsante del popup **"Apri questa pagina in FlipFind
 
 | File | Ruolo |
 |---|---|
-| `manifest.json` | Manifest V3: content script solo su `www.vinted.*`; permessi `storage`, `alarms`, `sidePanel`; l'indirizzo di FlipFinder in `optional_host_permissions`. |
+| `manifest.json` | Manifest V3: content script solo su `www.vinted.*`; permessi `storage`, `alarms`, `sidePanel`; l'indirizzo di FlipFinder (e, se lo accendi, `*.vinted.net` per le foto) in `optional_host_permissions`. |
 | `src/parser-config.js` | Copia di `backend/app/acquisition/vinted_parser.json`, la configurazione del parser condivisa con il server. L'estensione scarica le versioni nuove da FlipFinder (`/extension/parser-config`), quindi una correzione si fa in un punto solo, senza ripubblicare l'estensione. |
 | `src/parse.js` | Parser puro guidato dalla configurazione: annuncio (JSON-LD, script della pagina, meta, etichette in 15 lingue), schede, prezzi e valute, stato, record da inviare entro i limiti del server. |
 | `src/core.js` | Logica pura: opzioni, coda (un record per ID Vinted, nuovi tentativi con attesa crescente), classifica live, export CSV. |

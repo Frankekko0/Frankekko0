@@ -21,7 +21,8 @@ from app.domain.enums import Verdict
 from app.identification.engine import ListingText
 from app.ingestion.catalog import load_catalog
 from app.ingestion.service import get_engine
-from app.vision.analyzer import get_image_analyzer
+from app.media.archive import read_copy
+from app.vision.analyzer import PhotoInput, get_image_analyzer
 from app.vision.provenance import photo_provenance
 
 log = get_logger(__name__)
@@ -118,13 +119,16 @@ async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
     analyzer = get_image_analyzer(llm)
     catalog = await load_catalog(db)
     images = sorted(listing.images, key=lambda i: i.position)
+    if not any(i.local_path for i in images):
+        return False  # the browser has not uploaded any photo yet: nothing to read, nothing invented
     brand_slug = catalog.brand_slug(listing.brand_id)
+    photos = [
+        PhotoInput(i.position, i.image_key, await read_copy(i.local_path), i.sha256, i.content_type)
+        for i in images
+    ]
     vision = await analyzer.analyze(
-        [i.url for i in images],
-        [i.phash for i in images],
+        photos,
         {
-            "title": listing.title,
-            "brand": listing.brand_raw,
             "category_slugs": sorted(catalog.categories_by_slug),
             "brand_rules": brand_rules(brand_slug) if brand_slug else None,
         },

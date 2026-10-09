@@ -12,7 +12,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from sqlalchemy import func, select
 
 from app.acquisition.evaluations import quick_evaluations
@@ -33,7 +33,7 @@ from app.db.models import ApiKey, Listing, Opportunity, SystemState
 from app.domain.enums import AcquisitionMode, CaptureLevel
 from app.ingestion.catalog import load_catalog
 from app.market.model_stats import lookup_stats
-from app.media.archive import schedule_archive
+from app.media.archive import photo_state, photos_wanted, register_upload
 from app.schemas.extension import (
     ApiKeyCreated,
     ApiKeyIn,
@@ -59,6 +59,19 @@ MAX_ACTIVE_KEYS = 10
 capture_limit = RateLimit("capture", per_minute=90)
 item_limit = RateLimit("capture-item", per_minute=40)
 page_stats_limit = RateLimit("page-stats", per_minute=60)
+photo_limit = RateLimit("capture-photo", per_minute=240)
+
+
+class InvalidPhotoError(AppError):
+    status_code = 422
+    code = "invalid_photo"
+    message = "La foto non è un'immagine valida."
+
+
+class PhotoTooLargeError(AppError):
+    status_code = 413
+    code = "photo_too_large"
+    message = "File troppo grande."
 
 
 # ------------------------------------------------------------------ pairing (web app session)
@@ -185,10 +198,10 @@ async def _touch_sync(db: DB, version: str | None, kind: str, count: int) -> Non
         state.value = value
 
 
-async def _after_capture(archive_ids: list[uuid.UUID], vision_ids: list[str]) -> None:
-    """Photo checks (best first) and photo copies, queued once the response is on its way."""
+async def _after_capture(vision_ids: list[str]) -> None:
+    """Photo checks (best first), queued once the response is on its way. They run on the photos the
+    browser has uploaded; a listing without copies is checked when its photos arrive."""
     await queue_vision_safely(vision_ids)
-    await schedule_archive(archive_ids)
 
 
 def _vinted_only(items: list[Any]) -> list[Any]:
@@ -229,7 +242,7 @@ async def capture_cards(
     await cache.bump(NS_FEED)
     ids = [result.ids_by_external[vid] for vid in by_id if vid in result.ids_by_external]
     evaluations = await quick_evaluations(db, user.id, econ, ids)
-    background.add_task(_after_capture, list(result.enriched_ids or result.new_ids), vision)
+    background.add_task(_after_capture, vision)
     return CaptureCardsOut(received=len(body.items), stored=len(ids), evaluations=evaluations)
 
 
@@ -258,7 +271,8 @@ async def capture_item(
     await db.commit()
     await cache.bump(NS_FEED)
     listing_id = result.ids_by_external[pl.external_id]
-    background.add_task(_after_capture, [listing_id], vision_order(outcomes))
+    background.add_task(_after_capture, vision_order(outcomes))
+    wanted = (await photos_wanted(db, [listing_id])).get(listing_id, [])
     evaluation = (await quick_evaluations(db, user.id, econ, [listing_id]) or [None])[0]
     outcome = next((o for o in outcomes if o.listing_id == listing_id), None)
     analysis = None
@@ -267,7 +281,72 @@ async def capture_item(
         listing = await db.get(Listing, listing_id)
         if opp is not None and listing is not None:
             analysis = analysis_summary(opp, listing)
-    return CaptureItemOut(evaluation=evaluation, analysis=analysis)
+    return CaptureItemOut(evaluation=evaluation, analysis=analysis, photos_wanted=wanted)
+
+
+@router.put(
+    "/capture/photos/{vinted_id}/{image_key}",
+    response_model=dict[str, Any],
+    dependencies=[Depends(photo_limit)],
+)
+async def upload_photo(
+    vinted_id: str,
+    image_key: str,
+    request: Request,
+    user: CaptureUser,
+    db: DB,
+    background: BackgroundTasks,
+) -> dict[str, Any]:
+    """One photo of an item page, as the user's browser loaded it (raw image bytes in the body).
+
+    The server never downloads from Vinted: this is how it gets the photos it analyses. Only a photo
+    the server asked for (see ``photos_wanted`` in the item capture) is accepted. The last one to
+    arrive queues the photo check of the listing."""
+    if not (vinted_id.isdigit() and len(vinted_id) <= 20 and len(image_key) == 16 and image_key.isalnum()):
+        raise InvalidPhotoError("Identificativi non validi.")
+    limit = get_settings().image_archive_max_bytes
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
+        raise PhotoTooLargeError()
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise PhotoTooLargeError()
+        chunks.append(chunk)
+    res = await register_upload(
+        db, vinted_id, image_key, b"".join(chunks), request.headers.get("content-type")
+    )
+    if not res.stored:
+        if res.listing_id is None:
+            raise NotFoundError("Foto non richiesta per questo annuncio.")
+        raise InvalidPhotoError(res.error or None)
+    await db.commit()
+    if res.remaining == 0 and res.listing_id is not None:
+        background.add_task(queue_vision_safely, [str(res.listing_id)])
+    return {"stored": True, "remaining": res.remaining, "sha256": res.sha256}
+
+
+@router.post(
+    "/capture/photos/{vinted_id}/complete",
+    response_model=dict[str, Any],
+    dependencies=[Depends(photo_limit)],
+)
+async def photos_complete(
+    vinted_id: str, user: CaptureUser, db: DB, background: BackgroundTasks
+) -> dict[str, Any]:
+    """The browser has sent every photo it could read. Photos it could not read stay missing (and are
+    reported as such in the dossier); the photo check runs on the ones the server has."""
+    if not (vinted_id.isdigit() and len(vinted_id) <= 20):
+        raise InvalidPhotoError("Identificativo non valido.")
+    state = await photo_state(db, vinted_id)
+    if state is None:
+        raise NotFoundError("Annuncio non trovato.")
+    listing_id, have, total = state
+    if have:
+        background.add_task(queue_vision_safely, [str(listing_id)])
+    return {"photos": have, "of": total, "queued": bool(have)}
 
 
 @router.post("/capture/evaluations", response_model=list[QuickEval])

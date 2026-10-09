@@ -1,7 +1,7 @@
 """Never analyse unchanged photos twice.
 
-The result of a photo analysis is kept under a key made of the photos' stable identities (see
-``app.media.keys.image_key``), the model, the version of the prompt and schema, and the brand
+The result of a photo analysis is kept under a key made of the photos' identities (the SHA-256 of
+each uploaded copy), the model, the version of the prompt and schema, and the brand
 rules and categories the model was told about. Same photos, same model, same prompt: the stored
 answer is returned and no paid call is made. Change one photo (or the prompt, or the model) and the
 key changes: the set is analysed again.
@@ -27,8 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.db.models import VisionCache
 from app.db.session import session_scope
-from app.media.keys import image_key
-from app.vision.analyzer import ImageAnalyzer
+from app.vision.analyzer import ImageAnalyzer, PhotoInput
 from app.vision.types import ImageAnalysis
 
 log = get_logger(__name__)
@@ -38,8 +37,8 @@ RETENTION_DAYS = 90
 Scope = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
 
-def cache_key(urls: list[str], model: str, context: dict[str, Any]) -> str:
-    photos = [image_key(u) for u in urls]
+def cache_key(photos_in: list[PhotoInput], model: str, context: dict[str, Any]) -> str:
+    photos = [f"{p.position}:{p.identity}" for p in photos_in if p.data]
     told = {
         "rules": context.get("brand_rules") or {},
         "categories": sorted(context.get("category_slugs") or []),
@@ -107,24 +106,22 @@ class CachedImageAnalyzer(ImageAnalyzer):
         self.store = store or VisionCacheStore()
         self.name = inner.name
 
-    async def analyze(
-        self, image_urls: list[str], provided_hashes: list[str | None], context: dict[str, Any]
-    ) -> ImageAnalysis:
-        urls = [u for u in image_urls if u]
-        if not urls:
-            return await self.inner.analyze(image_urls, provided_hashes, context)
-        key = cache_key(urls, self.model, context)
+    async def analyze(self, photos: list[PhotoInput], context: dict[str, Any]) -> ImageAnalysis:
+        have = [p for p in photos if p.data]
+        if not have:  # nothing uploaded yet: nothing to remember
+            return await self.inner.analyze(photos, context)
+        key = cache_key(photos, self.model, context)
         try:
             hit = await self.store.get(key)
         except Exception as exc:  # a cache that cannot be read costs a call, not a failure
             log.warning("vision.cache_unreadable", error=type(exc).__name__)
             hit = None
         if hit is not None:
-            log.info("vision.cache_hit", photos=len(urls))
+            log.info("vision.cache_hit", photos=len(have))
             return ImageAnalysis.model_validate(hit)
-        result = await self.inner.analyze(image_urls, provided_hashes, context)
+        result = await self.inner.analyze(photos, context)
         try:
-            await self.store.put(key, self.model, len(urls), result.model_dump(mode="json"))
+            await self.store.put(key, self.model, len(have), result.model_dump(mode="json"))
         except Exception as exc:
             log.warning("vision.cache_not_stored", error=type(exc).__name__)
         return result

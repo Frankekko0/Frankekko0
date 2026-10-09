@@ -9,10 +9,10 @@ from PIL import Image, ImageDraw, ImageFont
 from app.analysis.categories import CLOTHING
 from app.analysis.dossier import PARTIAL, build_dossier
 from app.analysis.labels import build_label_report
-from app.vision import analyzer as az
 from app.vision import ocr as ocr_mod
 from app.vision.analyzer import HeuristicImageAnalyzer
 from app.vision.ocr import OcrLine, parse_ocr, set_ocr_engine
+from tests.photos import jpeg, photo
 from tests.unit.test_dossier import facts
 
 
@@ -130,26 +130,18 @@ class FakeEngine:
         return [line("SIZE M"), line("67% COTTON 33% POLYESTER")] if len(self.seen) == 2 else []
 
 
-async def test_the_photo_analysis_reads_every_photo_and_keeps_the_text(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_the_photo_analysis_reads_every_photo_and_keeps_the_text() -> None:
     from io import BytesIO
 
-    def jpeg(color: str) -> bytes:
+    def plain(color: str) -> bytes:
         buf = BytesIO()
         Image.new("RGB", (900, 1200), color).save(buf, "JPEG")
         return buf.getvalue()
 
-    blobs = {f"https://images.example/{i}.jpg": jpeg(c) for i, c in enumerate(["white", "grey", "black"])}
-
-    async def fake_fetch(client: Any, url: str) -> bytes | None:
-        return blobs.get(url)
-
-    monkeypatch.setattr(az, "fetch_image", fake_fetch)
-    monkeypatch.setattr(az, "is_public_https_url", lambda url: True)
+    uploaded = [photo(i, plain(c)) for i, c in enumerate(["white", "grey", "black"])]
     engine = FakeEngine()
     set_ocr_engine(engine)
-    out = await HeuristicImageAnalyzer().analyze(list(blobs), [None] * 3, {})
+    out = await HeuristicImageAnalyzer().analyze(uploaded, {})
     assert len(engine.seen) == 3  # every photo, none skipped
     assert [p.photo for p in out.ocr] == [1] and out.ocr_engine == "fake-ocr"
     assert out.ocr_facts["size"] == "M" and out.ocr_facts["composition"] == {"cotton": 67, "polyester": 33}
@@ -157,14 +149,9 @@ async def test_the_photo_analysis_reads_every_photo_and_keeps_the_text(
     assert out.analyzer == "heuristic"  # still no model: OCR does not pretend to be one
 
 
-async def test_without_an_engine_nothing_is_read_and_nothing_claimed(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_fetch(client: Any, url: str) -> bytes | None:
-        return None
-
-    monkeypatch.setattr(az, "fetch_image", fake_fetch)
-    monkeypatch.setattr(az, "is_public_https_url", lambda url: True)
+async def test_without_an_engine_nothing_is_read_and_nothing_claimed() -> None:
     set_ocr_engine(None)
-    out = await HeuristicImageAnalyzer().analyze(["https://images.example/0.jpg"], [None], {})
+    out = await HeuristicImageAnalyzer().analyze([photo(0, jpeg(1))], {})
     assert out.ocr == [] and out.ocr_engine is None and out.photo_quality.has_label_photo is None
 
 

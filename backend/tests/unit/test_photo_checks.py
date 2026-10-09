@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw, ImageFilter
 from app.tools.auth_eval import evaluate
 from app.vision import analyzer as va
 from app.vision.phash import dhash, hamming, photo_quality
+from tests.photos import photo
 
 
 def pattern(w: int = 900, h: int = 1200, blur: float = 0, seed: int = 1) -> Image.Image:
@@ -63,22 +64,16 @@ class FakeLLM:
         return self.data
 
 
-def test_ai_findings_keep_photo_number_and_highlighted_detail(monkeypatch) -> None:
-    jpeg = io.BytesIO()
-    pattern().save(jpeg, "JPEG")
+def test_ai_findings_keep_photo_number_and_highlighted_detail() -> None:
+    sharp = io.BytesIO()
+    pattern().save(sharp, "JPEG")
     blurry = io.BytesIO()
     pattern(blur=3).save(blurry, "JPEG")
-    blobs = {
-        "https://img/0.jpg": jpeg.getvalue(),
-        "https://img/1.jpg": blurry.getvalue(),
-        "https://img/2.jpg": jpeg.getvalue(),
-    }
-
-    async def fake_fetch(client: Any, url: str) -> bytes | None:
-        return blobs.get(url)
-
-    monkeypatch.setattr(va, "fetch_image", fake_fetch)
-    monkeypatch.setattr(va, "is_public_https_url", lambda url: True)
+    uploaded = [
+        photo(0, sharp.getvalue()),
+        photo(1, blurry.getvalue()),
+        photo(2, sharp.getvalue()),
+    ]
     llm = FakeLLM(
         {
             "brand": None,
@@ -124,8 +119,7 @@ def test_ai_findings_keep_photo_number_and_highlighted_detail(monkeypatch) -> No
     )
     result = asyncio.run(
         va.ClaudeVisionAnalyzer(llm).analyze(  # type: ignore[arg-type]
-            list(blobs),
-            [None, None, None],
+            uploaded,
             {"title": "Felpa", "brand_rules": {"key_photos": ["label", "code"], "checks": ["Codice"]}},
         )
     )

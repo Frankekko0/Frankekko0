@@ -25,17 +25,20 @@ _STEP_SECONDS = 0.001
 
 
 def worth_vision(outcome: Any, after_vision: bool = False) -> bool:
-    """A listing whose photos are worth a check: promising, photos online, and never checked or changed."""
+    """A listing whose photos are worth a check: promising, all photos uploaded, never checked or changed."""
     listing, r = outcome.listing, outcome.result
     if listing is None or after_vision:
         return False
-    has_remote_photos = any(i.url.startswith("https://") for i in listing.images)
+    # The check waits for the whole gallery: a half-uploaded one would be analysed (and paid for) twice.
+    # A gallery the browser could not read in full is queued by its "complete" call instead.
+    gallery = [i for i in listing.images if getattr(i, "removed_at", None) is None]
+    has_local_photos = bool(gallery) and all(getattr(i, "local_path", None) for i in gallery)
     vision_done = bool((listing.identification or {}).get("vision"))
     worth_checking = r.flip.score >= VISION_MIN_FLIP or (r.risk_adjusted_profit or 0) > 0
     trigger = getattr(outcome, "trigger", None)
     # Photos are checked once; checked again only when the change touches them (a price change
     # does not: see ``app.agent.stages``).
-    return worth_checking and has_remote_photos and needs_photo_check(trigger, vision_done=vision_done)
+    return worth_checking and has_local_photos and needs_photo_check(trigger, vision_done=vision_done)
 
 
 def vision_order(outcomes: Iterable[Any], after_vision: bool = False) -> list[str]:

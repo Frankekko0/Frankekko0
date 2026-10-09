@@ -46,7 +46,6 @@ def _functions() -> list[Any]:
         func(tasks.mark_stale_listings_task, keep_result=0, max_tries=2, timeout=120),
         func(tasks.recompute_learning, keep_result=0, max_tries=2, timeout=300),
         func(tasks.prune, keep_result=0, max_tries=1, timeout=300),
-        func(tasks.archive_images, keep_result=0, max_tries=2, timeout=600),
         func(tasks.poll_email, keep_result=0, max_tries=1, timeout=300),
         func(tasks.clean_foreign_data_task, keep_result=0, max_tries=2, timeout=600),
         func(tasks.fit_price_calibration_task, keep_result=0, max_tries=2, timeout=900),

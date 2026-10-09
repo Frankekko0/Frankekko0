@@ -5,10 +5,11 @@ from typing import Any
 import pytest
 
 from app.vision import analyzer as az
-from app.vision.analyzer import VISION_SCHEMA, ClaudeVisionAnalyzer
+from app.vision.analyzer import VISION_SCHEMA, ClaudeVisionAnalyzer, PhotoInput
 from app.vision.types import ImageAnalysis, PhotoQuality
+from tests.photos import photos
 
-URLS = [f"https://images.example/{i}.jpg" for i in range(1, 6)]
+PHOTOS = photos(5)
 
 
 class StubLLM:
@@ -54,17 +55,16 @@ ANSWER: dict[str, Any] = {
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def heuristic(self: Any, urls: list[str], hashes: list[Any], ctx: dict[str, Any]) -> ImageAnalysis:
-        return ImageAnalysis(analyzer="heuristic", photo_quality=PhotoQuality(photo_count=len(urls)))
+    async def heuristic(self: Any, photos: list[PhotoInput], ctx: dict[str, Any]) -> ImageAnalysis:
+        return ImageAnalysis(analyzer="heuristic", photo_quality=PhotoQuality(photo_count=len(photos)))
 
     monkeypatch.setattr(az.HeuristicImageAnalyzer, "analyze", heuristic)
-    monkeypatch.setattr(az, "is_public_https_url", lambda url: True)
 
 
 async def analyse(answer: dict[str, Any] | None) -> ImageAnalysis:
-    return await ClaudeVisionAnalyzer(StubLLM(answer)).analyze(
-        URLS, [None] * 5, {"title": "Felpa", "category_slugs": ["sweatshirts"]}
-    )  # type: ignore[arg-type]
+    return await ClaudeVisionAnalyzer(StubLLM(answer)).analyze(  # type: ignore[arg-type]
+        PHOTOS, {"title": "Felpa", "category_slugs": ["sweatshirts"]}
+    )
 
 
 async def test_defects_labels_and_roles_are_typed_and_bounded() -> None:
@@ -89,7 +89,7 @@ async def test_defects_labels_and_roles_are_typed_and_bounded() -> None:
 
 async def test_the_request_names_every_photo_and_the_schema_asks_for_the_new_fields() -> None:
     llm = StubLLM(ANSWER)
-    await ClaudeVisionAnalyzer(llm).analyze(URLS, [None] * 5, {"title": "Felpa"})  # type: ignore[arg-type]
+    await ClaudeVisionAnalyzer(llm).analyze(PHOTOS, {"title": "Felpa"})  # type: ignore[arg-type]
     content = llm.calls[0]["content"]
     assert [c["text"] for c in content if c["type"] == "text"][:5] == [f"Foto {i}" for i in range(1, 6)]
     assert llm.calls[0]["schema"] is VISION_SCHEMA

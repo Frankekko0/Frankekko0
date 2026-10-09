@@ -162,7 +162,7 @@ Anthropic (analisi foto e commento dell'analista) · Serper (prezzi da altri mer
 | Prezzo iniziale, attuale, minimo osservato | 🟡 | Derivabili dagli snapshot, non esposti; il "primo prezzo" è datato alla pubblicazione presunta (D6) |
 | Dedup per ID Vinted | ✅ | Chiave unica (provider, ID) con test |
 | Dedup visiva tramite hash | 🟡 | `dHash` + SHA-256 esistono, ma l'estensione non invia hash: si calcolano solo per gli annunci che passano l'analisi foto |
-| Copia locale di tutte le foto, in ordine, senza avatar | 🟡 | `media/archive.py` ✅ (esclude avatar); scaricata dal server (Q3); riscritta a ogni cattura più ricca |
+| Copia locale di tutte le foto, in ordine, senza avatar | ✅ | Caricate dal browser (Q3-B, D50–D52): il server non scarica nulla; l'estensione le invia se l'utente l'ha attivato (L21) |
 | Stati attivo/riservato/venduto/rimosso/**da verificare** | 🟡 | Manca "da verificare": `lifecycle_stale_hours` è definito e **mai usato** (D9) |
 | Stato aggiornato a ogni passaggio dell'estensione | ✅ | Snapshot + macchina a stati |
 | Preferiti: aggiornamento in blocco | 🟡 | Le card dei Preferiti entrano come ogni card; nessuna logica dedicata |
@@ -270,7 +270,7 @@ Anthropic (analisi foto e commento dell'analista) · Serper (prezzi da altri mer
 | L7 | Acquista con clic programmatico | `content.js` (`btn.click()`), `background.js: ff:vinted-buy` | Q1g |
 | L8 | Misure automatiche su Vinted reale | `extension/e2e/real-speed.e2e.cjs` | Q1h |
 | L9 | Dati del venditore oltre i consentiti | `db/models/seller.py` (5 colonne mai usate), `api/v1/listings.py: seller_for` (accetta `seller_username`), `extension/src/parse.js: sellerKey` (SHA-256 senza segreto, 96 bit) | Q2 |
-| L10 | Foto scaricate dal server dal CDN e URL Vinted passati ad Anthropic | `media/archive.py`, `vision/analyzer.py` | Q3 |
+| L10 | Foto scaricate dal server dal CDN e URL Vinted passati ad Anthropic | `media/archive.py`, `vision/analyzer.py` | Q3 — **ritirato** (Q3-B: foto caricate dal browser, byte e non URL al modello) |
 | L11 | Permessi più larghi del minimo | `manifest.json`: host opzionali `http://*/*` e `https://*/*`, `scripting`, `offscreen`, `notifications` | C5 |
 | L12 | **Rischio residuo che non posso eliminare** | L'estensione è comunque uno "strumento software esterno" che legge le pagine mentre le usi; i Termini lo vietano salvo autorizzazione e i blocchi possono essere automatici. La lettura passiva è la modalità con meno impatto (nessuna richiesta aggiuntiva) ma il rischio non è zero | Premessa del brief; lo dichiaro, non lo "risolvo" |
 
@@ -557,6 +557,7 @@ Q1–Q10 e C1–C5 (§2) · formula del Flip Score da farti vedere prima di fiss
 | 2026-10-09 | v3 Fase 5 (= PIANO Fase 6.1–6.3, 6.5): modulo `decision` (6 verdetti, 4 punteggi separati, veti, STRONG BUY a requisiti, classifica, zaino esatto), Flip Score con i pesi del brief senza doppio conteggio, migrazione 0017; casi A, C, E, G, H e B (lato decisione) coperti da test. Restano 6.4 (sette modalità) e 6.6 (vettori JS/Python) |
 | 2026-10-09 | v3 Fase 6 (orchestratore): budget AI con tetti e stop (`ai_usage`), interruttore sul fornitore, routing economico/forte, registro di 9 strumenti tipizzati, ciclo dell'agente con guardrail nel codice e traccia (`agent_runs`), `events` append-only, revisione dei candidati con ripiego a regole, ricalcolo incrementale (35→23), avvisi coalescenti e legati al verdetto; migrazione 0018. Mai provato col modello reale (L13) |
 | 2026-10-09 | v3 Fase 4/4b (senza Q3-B): dossier P0–P12 con coverage, plugin per categoria, condizioni da foto con difetti localizzati, stati delle etichette, due punteggi foto indipendenti, matrice di coerenza (13 controlli, impatto stimato), testo multilingua, OCR locale (RapidOCR), cache delle analisi delle foto (misurata), migrazioni 0019–0020; casi B, C, D, F, T, U, V, W coperti da test. Resta Q3-B (foto caricate dall'estensione) |
+| 2026-10-09 | Q3-B: il server non scarica più nulla da Vinted; foto caricate dall'estensione (opt-in, `*.vinted.net` come permesso opzionale), `PUT /capture/photos/…` con validazione, analisi sui byte (mai URL al modello), cache per contenuto (SHA-256), verifica foto a galleria completa; test sui sorgenti aggiornati (rete del server, richieste dell'estensione). Non provato su Vinted reale (L21) |
 | 2026-10-08/09 | Fase 1. Lettura di backend, estensione, frontend, documentazione e test; esecuzione della suite (486 + 46 + 46); lettura dei Termini di Vinted e del listino Anthropic; scoperto e corretto il ritardo del checkout (72 commit); scrittura del piano |
 
 ### 11.5 Avanzamento Fase 2

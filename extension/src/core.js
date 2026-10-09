@@ -17,6 +17,9 @@
     enabled: true,
     captureCards: true,
     captureItems: true,
+    // Send FlipFinder the photos of the listings you open (opt-in: it needs the permission to read
+    // Vinted's photo files, asked when you switch it on).
+    uploadPhotos: false,
     badges: true,
     // Highlight / alert thresholds.
     minScore: 70,
@@ -43,6 +46,7 @@
       enabled: bool("enabled"),
       captureCards: bool("captureCards"),
       captureItems: bool("captureItems"),
+      uploadPhotos: bool("uploadPhotos"),
       badges: bool("badges"),
       minScore: clampNum(src.minScore, 0, 100, DEFAULT_OPTIONS.minScore),
       minMargin: clampNum(src.minMargin, -1000, 10000, DEFAULT_OPTIONS.minMargin),
@@ -63,6 +67,51 @@
     const url = new URL(v);
     if (!/^https?:$/.test(url.protocol)) throw new Error("protocol");
     return (url.origin + url.pathname).replace(/\/+$/, "");
+  }
+
+  // ------------------------------------------------------------------ photos (decision Q3-B)
+  // The server never downloads from Vinted. When the user has allowed it, the extension sends the photo
+  // files of the listing page the user opened: only the ones the server asks for, only files that page
+  // itself shows, only from Vinted's photo host, never with the user's cookies.
+  const PHOTO_ORIGIN = "https://*.vinted.net/*";
+  const PHOTO_TYPES = Object.freeze(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+  const PHOTO_MAX_BYTES = 10 * 1024 * 1024;
+  const PHOTO_MAX_COUNT = 20;
+
+  /** A https address on Vinted's photo host (images1.vinted.net, ...). */
+  function isPhotoUrl(value) {
+    try {
+      const u = new URL(String(value));
+      return u.protocol === "https:" && !u.username && !u.password && /^([a-z0-9-]+\.)+vinted\.net$/i.test(u.hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  const photoId = (value) => {
+    try {
+      const u = new URL(String(value));
+      return `${u.origin}${u.pathname}`;
+    } catch {
+      return "";
+    }
+  };
+
+  /**
+   * What to send: the photos the server asked for ({image_key, position, url}) that are also among the
+   * images of the page the user opened, on the photo host, in gallery order, without repeats.
+   */
+  function photoJobs(wanted, pageImages) {
+    const onPage = new Set((pageImages || []).filter(isPhotoUrl).map(photoId));
+    const seen = new Set();
+    const jobs = [];
+    for (const w of Array.isArray(wanted) ? wanted : []) {
+      if (!w || !/^[0-9a-z]{16}$/i.test(String(w.image_key)) || !isPhotoUrl(w.url)) continue;
+      if (!onPage.has(photoId(w.url)) || seen.has(w.image_key)) continue;
+      seen.add(w.image_key);
+      jobs.push({ key: String(w.image_key), url: String(w.url), position: Number(w.position) || 0 });
+    }
+    return jobs.sort((a, b) => a.position - b.position).slice(0, PHOTO_MAX_COUNT);
   }
 
   const splitList = (s) =>
@@ -221,6 +270,11 @@
 
   return {
     DEFAULT_OPTIONS,
+    PHOTO_ORIGIN,
+    PHOTO_TYPES,
+    PHOTO_MAX_BYTES,
+    isPhotoUrl,
+    photoJobs,
     normalizeOptions,
     normalizeAppUrl,
     splitList,

@@ -1,7 +1,8 @@
 // End-to-end: the real extension in Chromium, on fake Vinted pages (routed), against the
 // running FlipFinder (APP_URL). Test-only manifest change: host permission for
 // localhost (the permission prompt of the options page can't be clicked in headless mode).
-//   APP_URL=http://localhost:3000 CHROME_PATH=/path/to/chrome node extension/e2e/live.e2e.cjs [screenshot dir]
+//   PW_EXPERIMENTAL_SERVICE_WORKER_NETWORK_EVENTS=1 APP_URL=http://localhost:3000 CHROME_PATH=/path/to/chrome node extension/e2e/live.e2e.cjs [screenshot dir]
+// (the variable lets Playwright route the extension's own photo requests; without it step 7 fails on purpose)
 // Needs a running FlipFinder that accepts sign-ups (ALLOW_REGISTRATION=true) and Playwright
 // (PLAYWRIGHT_MODULE points to it when it is not installed next to this file).
 const { chromium, request } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
@@ -9,6 +10,7 @@ const assert = require("assert/strict");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const zlib = require("zlib");
 const OUT = process.argv[2] || ".";
 const APP = process.env.APP_URL || "http://localhost:3000";
 const SRC = path.resolve(__dirname, "..");
@@ -59,6 +61,42 @@ function itemHtml(id, title, price) {
 <div itemprop="description">${ld.description}</div><a href="/member/4242-venditore"><span>venditore_x</span></a><div data-testid="seller-rating"><span aria-label="Valutazione 4,8 su 5">★★★★★</span><span>52 recensioni</span></div>
 </main><script>self.__next_f.push([1,"{\\"item\\":{\\"id\\":${id},\\"favourite_count\\":21,\\"view_count\\":310,\\"is_reserved\\":false,\\"is_closed\\":false,\\"user\\":{\\"feedback_reputation\\":0.96,\\"feedback_count\\":52}}}"])</script></body></html>`;
 }
+// A real (64x64 RGB) PNG: the server only keeps photos that decode as images.
+const crc32 = (buf) => {
+  let crc = 0xffffffff;
+  for (const b of buf) {
+    crc ^= b;
+    for (let k = 0; k < 8; k += 1) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+};
+const chunk = (type, data) => {
+  const t = Buffer.from(type);
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([t, data])));
+  return Buffer.concat([len, t, data, crc]);
+};
+const PNG = (n) => {
+  const w = 64;
+  const h = 64;
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const o = y * (w * 3 + 1) + 1 + x * 3;
+      raw[o] = (n * 47 + x * 3) % 256;
+      raw[o + 1] = (n * 89 + y * 3) % 256;
+      raw[o + 2] = (x * y + n * 13) % 256;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", zlib.deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+};
 const SVG = (n) => `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="380"><rect width="300" height="380" fill="hsl(${(n * 47) % 360},45%,72%)"/><text x="150" y="200" font-size="40" text-anchor="middle" fill="#fff" font-family="sans-serif">${n}</text></svg>`;
 
 (async () => {
@@ -66,7 +104,7 @@ const SVG = (n) => `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ffext-"));
   fs.cpSync(SRC, dir, { recursive: true });
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json")));
-  manifest.host_permissions = [`${APP}/*`];
+  manifest.host_permissions = [`${APP}/*`, "https://*.vinted.net/*"]; // test only: the options page asks for these
   fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(manifest));
 
   // A pairing key from FlipFinder (a fresh test account), as Settings → Browser extension would create.
@@ -85,7 +123,15 @@ const SVG = (n) => `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="
     viewport: { width: 1280, height: 900 },
   });
   const reads = [];
-  await ctx.route("https://images1.vinted.net/**", (r) => r.fulfill({ contentType: "image/svg+xml", body: SVG(Number(/\/t\/\d+\/(\d+)/.exec(r.request().url())?.[1] || 7)) }));
+  const photoFetches = [];
+  await ctx.route("https://images1.vinted.net/**", (r) => {
+    const n = Number(/\/t\/\d+\/(\d+)/.exec(r.request().url())?.[1] || 7);
+    const req = r.request();
+    // The page shows an SVG; the extension's own request for the file (resource type "fetch") gets a real PNG.
+    if (req.resourceType() === "image") return r.fulfill({ contentType: "image/svg+xml", body: SVG(n) });
+    photoFetches.push({ url: req.url(), cookie: Boolean(req.headers().cookie), referer: Boolean(req.headers().referer) });
+    return r.fulfill({ contentType: "image/png", body: PNG(n) });
+  });
   await ctx.route("https://www.vinted.it/**", (r) => {
     const u = new URL(r.request().url());
     const m = /^\/items\/(\d+)/.exec(u.pathname);
@@ -199,7 +245,13 @@ const SVG = (n) => `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="
   });
   log("csv header:", JSON.stringify(csv));
 
-  // 7) Item page: full capture of all fields and photos, small box with the result.
+  // 7) Item page: full capture of all fields and photos, small box with the result. With "send photos"
+  //    switched on (and its permission, granted in the test manifest) the extension sends the photo
+  //    files to FlipFinder, which never contacts Vinted.
+  await sw.evaluate(async () => {
+    const { options } = await chrome.storage.sync.get("options");
+    await chrome.storage.sync.set({ options: { ...options, uploadPhotos: true } });
+  });
   await page.goto(`https://www.vinted.it/items/${ID0 + 7}-x`);
   await page.waitForFunction(() => document.getElementById("flipfinder-item-box")?.shadowRoot.querySelector(".acts"), null, { timeout: 30000 });
   await page.waitForTimeout(500);
@@ -212,6 +264,17 @@ const SVG = (n) => `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="
   log("snapshots:", detail.snapshots.map((s) => s.acquisition_mode).join(", "));
   assert.equal(detail.item.capture_level, "full");
   assert.equal(detail.images.length, 4);
+  // Photos uploaded by the browser: every one has a local copy, none was requested with cookies or a referrer.
+  let withCopy = 0;
+  for (let i = 0; i < 40 && withCopy < 4; i += 1) {
+    const d = await (await api.get(`/api/v1/items/${ID0 + 7}`)).json();
+    withCopy = d.images.filter((im) => im.local_url).length;
+    if (withCopy < 4) await page.waitForTimeout(500);
+  }
+  if (withCopy < 4) log("extension errors:", JSON.stringify(await sw.evaluate(async () => (await chrome.storage.local.get("errors")).errors)), "options:", JSON.stringify(await sw.evaluate(async () => (await chrome.storage.sync.get("options")).options)), "permission:", await sw.evaluate(async () => chrome.permissions.contains({ origins: ["https://*.vinted.net/*"] })), "wanted:", JSON.stringify((await (await api.get(`/api/v1/items/${ID0 + 7}`)).json()).images.map((im) => [im.position, im.archive_status])));
+  log("photos uploaded by the extension:", withCopy, "of 4; requests for the files:", photoFetches.length, JSON.stringify(photoFetches.slice(0, 1)));
+  assert.equal(withCopy, 4, "the four photos reached FlipFinder");
+  assert.ok(photoFetches.length >= 4 && photoFetches.every((f) => !f.cookie && !f.referer), "photo files requested without cookies or referrer");
   assert.equal(detail.view_count, 310);
   assert.ok(detail.snapshots.some((s) => s.acquisition_mode === "extension_item"));
   const archive = await (await api.get(`/api/v1/items`, { params: { mode: "extension_card", page_size: 50 } })).json();

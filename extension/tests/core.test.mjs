@@ -114,3 +114,43 @@ test("ranking export is spreadsheet-safe", () => {
   assert.ok(lines[1].includes('"a; ""b"""'));
   assert.ok(lines[2].includes("dati insufficienti"));
 });
+
+
+// ------------------------------------------------------------------ photos (decision Q3-B)
+test("photo jobs: only what the server asked for, that the opened page shows, on Vinted's photo host", () => {
+  const PAGE = [
+    "https://images1.vinted.net/t/01_aaa/f800/1.jpeg?s=sig1",
+    "https://images1.vinted.net/t/01_aaa/f800/2.jpeg?s=sig2",
+    "https://images1.vinted.net/t/01_aaa/f800/3.jpeg",
+  ];
+  const wanted = [
+    { image_key: "bbbbbbbbbbbbbbbb", position: 1, url: "https://images2.vinted.net/t/01_aaa/f800/2.jpeg" }, // another host: not the file the page shows
+    { image_key: "aaaaaaaaaaaaaaaa", position: 0, url: "https://images1.vinted.net/t/01_aaa/f800/1.jpeg?s=other" },
+    { image_key: "cccccccccccccccc", position: 2, url: "https://evil.example/t/01_aaa/f800/3.jpeg" }, // not the photo host
+    { image_key: "dddddddddddddddd", position: 3, url: "https://images1.vinted.net/t/other/f800/9.jpeg" }, // not on the page
+    { image_key: "aaaaaaaaaaaaaaaa", position: 0, url: "https://images1.vinted.net/t/01_aaa/f800/1.jpeg" }, // repeated
+    { image_key: "short", position: 4, url: "https://images1.vinted.net/t/01_aaa/f800/3.jpeg" }, // malformed key
+    { image_key: "eeeeeeeeeeeeeeee", position: 5, url: "http://images1.vinted.net/t/01_aaa/f800/3.jpeg" }, // not https
+  ];
+  // Matching is by file (host + path): the signature changes, the file does not.
+  const jobs = K.photoJobs(wanted, PAGE);
+  assert.deepEqual(jobs.map((j) => j.key), ["aaaaaaaaaaaaaaaa"]);
+  assert.deepEqual(K.photoJobs([], PAGE), []);
+  assert.deepEqual(K.photoJobs(null, PAGE), []);
+  assert.deepEqual(K.photoJobs(wanted, []), []); // a page that shows no photo authorises none
+});
+
+test("the photo host check refuses look-alikes and credentials in the address", () => {
+  assert.equal(K.isPhotoUrl("https://images1.vinted.net/t/a.jpeg"), true);
+  assert.equal(K.isPhotoUrl("https://vinted.net.evil.example/t/a.jpeg"), false);
+  assert.equal(K.isPhotoUrl("https://evilvinted.net/t/a.jpeg"), false);
+  assert.equal(K.isPhotoUrl("https://user:pw@images1.vinted.net/t/a.jpeg"), false);
+  assert.equal(K.isPhotoUrl("http://images1.vinted.net/t/a.jpeg"), false);
+  assert.equal(K.isPhotoUrl("not a url"), false);
+});
+
+test("sending photos is off until the user turns it on", () => {
+  assert.equal(K.normalizeOptions({}).uploadPhotos, false);
+  assert.equal(K.normalizeOptions({ uploadPhotos: true }).uploadPhotos, true);
+  assert.equal(K.normalizeOptions({ uploadPhotos: "yes" }).uploadPhotos, false);
+});

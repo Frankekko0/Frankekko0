@@ -1,27 +1,26 @@
-"""Image analysis.
+"""Image analysis, on the photos the browser uploaded (the server never downloads from Vinted).
 
-* :class:`HeuristicImageAnalyzer` (always available): downloads public listing photos with strict
-  limits, computes perceptual hashes (duplicate/stolen-photo detection) and photo-quality metrics.
-  It does not guess brands or defects - it has no evidence for that.
+* :class:`HeuristicImageAnalyzer` (always available): decodes the local copies, computes perceptual
+  hashes (duplicate/stolen-photo detection), photo-quality metrics and reads the text with the local
+  OCR. It does not guess brands or defects - it has no evidence for that.
 * :class:`ClaudeVisionAnalyzer` (when ``AI_API_KEY`` is set): reads logos, labels (size,
   composition, product codes), visible defects and authenticity red flags, each with an explicit
-  certainty level. It never asserts authenticity.
+  certainty level. It never asserts authenticity. The photos go to the model as bytes of the local
+  copy (shrunk when very large), never as an address on Vinted.
 
-Downloads are SSRF-safe: https only, public IP addresses only, size and time limits, image
-content types only.
+A photo the browser has not uploaded yet is not analysed and is counted as missing.
 """
 
 from __future__ import annotations
 
 import asyncio
-import ipaddress
-import socket
+import base64
 from abc import ABC, abstractmethod
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+from io import BytesIO
 from typing import Any
-from urllib.parse import urlparse
 
-import httpx
+from PIL import Image
 
 from app.ai.llm import LLMClient
 from app.core.logging import get_logger
@@ -45,50 +44,54 @@ from app.vision.types import (
 )
 
 log = get_logger(__name__)
-MAX_IMAGE_BYTES = 12 * 1024 * 1024  # full-resolution photos
 MAX_IMAGES = 20  # every photo a Vinted listing can have
-FETCH_CONCURRENCY = 4
-ALLOWED_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")
+MODEL_MAX_SIDE = 1568  # px: what the model reads best; larger photos are shrunk before sending
+MODEL_MAX_BYTES = 3_500_000
 
 
-def is_public_https_url(url: str) -> bool:
+@dataclass(frozen=True)
+class PhotoInput:
+    """One photo of the gallery as the analysis sees it."""
+
+    position: int  # 0-based gallery position (the model's "Foto n" is position + 1)
+    key: str  # stable identity from the URL path (``app.media.keys.image_key``)
+    data: bytes | None = None  # the local copy; None: the browser has not uploaded it yet
+    sha256: str | None = None
+    content_type: str | None = None
+
+    @property
+    def identity(self) -> str:
+        """What names this photo for the cache: its content when known, else its stable key."""
+        return self.sha256 or self.key
+
+
+def prepare_for_model(data: bytes, content_type: str | None) -> tuple[str, str]:
+    """(media type, base64) of a photo as the model should receive it: as is when it is small
+    enough, otherwise shrunk to ``MODEL_MAX_SIDE`` and re-encoded as JPEG."""
+    media = (
+        content_type
+        if content_type in ("image/jpeg", "image/png", "image/webp", "image/gif")
+        else "image/jpeg"
+    )
     try:
-        parsed = urlparse(url)
-    except ValueError:
-        return False
-    if parsed.scheme != "https" or not parsed.hostname:
-        return False
-    try:
-        infos = socket.getaddrinfo(parsed.hostname, parsed.port or 443, proto=socket.IPPROTO_TCP)
-    except socket.gaierror:
-        return False
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            return False
-    return True
+        with Image.open(BytesIO(data)) as img:
+            big = max(img.size) > MODEL_MAX_SIDE or len(data) > MODEL_MAX_BYTES
+            if big:
+                small = img.convert("RGB")
+                small.thumbnail((MODEL_MAX_SIDE, MODEL_MAX_SIDE), Image.Resampling.LANCZOS)
+                out = BytesIO()
+                small.save(out, "JPEG", quality=88)
+                return "image/jpeg", base64.b64encode(out.getvalue()).decode()
+    except Exception:
+        log.info("vision.prepare_failed")
+    return media, base64.b64encode(data).decode()
 
 
-async def fetch_image(client: httpx.AsyncClient, url: str) -> bytes | None:
-    if not await asyncio.to_thread(is_public_https_url, url):
-        return None
-    try:
-        async with client.stream("GET", url, follow_redirects=False) as resp:
-            if resp.status_code != 200:
-                return None
-            ctype = resp.headers.get("content-type", "").split(";")[0].strip()
-            if ctype not in ALLOWED_TYPES:
-                return None
-            chunks: list[bytes] = []
-            total = 0
-            async for chunk in resp.aiter_bytes():
-                total += len(chunk)
-                if total > MAX_IMAGE_BYTES:
-                    return None
-                chunks.append(chunk)
-            return b"".join(chunks)
-    except httpx.HTTPError:
-        return None
+class ImageAnalyzer(ABC):
+    name = "abstract"
+
+    @abstractmethod
+    async def analyze(self, photos: list[PhotoInput], context: dict[str, Any]) -> ImageAnalysis: ...
 
 
 def lines_of(photo: OcrPhoto) -> list[Any]:
@@ -97,53 +100,38 @@ def lines_of(photo: OcrPhoto) -> list[Any]:
     return [OcrLine(x.text, x.confidence, x.box) for x in photo.lines]
 
 
-class ImageAnalyzer(ABC):
-    name = "abstract"
-
-    @abstractmethod
-    async def analyze(
-        self, image_urls: list[str], provided_hashes: list[str | None], context: dict[str, Any]
-    ) -> ImageAnalysis: ...
+def _measure(data: bytes) -> tuple[Any, str, dict[str, Any]] | None:
+    """Decode a photo and measure it (runs in a thread: decoding a large photo takes a while)."""
+    try:
+        img = load_image(data)
+    except Exception as exc:
+        log.info("vision.image_decode_failed", error=type(exc).__name__)
+        return None
+    return img, dhash(img), photo_quality(img)
 
 
 class HeuristicImageAnalyzer(ImageAnalyzer):
-    """Every photo at full resolution: perceptual hash and whether it can prove anything."""
+    """Every uploaded photo at full resolution: perceptual hash, whether it can prove anything, text."""
 
     name = "heuristic"
 
-    async def analyze(
-        self, image_urls: list[str], provided_hashes: list[str | None], context: dict[str, Any]
-    ) -> ImageAnalysis:
-        urls = image_urls[:MAX_IMAGES]
-        hashes: list[str | None] = [
-            provided_hashes[i] if i < len(provided_hashes) else None for i in range(len(urls))
-        ]
+    async def analyze(self, photos: list[PhotoInput], context: dict[str, Any]) -> ImageAnalysis:
+        photos = photos[:MAX_IMAGES]
+        hashes: list[str | None] = [None] * len(photos)
         checks: list[PhotoCheck] = []
-        gate = asyncio.Semaphore(FETCH_CONCURRENCY)
-        async with httpx.AsyncClient(timeout=15.0, headers={"User-Agent": "FlipFinder/1.0"}) as client:
-
-            async def one(url: str) -> bytes | None:
-                if not url.startswith("https://"):
-                    return None
-                async with gate:
-                    return await fetch_image(client, url)
-
-            blobs = await asyncio.gather(*(one(u) for u in urls))
         decoded: dict[int, Any] = {}
-        for i, blob in enumerate(blobs):
-            if not blob:
+        for p in photos:
+            if not p.data:
                 continue
-            try:
-                img = load_image(blob)
-            except Exception as exc:
-                log.info("vision.image_decode_failed", error=type(exc).__name__)
+            measured = await asyncio.to_thread(_measure, p.data)
+            if measured is None:
                 continue
-            decoded[i] = img
-            hashes[i] = dhash(img)
-            q = photo_quality(img)
+            img, h, q = measured
+            decoded[p.position] = img
+            hashes[photos.index(p)] = h
             checks.append(
                 PhotoCheck(
-                    photo=i,
+                    photo=p.position,
                     usable=bool(q["usable"]),
                     reason=q["reason"],
                     width=q["width"],
@@ -156,12 +144,12 @@ class HeuristicImageAnalyzer(ImageAnalyzer):
         ocr_engine = get_ocr_engine()
         ocr_photos: list[OcrPhoto] = []
         if ocr_engine is not None:
-            for i, img in decoded.items():
+            for position, img in decoded.items():
                 lines = await read_photo(ocr_engine, img)
                 if lines:
                     ocr_photos.append(
                         OcrPhoto(
-                            photo=i,
+                            photo=position,
                             lines=[
                                 OcrLineOut(text=x.text, confidence=x.confidence, box=x.box) for x in lines
                             ],
@@ -169,9 +157,9 @@ class HeuristicImageAnalyzer(ImageAnalyzer):
                     )
         sharp = [c.sharpness for c in checks if c.sharpness is not None]
         usable = [c for c in checks if c.usable]
-        count = len(image_urls)
-        score = min(100, 20 * min(count, 4) + (20 if checks and len(usable) >= len(checks) / 2 else 0))
-        facts = parse_ocr([(p.photo, [x for x in lines_of(p)]) for p in ocr_photos])
+        count = len(photos)
+        score = min(100, 20 * min(len(checks), 4) + (20 if checks and len(usable) >= len(checks) / 2 else 0))
+        facts = parse_ocr([(p.photo, lines_of(p)) for p in ocr_photos])
         quality = PhotoQuality(
             photo_count=count,
             analyzed_count=len(checks),
@@ -181,6 +169,9 @@ class HeuristicImageAnalyzer(ImageAnalyzer):
             score=max(0, score),
         )
         notes = []
+        missing = count - len(checks)
+        if missing:
+            notes.append(f"{missing} foto su {count} non ancora caricate dal browser o non leggibili")
         if checks and len(usable) < len(checks):
             bad = [f"foto {c.photo + 1} {c.reason}" for c in checks if not c.usable]
             notes.append("Foto non utilizzabili per le verifiche: " + ", ".join(bad))
@@ -445,22 +436,19 @@ class ClaudeVisionAnalyzer(ImageAnalyzer):
         self.llm = llm
         self.heuristic = HeuristicImageAnalyzer()
 
-    async def analyze(
-        self, image_urls: list[str], provided_hashes: list[str | None], context: dict[str, Any]
-    ) -> ImageAnalysis:
-        base = await self.heuristic.analyze(image_urls, provided_hashes, context)
-        # Every photo, numbered by its gallery position (the answer refers to these numbers).
-        numbered = [
-            (i, u)
-            for i, u in enumerate(image_urls[:MAX_IMAGES])
-            if u.startswith("https://") and await asyncio.to_thread(is_public_https_url, u)
-        ]
+    async def analyze(self, photos: list[PhotoInput], context: dict[str, Any]) -> ImageAnalysis:
+        base = await self.heuristic.analyze(photos, context)
+        # Every uploaded photo, numbered by its gallery position (the answer refers to these numbers).
+        numbered = [(p.position, p) for p in photos[:MAX_IMAGES] if p.data]
         if not numbered:
             return base
         content: list[dict[str, Any]] = []
-        for i, u in numbered:
+        for i, p in numbered:
+            media, encoded = await asyncio.to_thread(prepare_for_model, p.data or b"", p.content_type)
             content.append({"type": "text", "text": f"Foto {i + 1}"})
-            content.append({"type": "image", "source": {"type": "url", "url": u}})
+            content.append(
+                {"type": "image", "source": {"type": "base64", "media_type": media, "data": encoded}}
+            )
         rules = context.get("brand_rules") or {}
         if base.ocr:
             read = "\n".join(
@@ -592,12 +580,12 @@ class ClaudeVisionAnalyzer(ImageAnalyzer):
                 local[i].usable = False
                 local[i].reason = c.get("reason") or "non leggibile"
         prov = data.get("provenance") or {}
-        p = base.provenance
-        p.stock_or_catalog = max(p.stock_or_catalog, int(prov.get("stock_or_catalog") or 0))
-        p.screenshots = max(p.screenshots, int(prov.get("screenshots") or 0))
-        p.foreign_watermarks = int(prov.get("foreign_watermarks") or 0)
-        p.edited_or_generated = int(prov.get("edited_or_generated") or 0)
-        p.notes += [str(n)[:160] for n in prov.get("notes", [])][:6]
+        pv = base.provenance
+        pv.stock_or_catalog = max(pv.stock_or_catalog, int(prov.get("stock_or_catalog") or 0))
+        pv.screenshots = max(pv.screenshots, int(prov.get("screenshots") or 0))
+        pv.foreign_watermarks = int(prov.get("foreign_watermarks") or 0)
+        pv.edited_or_generated = int(prov.get("edited_or_generated") or 0)
+        pv.notes += [str(n)[:160] for n in prov.get("notes", [])][:6]
         return base
 
 

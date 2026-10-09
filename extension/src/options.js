@@ -42,6 +42,26 @@ async function save() {
   savedTimer = setTimeout(() => badge.classList.remove("on"), 1200);
 }
 
+// Photos: the permission to read Vinted's photo files is asked when the option is switched on.
+const photoSwitch = document.querySelector('[data-opt="uploadPhotos"]');
+photoSwitch.addEventListener("change", async () => {
+  if (!photoSwitch.checked) return;
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ origins: [K.PHOTO_ORIGIN] });
+  } catch {
+    granted = false;
+  }
+  if (!granted) {
+    photoSwitch.checked = false;
+    $("photoStatus").textContent = "Senza il permesso le foto non vengono inviate. Puoi riattivare l'opzione quando vuoi.";
+  } else {
+    $("photoStatus").textContent = "";
+  }
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(save, 0);
+});
+
 let saveTimer = 0;
 for (const el of fields) {
   el.addEventListener(el.type === "checkbox" ? "change" : "input", () => {

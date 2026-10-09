@@ -15,7 +15,6 @@ from app.core.cache import NS_FEED, cache
 from app.core.errors import NotFoundError
 from app.core.rate_limit import RateLimit
 from app.db.models import AcquisitionAttempt, Analysis, Listing, ListingSnapshot, Opportunity
-from app.media.archive import schedule_archive
 from app.schemas.common import Page
 from app.schemas.items import (
     AnalysisRecordOut,
@@ -358,8 +357,6 @@ async def refresh_now(ref: str, user: CurrentUser, db: DB) -> dict[str, Any]:
     listing = await _listing(db, ref)
     result = await refresh_listing(db, listing)
     await db.commit()
-    if result.outcome == "updated":
-        await schedule_archive([listing.id])
     if result.outcome in ("updated", "not_found"):
         await cache.bump(NS_FEED)
     return result.as_dict()
@@ -372,7 +369,6 @@ async def track(ref: str, user: CurrentUser, db: DB) -> dict[str, Any]:
     next_check = await set_tracked(db, user.id, listing, True)
     await db.commit()
     await cache.bump(NS_FEED)
-    await schedule_archive([listing.id])
     return {"listing_id": str(listing.id), "tracked": True, "next_check_at": next_check}
 
 

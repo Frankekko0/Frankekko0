@@ -125,7 +125,7 @@ function parseServerTiming(header) {
  * A request to FlipFinder. `timing` (optional object) receives the request's duration as seen
  * here (ms, network + server) and the server's own Server-Timing (db, analysis, total).
  */
-async function api(path, { method = "GET", body, appUrl, key, timing } = {}) {
+async function api(path, { method = "GET", body, bytes, contentType, appUrl, key, timing } = {}) {
   const opts = await getOptions();
   const base = appUrl || opts.appUrl;
   const token = key || (await getKey());
@@ -135,8 +135,11 @@ async function api(path, { method = "GET", body, appUrl, key, timing } = {}) {
   try {
     res = await fetch(`${base}/api/v1${path}`, {
       method,
-      headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(bytes ? { "Content-Type": contentType } : body ? { "Content-Type": "application/json" } : {}),
+      },
+      body: bytes || (body ? JSON.stringify(body) : undefined),
       credentials: "omit",
       cache: "no-store",
     });
@@ -371,7 +374,7 @@ async function sendBatch(kind, batch) {
       body: { item: e.payload, mode: e.mode || "extension_item", track: e.track ?? null, extension_version: VERSION, parser_version },
       timing,
     });
-    return { evaluations: res.evaluation ? [res.evaluation] : [], analysis: res.analysis, timing };
+    return { evaluations: res.evaluation ? [res.evaluation] : [], analysis: res.analysis, photosWanted: res.photos_wanted || [], timing };
   }
   const res = await api("/capture/cards", {
     method: "POST",
@@ -435,6 +438,10 @@ async function flushOnce() {
         deep: kind === "items" ? { vid: e.vid, mode: e.mode || "extension_item", analysis: res.analysis || null } : null,
         timing: res.timing || null,
       });
+      // After the verdict is on screen, never in its way: the photos the server asked for.
+      if (kind === "items" && res.photosWanted && res.photosWanted.length) {
+        sendPhotos(e.vid, res.photosWanted, (e.payload && e.payload.image_urls) || []).catch((err) => logError("photos", err.message));
+      }
     } catch (err) {
       const status = err.status || 0;
       if (status === 401) {
@@ -474,6 +481,50 @@ async function flushOnce() {
   const q = await loadQueue();
   const next = K.queueNextAt(q);
   if (next !== null) scheduleFlush(Math.max(1000, next - Date.now()));
+}
+
+// ------------------------------------------------------------------ photos (decision Q3-B)
+// FlipFinder's server never contacts Vinted. If the user switched this on (Options), the photo files of
+// the listing page they opened are sent to FlipFinder so it can read them. See K.photoJobs for what
+// qualifies; the request carries no cookies and no referrer, goes to Vinted's photo host only, and is
+// made once per photo the server does not have yet.
+const sendingPhotos = new Set();
+
+async function sendPhotos(vid, wanted, pageImages) {
+  const opts = await getOptions();
+  if (!opts.uploadPhotos || sendingPhotos.has(vid)) return;
+  const jobs = K.photoJobs(wanted, pageImages);
+  if (!jobs.length) return;
+  if (!(await chrome.permissions.contains({ origins: [K.PHOTO_ORIGIN] }))) {
+    await logError("photos", "Manca il permesso per leggere le foto di Vinted: riattiva l'opzione nelle Opzioni.");
+    return;
+  }
+  sendingPhotos.add(vid);
+  let sent = 0;
+  let failed = 0;
+  let firstFailure = "";
+  try {
+    for (const job of jobs) {
+      try {
+        const res = await fetch(job.url, { credentials: "omit", cache: "force-cache", referrerPolicy: "no-referrer", redirect: "error" });
+        const type = (res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+        if (!res.ok || !K.PHOTO_TYPES.includes(type)) throw new ApiError(res.status, "not_image", "La foto non è leggibile.");
+        const bytes = await res.arrayBuffer();
+        if (!bytes.byteLength || bytes.byteLength > K.PHOTO_MAX_BYTES) throw new ApiError(0, "size", "Foto vuota o troppo grande.");
+        await api(`/capture/photos/${encodeURIComponent(vid)}/${job.key}`, { method: "PUT", bytes, contentType: type });
+        sent += 1;
+      } catch (err) {
+        failed += 1;
+        if (!firstFailure) firstFailure = err instanceof ApiError ? `${err.code} ${err.status || ""}`.trim() : String((err && err.message) || err);
+        if (err instanceof ApiError && (err.status === 401 || err.status === 429)) break; // unpaired or slow down
+      }
+    }
+    // Photos that could not be read stay missing; tell the server to check the ones it has.
+    if (failed) await api(`/capture/photos/${encodeURIComponent(vid)}/complete`, { method: "POST" }).catch(() => {});
+    if (failed) await logError("photos", `${sent} foto inviate, ${failed} non inviate (annuncio ${vid}); primo motivo: ${firstFailure}.`);
+  } finally {
+    sendingPhotos.delete(vid);
+  }
 }
 
 // ------------------------------------------------------------------ tabs

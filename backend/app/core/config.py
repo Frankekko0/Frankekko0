@@ -79,13 +79,10 @@ class Settings(BaseSettings):
     snapshot_heartbeat_hours: int = Field(default=6, ge=1, le=168)
     algorithm_version: str = "2026.10-3"
 
-    # Local copies of listing photos (internal use only). Downloaded once from the allowed image
-    # hosts (Vinted's CDN), https only, public addresses only, size-limited.
+    # Local copies of listing photos (internal use only), uploaded by the browser extension: the
+    # server never downloads from Vinted. ``image_archive_enabled`` false: uploads are refused.
     image_archive_enabled: bool = True
     media_dir: str = "var/media"
-    image_archive_hosts: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["vinted.net", "vinted.com"]
-    )
     image_archive_max_bytes: int = Field(default=10 * 1024 * 1024, ge=100_000, le=50 * 1024 * 1024)
 
     # Vinted selectors/labels/patterns (shared with the extension). Unset: the bundled file.
@@ -177,7 +174,7 @@ class Settings(BaseSettings):
     vapid_private_key: SecretStr | None = None
     vapid_subject: str = "mailto:admin@flipfinder.local"
 
-    @field_validator("cors_origins", "image_archive_hosts", mode="before")
+    @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
         if isinstance(value, str):

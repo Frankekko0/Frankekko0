@@ -4,7 +4,6 @@ with the evidence that decided them."""
 from datetime import timedelta
 from io import BytesIO
 
-import httpx
 import pytest
 from PIL import Image
 from sqlalchemy import select, update
@@ -144,18 +143,13 @@ def jpeg(seed: int, noise: int = 0) -> bytes:
 def media_settings(tmp_path, monkeypatch):
     s = get_settings().model_copy(update={"media_dir": str(tmp_path)})
     monkeypatch.setattr(archive, "get_settings", lambda: s)
-    monkeypatch.setattr(archive, "is_public_https_url", lambda url: True)
-    monkeypatch.setattr(archive, "PER_IMAGE_DELAY", 0)
     return s
 
 
 async def test_a_copy_stores_sha256_and_dhash_and_links_a_same_seller_repost(
     session, make_listing, media_settings
 ) -> None:
-    files = {"/t/old/1.jpeg": jpeg(1), "/t/new/1.jpeg": jpeg(1, noise=1), "/t/other/1.jpeg": jpeg(1, noise=1)}
-
-    def cdn(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, content=files[request.url.path], headers={"content-type": "image/jpeg"})
+    uploads = {"4101": jpeg(1), "4102": jpeg(1, noise=1), "4103": jpeg(1, noise=1)}  # what the browser sends
 
     seller = "seller-77"
     old = make_listing(external_id="4101", seller_id=seller, title="Polo Lacoste verde L").model_copy(
@@ -171,8 +165,18 @@ async def test_a_copy_stores_sha256_and_dhash_and_links_a_same_seller_repost(
     r1 = await svc.ingest([old], now=NOW)
     r2 = await svc.ingest([new, other], now=NOW + timedelta(days=3))
     ids = [*r1.new_ids, *r2.new_ids]
-    await archive.archive_listing_images(session, ids, media_settings, httpx.MockTransport(cdn))
     await session.commit()
+    for external_id, data in uploads.items():  # photos arrive after the capture, one listing at a time
+        key = (
+            await session.execute(
+                select(ListingImage.image_key)
+                .join(Listing, Listing.id == ListingImage.listing_id)
+                .where(Listing.external_id == external_id)
+            )
+        ).scalar_one()
+        up = await archive.register_upload(session, external_id, key, data, "image/jpeg", media_settings)
+        assert up.stored, up.error
+        await session.commit()
     imgs = (await session.execute(select(ListingImage))).scalars().all()
     assert all(i.sha256 and i.phash and i.width == 64 and i.height == 64 for i in imgs)
     rows = {r.external_id: r for r in (await session.execute(select(Listing))).scalars().all()}
