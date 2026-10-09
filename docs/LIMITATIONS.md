@@ -1,0 +1,13 @@
+# LIMITATIONS — cosa non è realizzabile o non è verificabile, e perché
+
+Audit dei limiti di conformità e dei principi sui dati: [`PIANO_FLIPFINDER.md` §6](PIANO_FLIPFINDER.md). Qui solo ciò che il prompt v3 aggiunge o rende esplicito.
+
+- **L01 Autonomia piena su Vinted.** Vinted non offre un'API ufficiale per acquistare, pubblicare o scrivere ai venditori; i suoi Termini (dall'8/10/2026) vietano strumenti software esterni per azioni come i preferiti, e il rilevamento può essere automatico. Il prompt vieta bot che aggirano i termini, simulano comportamento umano o usano endpoint privati (§2, §3.2), e l'utente ha già deciso di sostituire i clic programmatici con "Apri su Vinted" (Q1). Quindi: il framework di autonomia (limiti, dry-run, kill switch, audit, auto-sospensione) viene costruito e testato, ma su Vinted esegue solo in dry-run o in modalità assistita. Un canale non presidiato richiede un'integrazione ufficiale e si aggiunge implementando `ExecutionChannel`.
+- **L02 Nessun accesso a Vinted reale.** Parser, selettori, tasti e velocità sono verificati su fixture e pagine finte; vedi PIANO N4/N6 e Q4 (pagine reali da fornire).
+- **L03 Vendite concluse.** Vinted non pubblica prezzi di chiusura: i "venduti" derivano da annunci osservati passare a venduti; l'"ultimo prezzo visto" non è il prezzo reale (PIANO D1). Stime con confidenza dichiarata, mai prezzi certi.
+- **L04 Dati reali scarsi.** Brier/ECE, MAE del prezzo, GMROI e profitto/€/giorno vs baseline si misurano su dati reali solo quando esistono vendite reali; fino ad allora "campione insufficiente". Nessuna accuratezza è dichiarata senza misura (PIANO N1).
+- **L05 AI a pagamento e non verificabile dal vivo.** Questa sessione non ha `AI_API_KEY`: i passaggi con modello (visione, analista, agente) sono testati con client finti e risposte registrate, non con il modello reale. Costo medio per annuncio e qualità della lettura delle foto restano "non misurati" finché non c'è una chiave e un pilota (PIANO Fase 5.7).
+- **L06 Fisco.** Aliquote e soglie non sono inserite dal sistema: le configura l'utente con fonte e data (§3.5-I). Nessuna consulenza.
+- **L07 Autenticità.** Mai "autentico" da sole foto; il set `labeled_cases.json` misura le regole decisionali, non la visione.
+- **L08 OCR locale.** Tesseract non è installato in questo ambiente; il motore OCR e la sua dipendenza si scelgono e si dichiarano in `DEPENDENCIES.md` nella fase di visione.
+- **L09 Tempo reale.** Gli aggiornamenti sono periodici o per cattura passiva (l'estensione legge solo ciò che l'utente apre); ogni schermata mostra l'ultima verifica, mai "live" senza una fonte che lo giustifichi.

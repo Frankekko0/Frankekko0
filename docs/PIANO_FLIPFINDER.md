@@ -549,6 +549,7 @@ Q1–Q10 e C1–C5 (§2) · formula del Flip Score da farti vedere prima di fiss
 
 | Data | Cosa |
 |---|---|
+| 2026-10-09 | Prompt v3 ("FlipFinder AI"): letto contro questo piano, nessuna decisione dell'utente riaperta. Mappa delle fasi v3 sulle fasi del piano in `ARCHITECTURE.md`; decisioni e limiti propri di v3 in `DECISIONS.md` e `LIMITATIONS.md`; aggiunto `marketplace/capabilities.py` (cosa fornisce ogni modalità di cattura, verificato contro il parser) |
 | 2026-10-09 | Fase 2 (blocchi 2.1–2.9): provenienza delle date, osservazioni tipizzate, foto nel tempo, «da verificare», venditori minimi con chiave protetta, analisi immutabili a blocchi, tabella dei prezzi venduti, CSV, migrazioni 0010–0016 provate anche su 30.000 annunci |
 | 2026-10-08/09 | Fase 1. Lettura di backend, estensione, frontend, documentazione e test; esecuzione della suite (486 + 46 + 46); lettura dei Termini di Vinted e del listino Anthropic; scoperto e corretto il ritardo del checkout (72 commit); scrittura del piano |
 
@@ -631,7 +632,7 @@ Prova numerica di Fase 4: prezzo 20, spedizione 4, protezione 2, rivendita 45, c
 - Prezzi dei modelli Anthropic, cache e Batch, letti il 9/10/2026: <https://platform.claude.com/docs/en/about-claude/pricing>.
 - Costo in token delle immagini: guida della skill `claude-api` (≈ 1 token per riquadro 28×28; fino a ~4.784 token a piena risoluzione); da calibrare con `count_tokens`.
 - Serper e BCE: `docs/EXTERNAL_PRICES.md` (verificati dal progetto il 7/10/2026).
-- Documentazione interna: `docs/ARCHITECTURE.md`, `docs/ACQUISITION.md`, `docs/EXTENSION_AUDIT.md`, `extension/README.md`.
+- Documentazione interna: `docs/DESIGN.md`, `docs/ARCHITECTURE.md` (mappa di una pagina), `docs/ACQUISITION.md`, `docs/EXTENSION_AUDIT.md`, `extension/README.md`.
 
 ## Appendice C — Glossario
 

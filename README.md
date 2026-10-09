@@ -280,7 +280,7 @@ flowchart LR
   TanStack Query, Recharts; tema chiaro/scuro, mobile-first, PWA con notifiche push.
 
 Il progetto tecnico completo (analisi, schema DB, algoritmi, flussi, API, roadmap) è in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+[`docs/DESIGN.md`](docs/DESIGN.md).
 
 ---
 
@@ -514,7 +514,7 @@ scoring sono comuni a tutte le sorgenti.
 
 ## Come funzionano i calcoli
 
-Dettagli e formule complete: [`docs/ARCHITECTURE.md` §8–9](docs/ARCHITECTURE.md#8-logica-flip-score).
+Dettagli e formule complete: [`docs/DESIGN.md` §8–9](docs/DESIGN.md#8-logica-flip-score).
 
 **Vendite concluse prima di tutto.** La tabella `sold_sales` raccoglie le vendite concluse da quattro
 fonti, in ordine di affidabilità: le tue vendite (prezzo incassato), i tuoi acquisti (prezzo
