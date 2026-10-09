@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| **Stato** | Fase 1 (audit e piano) **completata il 2026-10-09**. In attesa delle tue risposte (§2) e del tuo OK per la Fase 2. |
+| **Stato** | Fase 1 completata il 2026-10-09. **Fase 2 in corso** dal 2026-10-09 (OK ricevuto, Q1–Q3 "come consigliato"). |
 | **Branch** | `claude/sweet-curie-9xyxzg` |
 | **Codice analizzato** | commit `7655293` (2026-10-08). Il checkout di partenza era 72 commit indietro: l'ho riallineato con un fast-forward (nessuna modifica mia) prima di leggere. |
 | **Codice toccato in Fase 1** | **Nessuno.** Unico file aggiunto: questo. |
@@ -507,7 +507,7 @@ Probabilità e impatto sono mie stime qualitative, non misure.
 ### 11.1 Checklist delle fasi
 
 - [x] **Fase 1** — Audit e piano (2026-10-09)
-- [ ] **Fase 2** — Dati, tracciabilità e stato di vendita
+- [ ] **Fase 2** — Dati, tracciabilità e stato di vendita *(in corso: blocchi 2.1–2.9, vedi §11.5)*
 - [ ] **Fase 3** — Estensione
 - [ ] **Fase 4** — Valore di mercato e profitto
 - [ ] **Fase 5** — Immagini, condizioni ed etichette
@@ -527,7 +527,13 @@ Dipendenze: 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10. Hidden Gems (6) 
 | 2026-10-09 | Nessun file di codice toccato in Fase 1 | Regola della fase |
 | 2026-10-09 | Le misure su mercato simulato non vengono più citate come accuratezza | Principi sui dati |
 
-*(Le risposte a Q1–Q10 e C1–C5 vanno qui appena le dai.)*
+| 2026-10-09 | Branch di lavoro: `claude/sweet-curie-9xyxzg` | Tua risposta |
+| 2026-10-09 | **Q1 come consigliato.** Rimuovere: scanner automatico (a), lettura automatica candidati (b), aggiornamento in background dei tracciati (c), lettura dal server (d), misure automatiche su Vinted reale (h). Sostituire con "Apri su Vinted": analisi approfondita (e), preferiti (f), acquista (g). Esecuzione: **Fase 3** (estensione); in Fase 2 nessuna logica nuova dipende da (a)–(d). | Tua risposta |
+| 2026-10-09 | **Q2 come consigliato.** Si tiene la chiave pseudonima del venditore, protetta da HMAC con segreto del server (migrazione sul posto); si eliminano le colonne inutilizzate del venditore e il campo `seller_username`. Blocco 2.5. | Tua risposta |
+| 2026-10-09 | **Q3 come consigliato.** Foto caricate dall'estensione (B), tutte per gli analizzati e solo la copertina per i visti; conservate per sempre se tracciati/acquistati, 90 giorni le altre. Il caricamento dall'estensione è Fase 3: in Fase 2 si prepara solo il modello dati (blocco 2.3) e il server **non** scarica più nuove foto da Vinted dopo la Fase 3. | Tua risposta |
+| 2026-10-09 | Le skill citate (impeccable, apple-design, emil-design-eng, animate, dataviz, ui-ux-pro-max, ponytail, caveman) si useranno dalle fasi con interfaccia (7–8); `claude-api` dalla Fase 5. In Fase 2 non c'è interfaccia nuova. | Tua richiesta |
+
+*(Restano da dare Q4–Q10 e C1–C5: valgono le conferme rapide se non rispondi.)*
 
 ### 11.3 Punti aperti
 
@@ -538,6 +544,18 @@ Q1–Q10 e C1–C5 (§2) · formula del Flip Score da farti vedere prima di fiss
 | Data | Cosa |
 |---|---|
 | 2026-10-08/09 | Fase 1. Lettura di backend, estensione, frontend, documentazione e test; esecuzione della suite (486 + 46 + 46); lettura dei Termini di Vinted e del listino Anthropic; scoperto e corretto il ritardo del checkout (72 commit); scrittura del piano |
+
+### 11.5 Avanzamento Fase 2
+
+- [ ] 2.1 Vincoli e dati dedotti
+- [ ] 2.2 Osservazioni
+- [ ] 2.3 Immagini
+- [ ] 2.4 "Da verificare"
+- [ ] 2.5 Venditore
+- [ ] 2.6 Analisi immutabili a blocchi
+- [ ] 2.7 Tabella prezzi venduti
+- [ ] 2.8 Esportazioni CSV
+- [ ] 2.9 Migrazione e prove
 
 ---
 
