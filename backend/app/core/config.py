@@ -141,6 +141,8 @@ class Settings(BaseSettings):
     ai_model: str = "claude-opus-5-5"
     ai_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     ai_vision_enabled: bool = True
+    # Local OCR of labels (RapidOCR, optional dependency): free, offline, no key needed.
+    ocr_enabled: bool = True
     ai_auto_analyze_min_flip_score: float = 80.0
     ai_timeout_seconds: float = 90.0
     # Model routing: the cheap tier for volume, the strong one (``ai_model``) where the stakes are.

@@ -56,7 +56,7 @@ identici all'analisi corrente **non si crea nulla**.
 (analisi) · `/pricing/sold-prices/export.csv` (prezzi venduti per modello). Parametro `delimiter=semicolon` per Excel
 italiano. Sono nel menu "Export CSV" della pagina Archivio.
 
-## Migrazioni (0010–0018)
+## Migrazioni (0010–0020)
 
 Additive e reversibili; **fai un backup prima** (`deploy/backup.sh`). Verificate con 30.000 annunci, 90.000 foto e 60.000
 osservazioni: 14 s in avanti, 3 s all'indietro, nessuna riga persa. La chiave dei venditori (0014) non si può "tornare
@@ -65,3 +65,5 @@ indietro" (un HMAC non è reversibile): il `downgrade` lascia le chiavi protette
 **0017** aggiunge a `opportunities` `decision_verdict` (STRONG_BUY, BUY, NEGOTIATE, WATCHLIST, PASS, INSUFFICIENT_EVIDENCE, con vincolo), `data_completeness_score` e `decision` (JSONB: punteggi, motivi, avvisi, informazioni mancanti, veti, requisiti dello STRONG BUY). Le righe analizzate prima restano a NULL: nessuna decisione viene inventata, la ricevono alla prossima analisi. `verdict` (BUY/CONSIDER/SKIP) resta ed è derivato dalla decisione. Il blocco `decision` di `analyses` conserva la decisione per sempre.
 
 **0018** aggiunge `ai_usage` (una riga per chiamata a pagamento: modello, livello, token, costo in USD, a cosa serviva), `agent_runs` (una riga per esecuzione dell'agente: passi/traccia, costo, risultato verificato, motivo di arresto) ed `events` (registro di audit **a sola aggiunta**: un trigger rifiuta UPDATE e DELETE). Il `downgrade` rimuove le tre tabelle.
+
+**0019** aggiunge a `opportunities` `dossier` (JSONB: i passaggi P0–P12, i segnali tipizzati, le contraddizioni, ciò che non si è potuto analizzare, le cinque ragioni) e `analysis_coverage_score`; nel registro permanente `analyses.decision.dossier` ne tiene la forma compatta. **0020** aggiunge `vision_cache` (analisi delle foto già pagate, per chiave di foto + modello + versione del prompt; potata dopo 90 giorni senza uso).

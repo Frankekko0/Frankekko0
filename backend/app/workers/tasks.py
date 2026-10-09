@@ -50,6 +50,7 @@ from app.media.cleanup import clean_foreign_data
 from app.opportunities.pipeline import AnalysisPipeline
 from app.tracking.service import Attempt, TrackingService, record_attempts
 from app.tracking.status import Observation
+from app.vision.cache import VisionCacheStore
 from app.workers.queue import backoff_seconds, enqueue
 from app.workers.vision_queue import queue_vision, vision_order
 
@@ -552,3 +553,4 @@ async def prune(ctx: dict[str, Any]) -> None:
         await s.execute(
             delete(AcquisitionAttempt).where(AcquisitionAttempt.started_at < now - timedelta(days=180))
         )
+    await VisionCacheStore().prune()  # stored photo analyses nobody asked for in 90 days

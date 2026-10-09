@@ -12,6 +12,7 @@ from app.ai.budget import AiBudget
 from app.api.deps import DB, CurrentUser
 from app.core.config import get_settings
 from app.db.models import AgentRun, Opportunity
+from app.vision.cache import VisionCacheStore
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -24,6 +25,8 @@ async def usage(user: CurrentUser) -> dict[str, Any]:
     return status.as_dict() | {
         "ai_enabled": bool(settings.ai_api_key),
         "models": {"strong": settings.ai_model, "cheap": settings.ai_model_cheap},
+        # Photo sets analysed once and found again instead of being paid for twice.
+        "vision_cache": await VisionCacheStore().stats(),
     }
 
 

@@ -26,6 +26,8 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any
 
+from app.analysis.dossier import compact_dossier
+
 SCHEMA_VERSION = 1
 BLOCK_VERSION = 1
 TRIGGERS = (
@@ -75,6 +77,7 @@ RESULT_FIELDS = (
     "verdict",
     "decision_verdict",
     "data_completeness_score",
+    "analysis_coverage_score",
     "recommended_action",
     "comparables_count",
     "sold_comparables_count",
@@ -285,6 +288,7 @@ def build_blocks(listing: Any, result: Any, values: dict[str, Any]) -> dict[str,
             "verdict",
             "decision_verdict",
             "data_completeness_score",
+            "analysis_coverage_score",
             "recommended_action",
             "headline",
             "sale_probability",
@@ -292,6 +296,7 @@ def build_blocks(listing: Any, result: Any, values: dict[str, Any]) -> dict[str,
             "authenticity_verdict",
         ),
         "decision": v.get("decision"),
+        "dossier": compact_dossier(v["dossier"]) if v.get("dossier") else None,
         "explanation": v.get("explanation"),
         "risk_factors": v.get("risk_factors"),
         "components": breakdown.get("components"),

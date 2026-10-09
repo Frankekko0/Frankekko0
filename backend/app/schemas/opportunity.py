@@ -130,6 +130,8 @@ class OpportunityCard(Schema):
     # INSUFFICIENT_EVIDENCE, and the fourth separate score. None for rows analysed before it existed.
     decision_verdict: str | None = None
     data_completeness_score: int | None = None
+    # Share of the applicable analysis passes that ran with enough data (the dossier's coverage).
+    analysis_coverage_score: int | None = None
 
 
 class QuickStats(Schema):
@@ -266,6 +268,8 @@ class OpportunityDetail(Schema):
     provenance: dict[str, Any] | None = None
     # Verdict, scores, reasons, warnings, missing information, vetoes (``Opportunity.decision``).
     decision: dict[str, Any] | None = None
+    # The listing's dossier: passes P0-P12, signals, contradictions, what could not be analysed.
+    dossier: dict[str, Any] | None = None
 
 
 class FavoriteStateIn(Schema):

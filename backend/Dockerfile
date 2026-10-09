@@ -13,7 +13,7 @@ WORKDIR /app
 # package, then drop the stub so the real source below is the only copy of `app`.
 COPY pyproject.toml ./
 RUN mkdir app && touch app/__init__.py \
-    && pip install . \
+    && pip install '.[ocr]' \
     && pip uninstall -y flipfinder-backend \
     && rm -rf app build ./*.egg-info
 

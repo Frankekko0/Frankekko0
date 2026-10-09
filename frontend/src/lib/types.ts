@@ -105,6 +105,8 @@ export interface OpportunityCard {
   decision_verdict: DecisionVerdict | null;
   /** How much of the listing could be read, 0-100 (the fourth, separate score). */
   data_completeness_score: number | null;
+  /** Share of the applicable analysis passes that ran with enough data. */
+  analysis_coverage_score: number | null;
 }
 
 export type DecisionVerdict = "STRONG_BUY" | "BUY" | "NEGOTIATE" | "WATCHLIST" | "PASS" | "INSUFFICIENT_EVIDENCE";
@@ -472,6 +474,8 @@ export interface OpportunityDetail {
   provenance?: Provenance | null;
   /** Verdict, the four scores, reasons, warnings, missing information (null on older rows). */
   decision?: DecisionInfo | null;
+  /** Everything known about the listing, pass by pass (null on older rows). */
+  dossier?: Dossier | null;
 }
 
 export interface OpportunityFilters {
@@ -1267,4 +1271,43 @@ export interface AiUsage {
   prices_are_assumptions: boolean;
   ai_enabled: boolean;
   models: { strong: string; cheap: string };
+}
+
+export type PassStatus = "done" | "partial" | "not_possible" | "not_applicable";
+
+export interface DossierPass {
+  code: string;
+  name: string;
+  status: PassStatus;
+  summary: string;
+  reason: string | null;
+  needs: string | null;
+}
+
+export interface DossierContradiction {
+  code: string;
+  label: string;
+  status: "discrepancy";
+  severity: "none" | "low" | "medium" | "high";
+  detail: string;
+  impact_eur: number | null;
+}
+
+export interface Dossier {
+  v: number;
+  category_plugin: { key: string; label: string; covered: boolean };
+  /** Share of the applicable passes that ran with enough data (not the listing's completeness). */
+  analysis_coverage: number;
+  coverage_note: string;
+  photo_quality: number | null;
+  inspection_coverage: number | null;
+  passes: DossierPass[];
+  not_analysable: { code: string; name: string; status: PassStatus; reason: string | null; needs: string | null }[];
+  missing_photos: string[];
+  signals: { name: string; value: unknown; provenance: "observed" | "declared" | "inferred"; source: string; confidence: number | null }[];
+  contradictions: DossierContradiction[];
+  hidden_gem: { possibly_undervalued: boolean; reasons: string[]; to_verify: string[] };
+  top_reasons: { kind: "veto" | "contradiction" | "positive" | "lead" | "warning" | "missing"; text: string }[];
+  changed_passes: string[];
+  delta?: string[];
 }

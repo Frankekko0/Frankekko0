@@ -71,3 +71,18 @@ class Event(Base):
     subject_type: Mapped[str | None] = mapped_column(String(24))
     subject_id: Mapped[str | None] = mapped_column(String(64))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+
+
+class VisionCache(Base):
+    """A stored photo analysis, found again by the identity of its photos, the model and the prompt."""
+
+    __tablename__ = "vision_cache"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model: Mapped[str] = mapped_column(String(64))
+    prompt_version: Mapped[str] = mapped_column(String(32))
+    n_photos: Mapped[int] = mapped_column(Integer)
+    result: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    hits: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
+    last_hit_at: Mapped[datetime | None] = mapped_column()

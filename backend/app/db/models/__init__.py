@@ -1,7 +1,7 @@
 """ORM models. Importing this package registers every table on ``Base.metadata``."""
 
 from app.db.models.acquisition import AcquisitionAttempt
-from app.db.models.agent import AgentRun, AiUsage, Event
+from app.db.models.agent import AgentRun, AiUsage, Event, VisionCache
 from app.db.models.catalog import Brand, Category, Product
 from app.db.models.listing import Listing, ListingImage, ListingPriceHistory, ListingSnapshot
 from app.db.models.market import MarketComparable, MarketStatistic
@@ -50,5 +50,6 @@ __all__ = [
     "User",
     "UserAffinity",
     "UserPreferences",
+    "VisionCache",
     "Watchlist",
 ]

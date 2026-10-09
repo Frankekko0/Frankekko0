@@ -31,7 +31,13 @@ Le foto vanno al fornitore del modello (possono contenere persone); l'app chiede
 
 PostgreSQL 16 (`pg_trgm`), Redis 7, Python ≥ 3.11, Node per il frontend. Nessun altro servizio.
 
+## Software installato (extra opzionale)
+
+| Pacchetto | Uso | Note |
+|---|---|---|
+| `rapidocr-onnxruntime` (extra `ocr`) | OCR locale delle etichette | solo `pip`; ONNX Runtime + OpenCV + modelli inclusi; gratuito, offline, nessuna chiave. Se manca, l'OCR è spento e il resto funziona |
+
 ## Non usati
 
 Nessun servizio di scraping, proxy o risoluzione CAPTCHA: l'unica fonte di dati di Vinted è ciò che l'utente apre
-nel suo browser (estensione). OCR locale e modelli open-source: vedi la fase di visione (non ancora scelti).
+nel suo browser (estensione). Nessun servizio di OCR a pagamento: l'OCR è locale.

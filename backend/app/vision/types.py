@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -18,11 +18,121 @@ class VisualFinding(BaseModel):
     evidence: str | None = None
 
 
+DEFECT_KINDS = (
+    # textiles
+    "stain",
+    "halo",
+    "hole",
+    "tear",
+    "fading",
+    "pilling",
+    "snag",
+    "seam",
+    "deformation",
+    "collar_cuffs",
+    "print_damage",
+    "wear",
+    # shoes
+    "sole_wear",
+    "heel_wear",
+    "creasing",
+    "scuff",
+    # bags and accessories
+    "scratch",
+    "corner_wear",
+    "zipper",
+    "lining_stain",
+    "handle_wear",
+    "other",
+)
+
+
 class DefectFinding(BaseModel):
-    kind: Literal["stain", "hole", "fading", "wear", "pilling", "tear", "other"]
+    """A visible flaw: what, where on the item, how bad, how sure, and where in which photo.
+
+    ``certainty`` ``unverifiable`` means it may be a shadow, a fold or compression: it is kept as a
+    *potential* defect and never stated as fact."""
+
+    kind: Literal[DEFECT_KINDS]  # type: ignore[valid-type]
     severity: Literal["minor", "moderate", "severe"] = "minor"
     certainty: Certainty = Certainty.PROBABLE
     description: str | None = None
+    zone: str | None = None  # "manica sinistra", "colletto", "suola"...
+    photo: int | None = None  # 0-based gallery position
+    box: list[float] | None = None  # [x, y, w, h], 0..1 of the photo
+    confidence: float = Field(default=0.5, ge=0, le=1)
+
+
+LabelType = Literal[
+    "brand_label",
+    "care_label",
+    "composition",
+    "size_label",
+    "sku_code",
+    "barcode",
+    "paper_tag",
+    "proof_of_purchase",
+]
+LABEL_TYPES: tuple[str, ...] = (
+    "brand_label",
+    "care_label",
+    "composition",
+    "size_label",
+    "sku_code",
+    "barcode",
+    "paper_tag",
+    "proof_of_purchase",
+)
+LabelState = Literal[
+    "present_readable", "present_unreadable", "not_visible", "absence_verifiable", "insufficient_information"
+]
+
+
+class LabelObservation(BaseModel):
+    """One kind of label on the item and what the photos say about it.
+
+    ``not_visible`` is not ``absent``: only ``absence_verifiable`` (the right spot is shown and has
+    none) says there is none. A label is never claimed present without a photo that shows it."""
+
+    type: LabelType
+    state: LabelState
+    photo: int | None = None
+    text: str | None = None  # what was read, as read
+    box: list[float] | None = None
+    certainty: Certainty = Certainty.PROBABLE
+
+
+PhotoRoleName = Literal[
+    "front",
+    "back",
+    "label",
+    "care_label",
+    "detail",
+    "worn",
+    "flat_lay",
+    "packshot",
+    "sole",
+    "inside",
+    "other",
+]
+
+
+class OcrLineOut(BaseModel):
+    text: str
+    confidence: float
+    box: list[float]
+
+
+class OcrPhoto(BaseModel):
+    """What the local OCR read on one photo."""
+
+    photo: int  # 0-based gallery position
+    lines: list[OcrLineOut] = Field(default_factory=list)
+
+
+class PhotoRole(BaseModel):
+    photo: int
+    role: PhotoRoleName
 
 
 class PhotoQuality(BaseModel):
@@ -94,4 +204,14 @@ class ImageAnalysis(BaseModel):
     photo_checks: list[PhotoCheck] = Field(default_factory=list)
     photo_findings: list[PhotoEvidence] = Field(default_factory=list)
     provenance: Provenance = Field(default_factory=Provenance)
+    # What kind of photo each one is, and the state of each kind of label (see ``LabelObservation``).
+    photo_roles: list[PhotoRole] = Field(default_factory=list)
+    labels: list[LabelObservation] = Field(default_factory=list)
+    # Parts of the item no photo shows ("interno del colletto", "retro").
+    unobserved_parts: list[str] = Field(default_factory=list)
+    # Text read on the photos by the local OCR (``app.vision.ocr``), photo by photo; empty photos omitted.
+    ocr: list[OcrPhoto] = Field(default_factory=list)
+    ocr_engine: str | None = None
+    # Facts parsed from that text (size, composition, codes, country, brands, label photos).
+    ocr_facts: dict[str, Any] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)

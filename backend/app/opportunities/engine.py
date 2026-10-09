@@ -15,6 +15,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.ai.deal_analyst import DealAnalysis, DealContext, RuleBasedDealAnalyst, ScenarioSummary
+from app.analysis.dossier import DossierFacts, build_dossier
 from app.analytics.calibration import Calibration
 from app.authenticity.assess import AuthInput, assess, photo_evidence
 from app.decision.completeness import Completeness, CompletenessInput, compute_completeness
@@ -138,6 +139,8 @@ class AnalysisResult:
     # Verdict, the four separate scores, vetoes, reasons, warnings, missing information.
     decision: Decision | None = None
     completeness: Completeness | None = None
+    # The verifiable record of everything known about the listing (see ``app.analysis.dossier``).
+    dossier: dict[str, Any] = field(default_factory=dict)
 
     def scenario(self, name: str) -> Scenario | None:
         return next((s for s in self.scenarios if s.name == name), None)
@@ -463,6 +466,54 @@ def run_analysis(
     result.headline = build_headline(result)
     result.insights = build_insights(result, similar, now, condition, p_sale, margin)
     result.economics = economics
+    result.dossier = build_dossier(
+        DossierFacts(
+            title=subject.profile.title,
+            description=subject.description,
+            price=price,
+            declared_brand=subject.brand_name,
+            brand_counterfeit_risk=subject.brand_counterfeit_risk,
+            category=subject.profile.category,
+            parent_category=subject.profile.parent_category,
+            declared_size=subject.profile.size,
+            declared_color=subject.profile.color,
+            declared_material=subject.profile.material,
+            declared_condition=subject.profile.condition,
+            model=subject.profile.model,
+            photo_count=subject.photo_count,
+            shipping_known=subject.shipping_fee is not None,
+            is_repost=subject.is_repost,
+            identification=subject.identification,
+            identification_confidence=subject.identification_confidence,
+            vision=subject.vision,
+            seller={
+                "known": subject.seller is not None,
+                "rating": float(subject.seller.rating)
+                if subject.seller and subject.seller.rating is not None
+                else None,
+                "reviews": subject.seller.review_count if subject.seller else None,
+                "anomalies": list(subject.seller.anomalies) if subject.seller else [],
+                "score": seller.score,
+                "level": seller.level,
+            },
+            market={
+                "has_value": market.has_value,
+                "n_used": market.n_used,
+                "n_sold": market.n_sold,
+                "confidence": market.confidence,
+                "data_quality": quality,
+                "reason": reason,
+            },
+            fair_market_value=fmv,
+            authenticity=result.authenticity,
+            economics=economics,
+            decision=decision.as_dict(),
+            completeness=completeness.as_dict(),
+            listing_age_hours=subject.listing_age_hours,
+            price_changes=max(0, len(subject.price_history) - 1),
+            favourites=subject.favourite_count,
+        )
+    )
     if velocity.sample_size:
         days_basis = "sold"
     elif prior is not None and prior.avg_days_to_sale:

@@ -15,6 +15,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.analysis.dossier import finalize_dossier
 from app.analytics.calibration import STATE_KEY as CALIBRATION_KEY
 from app.analytics.calibration import Calibration
 from app.core.config import Settings, get_settings
@@ -770,9 +771,12 @@ class AnalysisPipeline:
             r.listing_id: r
             for r in (
                 await self.session.execute(
-                    select(Opportunity.listing_id, Opportunity.flip_score, Opportunity.listing_price).where(
-                        Opportunity.listing_id.in_(ids)
-                    )
+                    select(
+                        Opportunity.listing_id,
+                        Opportunity.flip_score,
+                        Opportunity.listing_price,
+                        Opportunity.dossier,
+                    ).where(Opportunity.listing_id.in_(ids))
                 )
             ).all()
         }
@@ -785,8 +789,16 @@ class AnalysisPipeline:
         for listing, result in ordered:
             values = opportunity_values(listing, result, version, now, mode)
             inputs = listing_inputs(listing)
-            in_hash, out_hash = inputs_hash(inputs), result_hash(values)
             prev = current.get(listing.id)
+            if values.get("dossier"):  # what moved since the last analysis, in words
+                old = previous.get(listing.id)
+                values["dossier"] = finalize_dossier(
+                    values["dossier"],
+                    old.dossier if old is not None else None,
+                    prev.inputs if prev is not None else None,
+                    jsonable(inputs),
+                )
+            in_hash, out_hash = inputs_hash(inputs), result_hash(values)
             if prev is not None and (prev.input_hash, prev.result_hash, prev.algorithm_version) == (
                 in_hash,
                 out_hash,
@@ -996,6 +1008,8 @@ def opportunity_values(
         "verdict": (r.decision.legacy_verdict if r.decision else r.analysis.verdict).value,
         "decision_verdict": r.decision.verdict.value if r.decision else None,
         "data_completeness_score": r.completeness.score if r.completeness else None,
+        "analysis_coverage_score": r.dossier.get("analysis_coverage") if r.dossier else None,
+        "dossier": r.dossier or None,
         "decision": r.decision.as_dict() | {"completeness": r.completeness.as_dict()}
         if r.decision and r.completeness
         else None,

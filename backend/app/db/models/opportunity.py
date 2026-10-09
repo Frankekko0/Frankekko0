@@ -151,6 +151,10 @@ class Opportunity(Base):
     decision_verdict: Mapped[str | None] = mapped_column(String(24), index=True)
     data_completeness_score: Mapped[int | None] = mapped_column(SmallInteger)
     decision: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Share of the applicable analysis passes that ran with enough data, and the whole dossier
+    # (see ``app.analysis.dossier``); NULL for rows analysed before they existed.
+    analysis_coverage_score: Mapped[int | None] = mapped_column(SmallInteger)
+    dossier: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     recommended_action: Mapped[str] = mapped_column(String(16))
 
     comparables_count: Mapped[int] = mapped_column(Integer, default=0)

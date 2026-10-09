@@ -18,6 +18,7 @@ import {
 } from "@/components/deal/detail-sections";
 import { DataQualityBanner } from "@/components/deal/analysis-detail";
 import { AuthenticitySection, DecisionSection, InsightDetails } from "@/components/deal/decision";
+import { DossierSection } from "@/components/deal/dossier";
 import { VerdictSection } from "@/components/deal/verdict";
 import { ProvenanceSection } from "@/components/deal/provenance";
 import { ListingImage } from "@/components/deal/listing-image";
@@ -40,6 +41,7 @@ type NavItem = readonly [id: string, label: string];
 const NAV: readonly NavItem[] = [
   ["verdict", "Verdict"],
   ["decision", "Decision"],
+  ["dossier", "Dossier"],
   ["sources", "Sources"],
   ["authenticity", "Authenticity"],
   ["why", "Why"],
@@ -329,6 +331,7 @@ export default function DealPage({ params }: { params: Promise<{ id: string }> }
           <DataQualityBanner quality={d.score.data_quality} reason={d.score.insufficient_reason} />
           <VerdictSection decision={d.decision} />
           <DecisionSection d={d} provenance={provenance} />
+          <DossierSection dossier={d.dossier} />
           {provenance && <ProvenanceSection p={provenance} />}
           <AuthenticitySection d={d} />
           {d.insights && <InsightDetails i={d.insights} />}

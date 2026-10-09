@@ -13,13 +13,13 @@ Deploy: Docker Compose (`docker-compose*.yml`), Caddy HTTPS, backup in `deploy/`
 `acquisition` cattura da estensione/link/email, parser (`vinted_parser.json`) · `ingestion` normalizza/dedup/upsert · `identification` · `vision` hash e controlli foto ·
 `media` archivio foto e repost visivi · `authenticity` · `pricing` comparabili, FMV, prove di prezzo (`evidence`) · `external` prezzi esterni opzionali (Serper) ·
 `demand` · `profit` calcolatore+offerte · `scoring` (Flip Score a 8 componenti, confidenza, rischio) · `decision` (verdetti, completezza, veti, classifica, allocazione del capitale) · `opportunities` pipeline/engine/query · `tracking` ciclo di vita e "da verificare" · `alerts` ·
-`analytics` portfolio/calibrazione · `ai` analista, ricerca NL, client del modello con **budget** e interruttore · `agent` strumenti, ciclo, guardrail, revisione, fasi S0–S5 · `workers` arq · `api/v1` REST · `tools` CLI. Frontend: `frontend/src/app/(app)/*`.
+`analytics` portfolio/calibrazione · `ai` analista, ricerca NL, client del modello con **budget** e interruttore · `agent` strumenti, ciclo, guardrail, revisione, fasi S0–S5 · `analysis` plugin per categoria, condizioni, etichette, copertura, testo multilingua, matrice di coerenza, dossier · `workers` arq · `api/v1` REST · `tools` CLI. Frontend: `frontend/src/app/(app)/*`.
 
-## Schema DB (37 tabelle, migrazioni `0001`–`0018`, prossima **0019**)
+## Schema DB (38 tabelle, migrazioni `0001`–`0020`, prossima **0021**)
 Annunci: `listings` `listing_snapshots`(osservazioni tipizzate) `listing_price_history`(vista) `listing_images` `sellers`. Catalogo: `brands` `categories` `products`.
 Analisi: `analyses`(immutabili, 5 blocchi) `opportunities`(= analisi corrente) `opportunity_scores` `market_comparables` `market_statistics` `analysis_jobs`.
 Prezzi: `sold_sales`(prezzo richiesto ≠ reale) `model_price_stats` `external_prices` `external_searches`. Utente: `users` `user_preferences` `notification_settings` `push_subscriptions` `api_keys` `watchlists` `favorites` `user_affinities`.
-Agente e spesa AI: `ai_usage` `agent_runs` `events`(append-only). Business: `purchases` `sales` `inventory`. Avvisi: `alerts` `alert_deliveries`. Altro: `acquisition_attempts` `marketplace_actions` `system_state`. Importi `Decimal`; ROI memorizzato come rapporto (0,6923), mostrato in %.
+Agente e spesa AI: `ai_usage` `agent_runs` `events`(append-only) `vision_cache`. Business: `purchases` `sales` `inventory`. Avvisi: `alerts` `alert_deliveries`. Altro: `acquisition_attempts` `marketplace_actions` `system_state`. Importi `Decimal`; ROI memorizzato come rapporto (0,6923), mostrato in %.
 
 ## Punti di integrazione (dove si innesta il prompt v3)
 - Pipeline per annuncio: `opportunities/pipeline.py::analyze` → `engine.py::run_analysis` (completezza → Flip → **decisione** → analista). Stadi S0–S5 e dossier si innestano qui; **nessun secondo pipeline**.
@@ -43,7 +43,7 @@ Parser Vinted per ID (niente foto profilo/suggeriti) · verdetto rapido locale `
 | conformità §2 (estensione solo su ciò che l'utente vede) | **fatta** | rimossi scanner, letture automatiche, lettura dal server, clic su Preferiti/Acquista, permessi `scripting`/`offscreen`/`notifications` (Q1); resta Q3-B (foto dal browser) |
 | 2 Financial engine | **fatta** | PIANO 4.1: `profit/evaluation.py` (stati dei costi, ripristino, riserva, margine, pareggio, capitale), `/profit/calculate`, blocco economico delle analisi; test 26/44/18/69,23%, casi E e H |
 | 3 Market intelligence | **fatta** (perimetro v3) | motore e provenienza già completi; aggiunti test G end-to-end e dichiarazione della base di misura (D1). Taglie per marca e titoli/sinonimi: PIANO 4.3–4.4, nella fase di dossier |
-| 4/4b Vision e dossier | da fare | PIANO Fase 5; serve Q8 (modello + tetto di spesa) e foto dal browser (Q3-B) |
+| 4/4b Vision e dossier | **fatta** (senza Q3-B) | `analysis/` (dossier P0–P12, coverage, matrice di coerenza, condizioni, etichette), OCR locale RapidOCR, cache delle analisi, difetti con zona/riquadro, ruoli delle foto; migrazioni 0019–0020; test B, C, D, F, T, U, V, W. Mancano le foto caricate dall'estensione (Q3-B) |
 | 5 Decisione | **fatta** | `decision/` (6 verdetti, 4 punteggi separati, veti, STRONG BUY a requisiti, classifica, zaino esatto), Flip Score a 8 componenti, migrazione 0017; casi A, C, E, G, H e B (lato decisione) |
 | 6 Agente orchestratore | **fatta** (perimetro v3) | registro di 9 strumenti, ciclo con tool use, guardrail nel codice, budget AI con tetti e stop, interruttore, traccia in `agent_runs`, `events` append-only, ricalcolo incrementale (35→23: solo decisione, un avviso), avvisi coalescenti e legati al verdetto, revisione con ripiego a regole. Strumenti delle fasi successive: L16 |
 | 7 Dashboard | da fare | PIANO Fase 8 (serve Q5, lingua) |

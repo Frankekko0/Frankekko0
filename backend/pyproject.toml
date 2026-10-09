@@ -28,6 +28,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Local OCR for labels (pure pip: onnxruntime + bundled models, no system package).
+ocr = [
+    "rapidocr-onnxruntime>=1.2,<2",
+]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
