@@ -19,7 +19,7 @@ from app.ingestion.service import IngestionService
 from app.media import archive
 from app.vision import analyzer as az
 from app.vision import cache as vc
-from app.vision.analyzer import ClaudeVisionAnalyzer, PhotoInput
+from app.vision.analyzer import ClaudeVisionAnalyzer, PhotoInput, VisionDeferred
 from app.vision.cache import CachedImageAnalyzer, VisionCacheStore, cache_key
 from app.vision.types import ImageAnalysis, PhotoCheck, PhotoQuality
 from tests.conftest import NOW
@@ -60,6 +60,35 @@ async def test_the_same_photos_cost_one_model_call(clean_db: None) -> None:
     assert len(stub.calls) == 1  # the other two came from the cache
     assert first.model_dump() == second.model_dump() == again.model_dump()
     assert (await VisionCacheStore().stats()) == {"entries": 1, "hits": 2}
+
+
+async def test_a_failed_model_call_is_not_remembered_and_the_next_run_asks_the_model_again(
+    clean_db: None,
+) -> None:
+    stub = StubLLM(None)  # the provider refuses, is out of quota, answers nonsense: no answer
+    a = make(stub)
+    with pytest.raises(VisionDeferred) as e:
+        await a.analyze(photos(5), CTX)
+    assert e.value.partial.analyzer == "heuristic"  # the local measures exist but are not the analysis
+    assert (await VisionCacheStore().stats()) == {"entries": 0, "hits": 0}  # nothing was cached
+    stub.answer = ANSWER
+    out = await a.analyze(photos(5), CTX)
+    assert out.analyzer == "claude_vision" and len(stub.calls) == 2  # asked again, not served the failure
+    assert (await VisionCacheStore().stats()) == {"entries": 1, "hits": 0}
+
+
+async def test_the_local_measures_are_never_stored_where_a_model_answer_belongs(clean_db: None) -> None:
+    class Sloppy(az.ImageAnalyzer):
+        name = "claude_vision"
+
+        async def analyze(self, photos: list[PhotoInput], ctx: dict[str, Any]) -> ImageAnalysis:
+            return await az.HeuristicImageAnalyzer().analyze(photos, ctx)
+
+    out = await CachedImageAnalyzer(Sloppy(), "model-a").analyze(photos(3), CTX)
+    assert out.analyzer == "heuristic" and (await VisionCacheStore().stats())["entries"] == 0
+    # The heuristic analyzer's own result is what that cache is for.
+    await CachedImageAnalyzer(az.HeuristicImageAnalyzer(), "heuristic").analyze(photos(3), CTX)
+    assert (await VisionCacheStore().stats())["entries"] == 1
 
 
 async def test_a_photo_is_its_content_not_the_address_it_was_uploaded_from(clean_db: None) -> None:

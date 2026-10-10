@@ -6,7 +6,9 @@
 * :class:`ClaudeVisionAnalyzer` (when ``AI_API_KEY`` is set): reads logos, labels (size,
   composition, product codes), visible defects and authenticity red flags, each with an explicit
   certainty level. It never asserts authenticity. The photos go to the model as bytes of the local
-  copy (shrunk when very large), never as an address on Vinted.
+  copy (converted or shrunk to what the provider takes), never as an address on Vinted. When the model
+  gives no answer it raises :class:`VisionDeferred` (with the local analysis attached) instead of passing
+  the local analysis off as the photo analysis.
 
 A photo the browser has not uploaded yet is not analysed and is counted as missing.
 """
@@ -14,15 +16,12 @@ A photo the browser has not uploaded yet is not analysed and is counted as missi
 from __future__ import annotations
 
 import asyncio
-import base64
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
-from io import BytesIO
 from typing import Any
 
-from PIL import Image
-
-from app.ai.llm import LLMClient
+from app.ai.images import ANTHROPIC_IMAGES, ImageLimits, fit_images
+from app.ai.llm import AiDeferred, LLMClient
 from app.core.logging import get_logger
 from app.domain.enums import Certainty
 from app.vision.ocr import get_ocr_engine, parse_ocr, read_photo
@@ -65,26 +64,45 @@ class PhotoInput:
         return self.sha256 or self.key
 
 
-def prepare_for_model(data: bytes, content_type: str | None) -> tuple[str, str]:
-    """(media type, base64) of a photo as the model should receive it: as is when it is small
-    enough, otherwise shrunk to ``MODEL_MAX_SIDE`` and re-encoded as JPEG."""
-    media = (
-        content_type
-        if content_type in ("image/jpeg", "image/png", "image/webp", "image/gif")
-        else "image/jpeg"
+def prepare_gallery(
+    photos: list[PhotoInput], limits: ImageLimits = ANTHROPIC_IMAGES
+) -> list[tuple[str, str] | None]:
+    """(media type, base64) of each photo as the model should receive it, ``None`` for one that cannot be sent.
+    Small photos of an accepted type go as they are; the others are shrunk to ``MODEL_MAX_SIDE`` and re-encoded
+    as JPEG, and so is the whole gallery step by step when the provider caps the size of a request."""
+    return fit_images(
+        [(p.data or b"", p.content_type) for p in photos],
+        limits,
+        max_side=MODEL_MAX_SIDE,
+        max_bytes=MODEL_MAX_BYTES,
     )
-    try:
-        with Image.open(BytesIO(data)) as img:
-            big = max(img.size) > MODEL_MAX_SIDE or len(data) > MODEL_MAX_BYTES
-            if big:
-                small = img.convert("RGB")
-                small.thumbnail((MODEL_MAX_SIDE, MODEL_MAX_SIDE), Image.Resampling.LANCZOS)
-                out = BytesIO()
-                small.save(out, "JPEG", quality=88)
-                return "image/jpeg", base64.b64encode(out.getvalue()).decode()
-    except Exception:
-        log.info("vision.prepare_failed")
-    return media, base64.b64encode(data).decode()
+
+
+# Reasons the provider was not even asked (a cap, a cooldown, an open breaker): nothing was spent on the try.
+NOT_ASKED = frozenset({"breaker_open", "budget", "rpm", "rpd", "cooldown", "redis"})
+# Reasons asking again cannot help: the request is wrong (key, model, schema) or no photo can be sent.
+UNFIXABLE = frozenset({"rejected", "no_photo_sendable"})
+
+
+class VisionDeferred(AiDeferred):
+    """The model did not analyse the photos (quota, outage, refusal, bad answer) and must be asked again later.
+
+    ``partial`` is what the local analysis measured (hashes, quality, OCR): it says nothing the model would, and
+    it is never the photo analysis. ``changed`` tells the caller whether storing it changed the listing."""
+
+    def __init__(self, reason: str, retry_after: float, partial: ImageAnalysis) -> None:
+        super().__init__(reason, retry_after)
+        self.partial = partial
+        self.changed = False
+
+    @property
+    def asked(self) -> bool:
+        """The provider was asked (so the try counts), as opposed to a cap or cooldown that stopped it."""
+        return self.reason not in NOT_ASKED
+
+    @property
+    def unfixable(self) -> bool:
+        return self.reason in UNFIXABLE
 
 
 class ImageAnalyzer(ABC):
@@ -442,13 +460,21 @@ class ClaudeVisionAnalyzer(ImageAnalyzer):
         numbered = [(p.position, p) for p in photos[:MAX_IMAGES] if p.data]
         if not numbered:
             return base
+        limits = getattr(self.llm, "image_limits", ANTHROPIC_IMAGES)
+        fitted = await asyncio.to_thread(prepare_gallery, [p for _, p in numbered], limits)
         content: list[dict[str, Any]] = []
-        for i, p in numbered:
-            media, encoded = await asyncio.to_thread(prepare_for_model, p.data or b"", p.content_type)
+        sent: set[int] = set()
+        for (i, _), image in zip(numbered, fitted, strict=True):
+            if image is None:  # not an image the provider takes and not one we can convert
+                log.warning("vision.photo_not_sent", photo=i + 1)
+                continue
+            sent.add(i)
             content.append({"type": "text", "text": f"Foto {i + 1}"})
             content.append(
-                {"type": "image", "source": {"type": "base64", "media_type": media, "data": encoded}}
+                {"type": "image", "source": {"type": "base64", "media_type": image[0], "data": image[1]}}
             )
+        if not sent:
+            raise VisionDeferred("no_photo_sendable", 3600.0, base)
         rules = context.get("brand_rules") or {}
         if base.ocr:
             read = "\n".join(
@@ -478,11 +504,19 @@ class ClaudeVisionAnalyzer(ImageAnalyzer):
                 + "Analizza ogni foto e compila i campi richiesti.",
             }
         )
-        data = await self.llm.structured(
-            system=VISION_SYSTEM, content=content, schema=VISION_SCHEMA, purpose="vision"
-        )
+        # A failed call is not a result: the caller retries it, and the local analysis is never taken for it.
+        try:
+            data = await self.llm.structured(
+                system=VISION_SYSTEM,
+                content=content,
+                schema=VISION_SCHEMA,
+                purpose="vision",
+                raise_on_defer=True,
+            )
+        except AiDeferred as exc:
+            raise VisionDeferred(exc.reason, exc.retry_after, base) from exc
         if data is None:
-            return base
+            raise VisionDeferred("no_answer", 300.0, base)
 
         def finding(key: str) -> VisualFinding | None:
             raw = data.get(key)
@@ -498,7 +532,7 @@ class ClaudeVisionAnalyzer(ImageAnalyzer):
             except (ValueError, TypeError):
                 return None
 
-        positions = {i for i, _ in numbered}
+        positions = sent
         defects = []
         for d in data.get("defects", [])[:20]:
             try:

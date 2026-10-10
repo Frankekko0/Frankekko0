@@ -640,7 +640,7 @@ export function AiSection({ d }: { d: OpportunityDetail }) {
       id="ai"
       icon={<Bot />}
       title="AI Deal Analyst"
-      description={a ? `${a.provider === "claude" ? `Claude (${a.model})` : "Rule-based analyst"} · numbers come from the statistical engine` : undefined}
+      description={a ? `${a.provider === "claude" ? `Claude (${a.model})` : a.provider === "gemini" ? `Gemini (${a.model})` : "Rule-based analyst"} · numbers come from the statistical engine` : undefined}
       action={
         <Button variant="outline" size="sm" onClick={() => run.mutate()} loading={run.isPending}>
           <RefreshCw /> Re-run

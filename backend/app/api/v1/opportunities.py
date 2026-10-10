@@ -10,10 +10,11 @@ from fastapi import APIRouter, Query
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from app.ai.llm import AiDeferred
 from app.ai.service import run_ai_analysis
 from app.api.deps import DB, CurrentUser, Economics
 from app.core.cache import NS_FEED, cache
-from app.core.errors import NotFoundError
+from app.core.errors import NotFoundError, ProviderUnavailableError, RateLimitedError
 from app.db.models import Favorite, Opportunity
 from app.opportunities.queries import OpportunityQueries, acquisition_lines, sale_lines
 from app.profit.evaluation import (
@@ -132,9 +133,21 @@ async def clear_state(opportunity_id: uuid.UUID, user: CurrentUser, db: DB) -> M
 
 @router.post("/opportunities/{opportunity_id}/ai-analysis", response_model=dict[str, Any])
 async def refresh_ai_analysis(opportunity_id: uuid.UUID, user: CurrentUser, db: DB) -> dict[str, Any]:
-    """Run the AI Deal Analyst (Claude when configured, rule-based otherwise)."""
+    """Run the AI Deal Analyst (the model when configured, rule-based otherwise). When the model cannot answer
+    (request cap reached, cooldown, outage, unusable answer) nothing is written and the answer says so: the rules'
+    text is never stored as the model's."""
     opp = await _opportunity(db, opportunity_id)
-    analysis = await run_ai_analysis(db, opp)
+    try:
+        analysis = await run_ai_analysis(db, opp)
+    except AiDeferred as exc:
+        if exc.reason in ("rpm", "rpd", "cooldown", "rate_limited", "budget", "redis"):
+            raise RateLimitedError(
+                "Il modello AI ha raggiunto il limite di richieste: riprova più tardi.",
+                retry_after=int(min(max(exc.retry_after, 1), 3600)),
+            ) from exc
+        raise ProviderUnavailableError(
+            "Il modello AI non ha dato una risposta utilizzabile: riprova più tardi."
+        ) from exc
     await db.commit()
     return analysis
 

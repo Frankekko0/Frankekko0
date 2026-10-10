@@ -53,6 +53,7 @@ class Proposed:
     text: str | None = None
     price: Decimal | None = None
     floor: Decimal | None = None
+    current: Decimal | None = None  # a markdown: the asking price today (the new price must be below it)
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,7 @@ class Usage:
     owned_items: int = 0
     messages_today: int = 0
     holdings: tuple[Holding, ...] = ()
+    reprices_today: int = 0
 
 
 @dataclass(frozen=True)
@@ -209,8 +211,23 @@ def evaluate(p: Proposed, limits: Limits, usage: Usage, sw: Switches) -> PolicyR
     elif p.kind == Kind.REPRICE:
         if p.price is None or p.floor is None:
             v.append(Violation("no_price", "Ribasso senza prezzo o minimo"))
-        elif p.price < p.floor:
-            v.append(Violation("below_floor", f"Il prezzo {p.price} € è sotto il minimo {p.floor} €"))
+        else:
+            if p.price < p.floor:
+                v.append(Violation("below_floor", f"Il prezzo {p.price} € è sotto il minimo {p.floor} €"))
+            if p.current is not None and p.price >= p.current:
+                v.append(
+                    Violation(
+                        "not_a_markdown",
+                        f"Il prezzo {p.price} € non è inferiore a quello attuale ({p.current} €): si propongono solo ribassi",
+                    )
+                )
+        if usage.reprices_today + 1 > limits.max_reprices_per_day:
+            v.append(
+                Violation(
+                    "max_reprices",
+                    f"Già {usage.reprices_today} ribassi proposti oggi (massimo {limits.max_reprices_per_day})",
+                )
+            )
     elif p.kind == Kind.LIST and (p.price is None or p.price <= 0):
         v.append(Violation("no_price", "Pubblicazione senza prezzo"))
 

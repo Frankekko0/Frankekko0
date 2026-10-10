@@ -19,8 +19,10 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 
 from app.agent.model import AnthropicAgentModel
 from app.agent.review import review_candidates
-from app.ai.llm import get_llm
-from app.ai.service import run_ai_analysis, run_vision
+from app.ai.llm import AiDeferred, get_llm
+from app.ai.queue import claim_pending, defer_opportunity, qualifies_for_strong_ai, quota_room
+from app.ai.queue import kick as kick_ai_review
+from app.ai.service import review_opportunity, run_vision
 from app.alerts.channels.base import ChannelError
 from app.alerts.service import deliver_alert, evaluate_alerts
 from app.analytics.accuracy import fit_price_calibration
@@ -50,9 +52,10 @@ from app.media.cleanup import clean_foreign_data
 from app.opportunities.pipeline import AnalysisPipeline
 from app.tracking.service import Attempt, TrackingService, record_attempts
 from app.tracking.status import Observation
+from app.vision.analyzer import VisionDeferred
 from app.vision.cache import VisionCacheStore
 from app.workers.queue import backoff_seconds, enqueue
-from app.workers.vision_queue import queue_vision, vision_order
+from app.workers.vision_queue import queue_vision, retry_vision, vision_order
 
 log = get_logger(__name__)
 ANALYSIS_BATCH_HIGH = 8  # small: likely deals should surface within seconds
@@ -252,7 +255,7 @@ async def analyze_batch(
     started = datetime.now(UTC)
     t0 = time.perf_counter()
     pending: list[tuple[uuid.UUID, str]] = []
-    follow_ups: list[tuple[str, str]] = []
+    ai_kicks: list[tuple[int, uuid.UUID]] = []  # (flip, opportunity) newly waiting for the strong model
     summary: dict[str, dict[str, int]] = {}
     try:
         async with session_scope() as s:
@@ -266,8 +269,10 @@ async def analyze_batch(
                 alerts = await evaluate_alerts(s, outcome, listing, catalog)
                 pending.extend(alerts)
                 r = outcome.result
-                if settings.ai_api_key and r.flip.score >= settings.ai_auto_analyze_min_flip_score:
-                    follow_ups.append(("ai_analyze_task", str(outcome.opportunity_id)))
+                if outcome.ai_pending and qualifies_for_strong_ai(
+                    settings, flip_score=r.flip.score, data_quality=r.data_quality
+                ):
+                    ai_kicks.append((r.flip.score, outcome.opportunity_id))
                 summary[str(listing.id)] = {
                     "flip": r.flip.score,
                     "confidence": r.confidence.score,
@@ -316,8 +321,9 @@ async def analyze_batch(
         )
     # Photo checks best first (risk-adjusted profit, then flip): the top few on the high queue.
     await queue_vision(vision)
-    for task, arg in follow_ups:
-        await enqueue(task, arg, job_id=f"ai:{arg}")
+    # The strong model's review: the best new rows now (best effort, within the quota room); the minute sweep
+    # (``ai_sweep_task``) picks up everything else in order, so nothing depends on this call.
+    await kick_ai_review(ai_kicks, settings)
     if summary:
         # Continuous analysis would otherwise empty the feed cache every few seconds; feed TTLs
         # (20-30 s) bound staleness, user actions still invalidate immediately.
@@ -326,19 +332,68 @@ async def analyze_batch(
 
 
 async def vision_task(ctx: dict[str, Any], listing_id: str) -> None:
+    deferred: VisionDeferred | None = None
     async with session_scope() as s:
-        changed = await run_vision(s, uuid.UUID(listing_id))
+        try:
+            changed = await run_vision(s, uuid.UUID(listing_id))
+        except VisionDeferred as exc:
+            # The model did not read the photos. What was measured is stored (and committed below).
+            changed, deferred = exc.changed, exc
     if changed:
         await enqueue("analyze_listing", listing_id, True, job_id=f"analyze:{listing_id}")
+    if deferred is not None:
+        await retry_vision(ctx, listing_id, deferred)  # raises Retry, or gives up after VISION_MAX_TRIES
 
 
-async def ai_analyze_task(ctx: dict[str, Any], opportunity_id: str) -> None:
-    async with session_scope() as s:
-        opp = await s.get(Opportunity, uuid.UUID(opportunity_id))
-        if opp is None or not opp.is_active or opp.ai_provider == "claude":
-            return
-        await run_ai_analysis(s, opp)
-    await cache.bump(NS_FEED)
+async def ai_analyze_task(ctx: dict[str, Any], opportunity_id: str) -> str:
+    """The strong model's review of one opportunity (see ``app.ai.queue``). It never waits: with no quota room, an
+    outage or an unusable answer it records the reason and the time of the next try on the row and returns, and the
+    sweep queues it again then. The rules' text is never written in its place. Returns what happened."""
+    settings = get_settings()
+    llm = get_llm()
+    if not llm.enabled:
+        return "disabled"
+    oid = uuid.UUID(opportunity_id)
+    room = await quota_room(settings, llm.model_for("strong"))  # before any connection is opened
+    if room.n <= 0:
+        await defer_opportunity(oid, room.reason, room.retry_after, settings=settings)
+        return "deferred"
+    try:
+        status = await review_opportunity(oid, settings)
+    except AiDeferred as exc:
+        await defer_opportunity(oid, exc.reason, exc.retry_after, settings=settings)
+        return "deferred"
+    except Exception:
+        log.exception("ai.review_failed", opportunity_id=opportunity_id)
+        await defer_opportunity(oid, "error", 0.0, settings=settings)  # counts: it must end, not loop
+        return "failed"
+    if status == "done":
+        await cache.bump_throttled(NS_FEED, FEED_BUMP_EVERY_SECONDS)
+    return status
+
+
+async def ai_sweep_task(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Every minute: queue the strong model's review of the best waiting opportunities, as many as the quota left
+    after the reserves allows (highest flip score first), each due a little after the previous so they spread over
+    the minute instead of arriving together."""
+    settings = get_settings()
+    llm = get_llm()
+    if not llm.enabled or settings.ai_auto_analyze_min_flip_score > 100:
+        return {"queued": 0, "reason": "off"}
+    room = await quota_room(settings, llm.model_for("strong"))
+    if room.n <= 0:
+        return {"queued": 0, "reason": room.reason}
+    ids = await claim_pending(settings, room.n)
+    rpm, _ = settings.ai_limits("strong")
+    step = 60.0 / rpm if rpm > 0 else 60.0 / max(1, len(ids))
+    queued = 0
+    for i, oid in enumerate(ids):
+        queued += await enqueue(
+            "ai_analyze_task", str(oid), high=True, job_id=f"ai:{oid}", defer_seconds=i * step if i else None
+        )
+    if queued:
+        log.info("ai.sweep", queued=queued, room=room.n)
+    return {"queued": queued, "claimed": len(ids), "room": room.n}
 
 
 async def review_candidates_task(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -363,6 +418,39 @@ async def review_candidates_task(ctx: dict[str, Any]) -> dict[str, Any]:
     if run is not None:
         await cache.bump(NS_FEED)
     return summary
+
+
+async def agent_propose_task(ctx: dict[str, Any]) -> dict[str, int]:
+    """For every user with autonomy on, the agent prepares a few purchase and markdown proposals. It never
+    executes: they land as blocked records, dry runs or tasks for the user, through the cycle's own policy. Off
+    unless AGENT_PROPOSE_ENABLED; a run needs model quota to spare and is skipped when nothing changed. One
+    transaction per user. Scheduled just before the autonomy cycle, whose rules then fill what the limits leave."""
+    from app.agent.propose import propose_for_user
+    from app.db.models import AutonomySettings
+
+    settings = get_settings()
+    llm = get_llm()
+    if not settings.agent_propose_enabled or not llm.enabled:
+        return {"users": 0, "ran": 0, "proposed": 0, "failed": 0}
+    async with session_scope() as s:
+        users = (
+            (await s.execute(select(AutonomySettings.user_id).where(AutonomySettings.enabled.is_(True))))
+            .scalars()
+            .all()
+        )
+    ran = proposed = failed = 0
+    for uid in users:
+        try:
+            async with session_scope() as s:
+                model = AnthropicAgentModel(llm)
+                run = await propose_for_user(s, uid, model=model, settings=settings, llm=llm)
+                if run is not None:
+                    ran += 1
+                    proposed += len((run.result or {}).get("proposed", []))
+        except Exception:  # one user's failure must not stop the others, it is logged
+            failed += 1
+            log.exception("agent.propose_failed", user_id=str(uid))
+    return {"users": len(users), "ran": ran, "proposed": proposed, "failed": failed}
 
 
 async def autonomy_cycle_task(ctx: dict[str, Any]) -> dict[str, int]:

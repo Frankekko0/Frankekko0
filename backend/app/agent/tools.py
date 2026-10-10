@@ -7,6 +7,11 @@ and *how to read* the answer. Nothing a tool returns is a number the model made 
 
 Tools that touch an opportunity only accept those of the run's scope. ``notify_user`` is the only
 tool with an outward effect and sits behind the guardrails (verdict, daily cap, de-duplication).
+
+The proposal tools (effect ``propose``, in ``proposal_registry`` only) never execute anything: they hand a
+purchase or a markdown to the autonomy engine, which checks it against the same limits, switches and verifier as
+its own cycle and records it as a blocked action, a dry run or a task for the user. The model supplies an id and a
+reason; every number comes from the stored analysis and the selling plan.
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -26,17 +31,28 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.guardrails import NOTIFIABLE, injection_suspected, wrap_untrusted
+from app.agent.guardrails import NOTIFIABLE, injection_suspected, neutralise, wrap_untrusted
 from app.ai.budget import AiBudget
+from app.autonomy import engine, policy
+from app.autonomy.limits import Limits, LimitsError, parse_limits
 from app.core.config import Settings
-from app.db.models import Alert, MarketComparable, Opportunity
+from app.db.models import (
+    Alert,
+    AutonomyAction,
+    AutonomySettings,
+    InventoryItem,
+    MarketComparable,
+    Opportunity,
+    Purchase,
+)
 from app.decision.allocation import Candidate, CapitalRules, allocate_capital
 from app.decision.engine import DecisionVerdict
 from app.domain.enums import AlertPriority, AlertType
 from app.profit.calculator import CostProfile, acquisition_cost, profit_for
 from app.profit.evaluation import evaluate_deal
+from app.selling import service as selling
 
-Effect = Literal["read", "compute", "notify", "final"]
+Effect = Literal["read", "compute", "notify", "propose", "final"]
 TOOL_TIMEOUT_SECONDS = 20.0
 MAX_OUTPUT_CHARS = 6000
 
@@ -55,6 +71,21 @@ class ToolContext:
     created_alerts: list[uuid.UUID] = field(default_factory=list)
     flagged_injection: set[str] = field(default_factory=set)
     submitted: dict[str, Any] | None = None
+    # Set by ``app.agent.propose`` only, never by a tool input: who the run proposes for and what it may touch.
+    user_id: uuid.UUID | None = None
+    inventory_scope: frozenset[str] = frozenset()  # purchase ids (as text) of the user's listed items
+    proposals_remaining: int = 0
+    proposed: list[uuid.UUID] = field(default_factory=list)  # autonomy actions this run wrote
+    proposed_keys: set[str] = field(
+        default_factory=set
+    )  # "buy:<opportunity>" / "reprice:<item>" already handled
+    llm: Any | None = None  # for the verifier's second opinion
+    now: datetime | None = None
+    costs: CostProfile | None = None  # the user's cost profile and minimum profit, for the selling plan
+    min_profit: float = 0.0
+    usage: policy.Usage | None = (
+        None  # what the user's limits have left, kept up to date as proposals are made
+    )
 
 
 Handler = Callable[[ToolContext, Any], Awaitable[dict[str, Any]]]
@@ -71,6 +102,7 @@ class Tool:
     input_model: type[BaseModel]
     handler: Handler
     effect: Effect
+    cached: bool = True  # False: the answer depends on what the run did meanwhile, so it is never replayed
 
     def definition(self) -> dict[str, Any]:
         schema = self.input_model.model_json_schema()
@@ -127,7 +159,7 @@ class ToolRegistry:
             name,
             hashlib.sha256(json.dumps(args.model_dump(mode="json"), sort_keys=True).encode()).hexdigest(),
         )
-        if tool.effect != "final" and key in self._cache:
+        if tool.effect != "final" and tool.cached and key in self._cache:
             hit = self._cache[key]
             return ToolResult(hit.ok, hit.output, hit.error, 0, cached=True)
         try:
@@ -138,7 +170,7 @@ class ToolRegistry:
         except Exception as exc:  # a bug in a tool must not end the run
             result = ToolResult(False, {}, f"errore interno dello strumento ({type(exc).__name__})")
         result.duration_ms = round((time.perf_counter() - started) * 1000)
-        if tool.effect != "final":
+        if tool.effect != "final" and tool.cached:
             self._cache[key] = result
         return result
 
@@ -476,6 +508,316 @@ async def submit_result(ctx: ToolContext, a: SubmitIn) -> dict[str, Any]:
     return {"received": len(a.picks), "note": "il motore decisionale verifica ogni scelta prima che conti"}
 
 
+# ------------------------------------------------------------------ proposals (they prepare, they never execute)
+PROPOSAL_DEDUPE_DAYS = 7
+
+
+def _need_user(ctx: ToolContext) -> uuid.UUID:
+    if ctx.user_id is None:
+        raise ToolError("questo strumento funziona solo in un'esecuzione per un utente")
+    return ctx.user_id
+
+
+def _now(ctx: ToolContext) -> datetime:
+    return ctx.now or datetime.now(UTC)
+
+
+def _money(value: Any) -> float | None:
+    return None if value is None else round(float(value), 2)
+
+
+async def _gate(ctx: ToolContext) -> tuple[Limits, policy.Switches, datetime]:
+    """The user's switches and limits, read now. A proposal needs autonomy to be on: with the kill switch, a
+    suspension or autonomy switched off nothing is proposed and nothing is written (as in the cycle)."""
+    uid = _need_user(ctx)
+    now = _now(ctx)
+    row = await ctx.session.get(AutonomySettings, uid)
+    if row is not None and row.killed:
+        raise ToolError("interruttore d'emergenza attivo: nessuna proposta")
+    if row is not None and row.suspended_at is not None:
+        raise ToolError("autonomia sospesa per un'anomalia: nessuna proposta")
+    if row is None or not row.enabled:
+        raise ToolError("autonomia non attiva: nessuna proposta")
+    try:
+        limits = parse_limits(row.limits)
+    except LimitsError as exc:
+        raise ToolError(f"limiti dell'utente non validi: {exc}") from exc
+    if ctx.usage is None:
+        ctx.usage = await engine.usage_for(ctx.session, uid, now)
+    return limits, engine.switches_of(row, now), now
+
+
+def _in_inventory_scope(ctx: ToolContext, purchase_id: str) -> uuid.UUID:
+    try:
+        pid = uuid.UUID(purchase_id)
+    except ValueError as exc:
+        raise ToolError("purchase_id non è un identificativo valido") from exc
+    if str(pid) not in ctx.inventory_scope:
+        raise ToolError("articolo fuori dal perimetro di questa esecuzione")
+    return pid
+
+
+async def _listed_item(ctx: ToolContext, purchase_id: uuid.UUID) -> tuple[Purchase, InventoryItem]:
+    """A listed item with a price, of the run's user and nobody else's."""
+    uid = _need_user(ctx)
+    row = (
+        await ctx.session.execute(
+            select(Purchase, InventoryItem)
+            .join(InventoryItem, InventoryItem.purchase_id == Purchase.id)
+            .where(Purchase.id == purchase_id, Purchase.user_id == uid, InventoryItem.user_id == uid)
+        )
+    ).one_or_none()
+    if row is None:
+        raise ToolError("articolo non trovato")
+    p, item = row
+    if item.stage != "listed" or item.listed_price is None:
+        raise ToolError("l'articolo non è pubblicato con un prezzo: niente da ribassare")
+    return p, item
+
+
+def _economics(ctx: ToolContext) -> tuple[CostProfile, float]:
+    if ctx.costs is not None:
+        return ctx.costs, ctx.min_profit
+    from app.opportunities.pipeline import default_cost_profile, default_targets
+
+    return default_cost_profile(), float(default_targets().min_profit)
+
+
+def _recorded(ctx: ToolContext, act: AutonomyAction, key: str) -> dict[str, Any]:
+    """What the model is told about a proposal that was written (a refusal by the policy is a normal answer)."""
+    ctx.proposals_remaining -= 1
+    ctx.proposed.append(act.id)
+    ctx.proposed_keys.add(key)
+    out: dict[str, Any] = {
+        "action_id": str(act.id),
+        "status": act.status,  # blocked | dry_run | pending_user | failed
+        "channel": act.channel,
+        "reasons": [{"code": r["code"], "label": r["label"]} for r in act.reasons or []],
+        "proposals_left": ctx.proposals_remaining,
+        "note": "preparata, non eseguita: su Vinted non viene inviato né cliccato nulla",
+    }
+    if act.payload.get("todo"):
+        out["todo"] = act.payload["todo"]
+    if act.verifier:
+        out["verifier"] = {
+            "agrees": act.verifier["agrees"],
+            "issues": [neutralise(str(i["label"]))[:200] for i in act.verifier["issues"]],
+        }
+    if ctx.proposals_remaining <= 0:
+        out["note"] += "; tetto di proposte raggiunto: chiudi con finish_proposals"
+    return out
+
+
+class ProposePurchaseIn(_Input):
+    opportunity_id: str
+    reason: str = Field(min_length=3, max_length=300)
+
+
+async def propose_purchase(ctx: ToolContext, a: ProposePurchaseIn) -> dict[str, Any]:
+    uid = _need_user(ctx)
+    if ctx.proposals_remaining <= 0:
+        raise ToolError("tetto di proposte di questa esecuzione raggiunto")
+    (o,) = await _load(ctx, [a.opportunity_id])
+    limits, sw, now = await _gate(ctx)
+    li = o.listing
+    if str(o.id) in ctx.flagged_injection or injection_suspected(f"{li.title}\n{li.description or ''}"):
+        ctx.flagged_injection.add(str(o.id))
+        raise ToolError("il testo dell'annuncio dà ordini a chi lo legge: non si propone l'acquisto")
+    key = f"buy:{o.id}"
+    if key in ctx.proposed_keys:
+        raise ToolError("acquisto già proposto in questa esecuzione")
+    if o.id in await engine.already_proposed(ctx.session, uid, now):
+        raise ToolError(f"acquisto già proposto negli ultimi {PROPOSAL_DEDUPE_DAYS} giorni")
+    assert ctx.usage is not None
+    act, ctx.usage = await engine.propose_buy(
+        ctx.session, uid, o, li, limits=limits, usage=ctx.usage, sw=sw, now=now, llm=ctx.llm,
+        source="agent", run_id=ctx.run_id, reason=neutralise(a.reason)[:300],
+    )  # fmt: skip
+    return _recorded(ctx, act, key)
+
+
+class ProposeRepriceIn(_Input):
+    purchase_id: str
+    reason: str = Field(min_length=3, max_length=300)
+
+
+async def _already_marked_down(
+    ctx: ToolContext, uid: uuid.UUID, item: InventoryItem, price: Decimal, now: datetime
+) -> str | None:
+    rows = (
+        await ctx.session.execute(
+            select(AutonomyAction.status, AutonomyAction.payload["price"].astext).where(
+                AutonomyAction.user_id == uid,
+                AutonomyAction.kind == "reprice",
+                AutonomyAction.inventory_id == item.id,
+                AutonomyAction.status.in_(("pending_user", "dry_run", "done")),
+                AutonomyAction.created_at >= now - timedelta(days=PROPOSAL_DEDUPE_DAYS),
+            )
+        )
+    ).all()
+    if any(status == "pending_user" for status, _ in rows):
+        return "c'è già un ribasso di questo articolo in attesa dell'utente"
+    if any(proposed is not None and Decimal(proposed) <= price for _, proposed in rows):
+        return "questo ribasso (o uno più basso) è già stato proposto da poco"
+    return None
+
+
+async def propose_reprice(ctx: ToolContext, a: ProposeRepriceIn) -> dict[str, Any]:
+    uid = _need_user(ctx)
+    if ctx.proposals_remaining <= 0:
+        raise ToolError("tetto di proposte di questa esecuzione raggiunto")
+    pid = _in_inventory_scope(ctx, a.purchase_id)
+    limits, sw, now = await _gate(ctx)
+    p, item = await _listed_item(ctx, pid)
+    key = f"reprice:{item.id}"
+    if key in ctx.proposed_keys:
+        raise ToolError("ribasso già proposto in questa esecuzione")
+    costs, min_profit = _economics(ctx)
+    view = await selling.reprice_advice(ctx.session, p, item, costs, min_profit, now)
+    advice = view.advice
+    # The agent may only LOWER a price, and only to the step the selling plan says is due: the model gives no number.
+    if advice is None or view.floor is None:
+        raise ToolError("manca un piano di prezzo per questo articolo: niente ribasso")
+    if advice.action != "lower" or advice.new_price is None:
+        raise ToolError(f"nessun ribasso da proporre adesso: {advice.reason}")
+    price = Decimal(str(advice.new_price)).quantize(Decimal("0.01"))
+    floor = Decimal(str(view.floor)).quantize(Decimal("0.01"))
+    assert item.listed_price is not None and ctx.usage is not None
+    if (why := await _already_marked_down(ctx, uid, item, price, now)) is not None:
+        raise ToolError(why)
+    act, ctx.usage = await engine.propose_reprice(
+        ctx.session, uid, p, item, price=price, floor=floor, current=item.listed_price, limits=limits,
+        usage=ctx.usage, sw=sw, now=now, source="agent", run_id=ctx.run_id, reason=neutralise(a.reason)[:300],
+    )  # fmt: skip
+    return _recorded(ctx, act, key)
+
+
+async def autonomy_status(ctx: ToolContext, _a: NoInput) -> dict[str, Any]:
+    """What the user's limits leave for this run (a state, not an error, when autonomy is off)."""
+    try:
+        limits, sw, _ = await _gate(ctx)
+    except ToolError as exc:
+        return {"active": False, "why": str(exc)}
+    usage = ctx.usage
+    assert usage is not None
+    daily = None if limits.daily_budget is None else limits.daily_budget - usage.spent_today
+    weekly = None if limits.weekly_budget is None else limits.weekly_budget - usage.spent_week
+    # Without both budgets nothing is bought, so there is nothing to allocate.
+    now_left = Decimal(0) if daily is None or weekly is None else max(Decimal(0), min(daily, weekly))
+    return {
+        "active": True,
+        "mode": "dry_run" if sw.dry_run else "assisted",
+        "daily_budget_left": _money(daily),
+        "weekly_budget_left": _money(weekly),
+        "budget_left_now": _money(now_left),
+        "max_per_item": _money(limits.max_per_item),
+        "items_in_stock": usage.owned_items,
+        "items_left": None if limits.max_items is None else max(0, limits.max_items - usage.owned_items),
+        "markdowns_left_today": max(0, limits.max_reprices_per_day - usage.reprices_today),
+        "proposals_left_in_this_run": ctx.proposals_remaining,
+        "note": "senza budget giornaliero, settimanale e massimo per articolo non si compra",
+    }
+
+
+class PlanPurchasesIn(_Input):
+    opportunity_ids: list[str] = Field(min_length=1, max_length=30)
+
+
+async def plan_purchases(ctx: ToolContext, a: PlanPurchasesIn) -> dict[str, Any]:
+    """The best purchases among ``opportunity_ids`` that the user's limits still allow (exact knapsack). The budget,
+    the cap per item and the room left in stock come from the limits and what has been used, not from the model."""
+    limits, _sw, _now = await _gate(ctx)
+    usage = ctx.usage
+    assert usage is not None
+    if limits.daily_budget is None or limits.weekly_budget is None or limits.max_per_item is None:
+        raise ToolError("senza budget giornaliero, settimanale e massimo per articolo non si compra")
+    left = min(limits.daily_budget - usage.spent_today, limits.weekly_budget - usage.spent_week)
+    room = 30 if limits.max_items is None else limits.max_items - usage.owned_items
+    count = min(room, ctx.proposals_remaining, 30)
+    if left <= 0 or count <= 0:
+        raise ToolError("budget o posti in giacenza esauriti: nessun acquisto da pianificare")
+    out = await allocate_tool(
+        ctx,
+        AllocateIn(
+            opportunity_ids=a.opportunity_ids, budget=left, max_per_item=limits.max_per_item, max_items=count
+        ),
+    )
+    return {**out, "budget_used_for_the_plan": _money(left), "max_per_item": _money(limits.max_per_item)}
+
+
+class ListedIn(_Input):
+    limit: int = Field(default=10, ge=1, le=30)
+
+
+async def list_listed_inventory(ctx: ToolContext, a: ListedIn) -> dict[str, Any]:
+    uid = _need_user(ctx)
+    ids = [uuid.UUID(i) for i in sorted(ctx.inventory_scope)]
+    rows = (
+        await ctx.session.execute(
+            select(Purchase, InventoryItem)
+            .join(InventoryItem, InventoryItem.purchase_id == Purchase.id)
+            .where(
+                Purchase.id.in_(ids),
+                Purchase.user_id == uid,
+                InventoryItem.user_id == uid,
+                InventoryItem.stage == "listed",
+                InventoryItem.listed_price.is_not(None),
+            )
+        )
+    ).all()
+    now = _now(ctx)
+    items: list[dict[str, Any]] = sorted(
+        (
+            {
+                "purchase_id": str(p.id),
+                "title": wrap_untrusted(p.title, 120),
+                "asking_price": _money(i.listed_price),
+                "min_price": _money(i.min_price),
+                "total_cost": _money(p.total_cost),
+                "days_listed": round(selling.days_listed(i, now=now), 1),
+                "views": i.views,
+                "favourites": i.favourites,
+            }
+            for p, i in rows
+        ),
+        key=lambda x: -x["days_listed"],
+    )
+    return {"count": len(items), "items": items[: a.limit]}
+
+
+class RepriceAdviceIn(_Input):
+    purchase_id: str
+
+
+async def reprice_advice_tool(ctx: ToolContext, a: RepriceAdviceIn) -> dict[str, Any]:
+    pid = _in_inventory_scope(ctx, a.purchase_id)
+    p, item = await _listed_item(ctx, pid)
+    costs, min_profit = _economics(ctx)
+    view = await selling.reprice_advice(ctx.session, p, item, costs, min_profit, _now(ctx))
+    if view.advice is None:
+        return {"available": False, "note": "nessun prezzo di riferimento: niente consiglio sul prezzo"}
+    return {
+        "available": True,
+        "asking_price": _money(item.listed_price),
+        "days_listed": round(selling.days_listed(item, now=_now(ctx)), 1),
+        "floor": _money(view.floor),
+        "action": view.advice.action,  # lower | raise | hold | improve_listing
+        "new_price": view.advice.new_price,
+        "reason": view.advice.reason,
+        "can_propose": view.advice.action == "lower",
+        "note": "si propongono solo ribassi al prezzo indicato dal piano, mai sotto il minimo",
+    }
+
+
+class FinishIn(_Input):
+    summary: str = Field(min_length=3, max_length=500)
+
+
+async def finish_proposals(ctx: ToolContext, a: FinishIn) -> dict[str, Any]:
+    ctx.submitted = {"summary": neutralise(a.summary)[:500], "proposed": [str(x) for x in ctx.proposed]}
+    return {"received": True, "proposals": len(ctx.proposed)}
+
+
 def default_registry() -> ToolRegistry:
     r = ToolRegistry()
     for name, desc, model, handler, effect in (
@@ -538,4 +880,81 @@ def default_registry() -> ToolRegistry:
         ),
     ):
         r.register(Tool(name, desc, model, handler, effect))  # type: ignore[arg-type]
+    return r
+
+
+# Flat tools only: their schemas use nothing but types, bounds and lengths, which every provider takes (the review's
+# finance and allocation tools carry unions and exclusive bounds, so the proposing agent has its own).
+PROPOSAL_TOOLS = ("list_candidates", "get_opportunity", "comparables_search")
+
+
+def proposal_registry() -> ToolRegistry:
+    """The tools of the proposing agent: the review's read and compute tools (not ``notify_user``, not
+    ``submit_result``) and the ones that prepare purchases and markdowns. Kept apart from ``default_registry`` so
+    the review agent can never reach a ``propose`` tool."""
+    base = default_registry()
+    r = ToolRegistry()
+    for name in PROPOSAL_TOOLS:
+        tool = base.get(name)
+        assert tool is not None
+        r.register(tool)
+    for name, desc, model, handler, effect, cached in (
+        (
+            "autonomy_status",
+            "Cosa lasciano i limiti dell'utente: budget di oggi e della settimana, articoli in giacenza, ribassi ancora possibili, proposte che puoi ancora fare. Usalo prima di proporre.",
+            NoInput,
+            autonomy_status,
+            "read",
+            False,
+        ),
+        (
+            "plan_purchases",
+            "Tra le opportunità indicate, la combinazione di acquisti migliore che i limiti dell'utente consentono ancora (ottimo esatto sul profitto corretto per il rischio). Budget e tetti li mette il codice, non tu.",
+            PlanPurchasesIn,
+            plan_purchases,
+            "compute",
+            False,
+        ),
+        (
+            "list_listed_inventory",
+            "Gli articoli dell'utente in vendita su Vinted, i più fermi per primi: prezzo richiesto, giorni, visualizzazioni, minimo.",
+            ListedIn,
+            list_listed_inventory,
+            "read",
+            True,
+        ),
+        (
+            "reprice_advice",
+            "Il consiglio sul prezzo di un articolo in vendita (ribassare, tenere, migliorare l'annuncio), calcolato dal piano di vendita: il prezzo nuovo non lo scegli tu.",
+            RepriceAdviceIn,
+            reprice_advice_tool,
+            "compute",
+            True,
+        ),
+        (
+            "propose_purchase",
+            "Prepara la proposta di acquisto di un'opportunità. NON compra e non invia né clicca nulla su Vinted: crea un'azione registrata (o un compito per l'utente) se limiti, verificatore indipendente e interruttori lo consentono, altrimenti la registra come bloccata con i motivi. Costi e prezzi vengono dall'analisi, non da te.",
+            ProposePurchaseIn,
+            propose_purchase,
+            "propose",
+            True,
+        ),
+        (
+            "propose_reprice",
+            "Prepara un ribasso del prezzo di un articolo in vendita, solo se reprice_advice dice 'lower'. NON cambia nulla su Vinted: crea un compito per l'utente (o una registrazione di prova). Il prezzo è quello del piano di vendita, mai sotto il minimo.",
+            ProposeRepriceIn,
+            propose_reprice,
+            "propose",
+            True,
+        ),
+        (
+            "finish_proposals",
+            "Conclude l'esecuzione con un riepilogo di una frase: cosa hai proposto e cosa hai scartato e perché. Chiamalo sempre alla fine.",
+            FinishIn,
+            finish_proposals,
+            "final",
+            True,
+        ),
+    ):
+        r.register(Tool(name, desc, model, handler, effect, cached))  # type: ignore[arg-type]
     return r

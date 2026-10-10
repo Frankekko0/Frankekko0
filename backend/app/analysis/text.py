@@ -99,6 +99,20 @@ _RISK_PHRASES: list[tuple[str, str, re.Pattern[str]]] = [
     ("external_link", "Contiene un link esterno", re.compile(r"https?://|www\.")),
 ]
 
+
+def off_platform_hits(text: str) -> list[dict[str, str]]:
+    """Contact or payment outside the platform, advance payment and external links found in ``text``, as
+    ``{code, label, evidence}``. The one definition shared by the listing analysis and by the checks on texts
+    the app writes for the user (negotiation messages)."""
+    # lowercase, no accents, compatibility forms flattened (full-width letters become plain ones)
+    low = fold(text).replace("ß", "ss")
+    return [
+        {"code": code, "label": label, "evidence": m.group(0).strip()[:40]}
+        for code, label, rx in _RISK_PHRASES
+        if (m := rx.search(low))
+    ]
+
+
 _VAGUE = (
     "come da foto", "come in foto", "come nelle foto", "visibile in foto", "vedi foto", "guardate le foto",
     "guarda le foto", "difetto in foto", "as seen in photos", "as seen in the photos", "see photos", "see pictures",
@@ -295,9 +309,7 @@ def analyze_text(title: str | None, description: str | None) -> TextSignals:
     sig.mentions_tags = _any(text, _TAGS) is not None
     sig.open_to_offers = _any(text, _NEGOTIABLE) is not None
     sig.vague_phrases = [v for v in _VAGUE if v in text]
-    for code, label, rx in _RISK_PHRASES:
-        if m := rx.search(text):
-            sig.risk_phrases.append({"code": code, "label": label, "evidence": m.group(0).strip()[:40]})
+    sig.risk_phrases = off_platform_hits(text)
     if _LOT.search(text):
         sig.lot_pieces = int(m.group(1)) if (m := _PIECES.search(text)) else 2
     elif m := _PIECES.search(text):

@@ -58,7 +58,13 @@ class FakeLLM:
         self.content: list[dict[str, Any]] = []
 
     async def structured(
-        self, *, system: str, content: list[dict[str, Any]], schema: dict[str, Any], purpose: str
+        self,
+        *,
+        system: str,
+        content: list[dict[str, Any]],
+        schema: dict[str, Any],
+        purpose: str,
+        raise_on_defer: bool = False,
     ) -> dict[str, Any]:
         self.content = content
         return self.data

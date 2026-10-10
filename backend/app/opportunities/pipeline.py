@@ -10,11 +10,12 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.ai.verdicts import LLM_PROVIDERS, reclamp_analysis, reviewed_fields
 from app.analysis.dossier import finalize_dossier
 from app.analytics.calibration import STATE_KEY as CALIBRATION_KEY
 from app.analytics.calibration import Calibration
@@ -34,7 +35,7 @@ from app.db.models import (
     SoldSale,
     SystemState,
 )
-from app.domain.enums import AcquisitionMode, CaptureLevel, ListingStatus
+from app.domain.enums import AcquisitionMode, CaptureLevel, ListingStatus, Verdict
 from app.external.keys import model_key
 from app.identification.taxonomy import fold
 from app.ingestion.catalog import Catalog, load_catalog
@@ -137,6 +138,9 @@ class AnalysisOutcome:
     analysis_id: uuid.UUID | None = None
     analysis_created: bool = False
     trigger: str | None = None
+    # True when this is a new analysis the model has no valid review of (a new listing, or a change that makes the
+    # old review stale): it has just entered the model-analysis queue (see ``app.ai.queue``).
+    ai_pending: bool = False
 
 
 _SIZE_TOKEN = re.compile(r"^(?:x{0,4}[sl]|xx+|[2-5]\d)$")
@@ -767,6 +771,11 @@ class AnalysisPipeline:
         """
         version = self.settings.algorithm_version
         ids = [listing.id for listing, _ in items]
+        # The model's review of a row is kept (not overwritten with the rules' text) while it is still valid for the
+        # current analysis; the JSON of those rows is read only for them.
+        reviewed = Opportunity.ai_provider.in_(sorted(LLM_PROVIDERS)) & (
+            Opportunity.ai_for_analysis_id == Opportunity.analysis_id
+        )
         previous = {
             r.listing_id: r
             for r in (
@@ -776,6 +785,19 @@ class AnalysisPipeline:
                         Opportunity.flip_score,
                         Opportunity.listing_price,
                         Opportunity.dossier,
+                        Opportunity.analysis_id,
+                        Opportunity.ai_provider,
+                        Opportunity.ai_for_analysis_id,
+                        Opportunity.ai_attempts,
+                        Opportunity.ai_next_attempt_at,
+                        Opportunity.ai_last_error,
+                        reviewed.label("ai_reviewed"),
+                        case((reviewed, Opportunity.ai_analysis)).label("kept_ai_analysis"),
+                        case((reviewed, Opportunity.ai_analyzed_at)).label("kept_ai_analyzed_at"),
+                        case((reviewed, Opportunity.verdict)).label("kept_verdict"),
+                        case((reviewed, Opportunity.decision)).label("kept_decision"),
+                        case((reviewed, Opportunity.decision_verdict)).label("kept_decision_verdict"),
+                        case((reviewed, Opportunity.recommended_action)).label("kept_recommended_action"),
                     ).where(Opportunity.listing_id.in_(ids))
                 )
             ).all()
@@ -786,6 +808,7 @@ class AnalysisPipeline:
         rows: list[dict[str, Any]] = []
         analysis_rows: list[dict[str, Any]] = []
         analysis_info: dict[uuid.UUID, tuple[uuid.UUID, bool, str | None]] = {}
+        ai_pending: dict[uuid.UUID, bool] = {}
         for listing, result in ordered:
             values = opportunity_values(listing, result, version, now, mode)
             inputs = listing_inputs(listing)
@@ -827,7 +850,11 @@ class AnalysisPipeline:
                     }
                 )
             analysis_info[listing.id] = (analysis_id, created, why)
-            rows.append({"id": uuid.uuid4(), "created_at": now, **values, "analysis_id": analysis_id})
+            row = {"id": uuid.uuid4(), "created_at": now, **values, "analysis_id": analysis_id}
+            ai_pending[listing.id] = self._keep_review(
+                row, previous.get(listing.id), prev, created, analysis_id, inputs, version
+            )
+            rows.append(row)
         if analysis_rows:
             await self.session.execute(Analysis.__table__.insert(), analysis_rows)
         # One single-row statement run with many parameter sets ("insertmanyvalues"): compiled
@@ -898,9 +925,89 @@ class AnalysisPipeline:
                 analysis_id=analysis_info[listing.id][0],
                 analysis_created=analysis_info[listing.id][1],
                 trigger=analysis_info[listing.id][2],
+                ai_pending=ai_pending[listing.id],
             )
             for listing, result in items
         ]
+
+    def _keep_review(
+        self,
+        row: dict[str, Any],
+        old: Any,
+        prev: Any,
+        created: bool,
+        analysis_id: uuid.UUID,
+        inputs: dict[str, Any],
+        version: str,
+    ) -> bool:
+        """Decide what happens to the model's review of this listing when its row is written (``row`` is updated in
+        place); returns True when this is a new analysis the model has no valid review of (the row enters the
+        queue now: the batch may kick it; a row that has been waiting since before is left to the sweep).
+
+        * No valid review (a new row, or only the rules' text): the rules' text is written as before, and when
+          the analysis is a new one the queue state starts over. The same analysis again leaves the queue state
+          (backoff, attempts) alone.
+        * A review and the same analysis again: nothing the model wrote is touched.
+        * A review and a new analysis that is not a material change (only the market moved a little: same inputs
+          and algorithm, the flip score within ``ai_reanalyze_flip_delta``, the same engine verdict): the review
+          is kept, its two numbers are held to the new computed ones and its caution is applied again to the new
+          decision (never the old decision copied: that would carry old numbers).
+        * A review and a material change: the rules' text is written and the review is queued again.
+        """
+        fresh = {
+            "ai_for_analysis_id": None,
+            "ai_attempts": 0,
+            "ai_next_attempt_at": None,
+            "ai_last_error": None,
+        }
+        if old is None:
+            row |= fresh
+            return True
+        if not old.ai_reviewed:
+            if created:
+                row |= fresh
+                return True
+            row |= {k: getattr(old, k) for k in fresh}  # the same analysis again: the backoff stands
+            return False
+        stored = {
+            "ai_analysis": old.kept_ai_analysis,
+            "ai_provider": old.ai_provider,
+            "ai_analyzed_at": old.kept_ai_analyzed_at,
+            "verdict": old.kept_verdict,
+            "decision": old.kept_decision,
+            "decision_verdict": old.kept_decision_verdict,
+            "recommended_action": old.kept_recommended_action,
+        }
+        if not created:
+            row |= stored | {k: getattr(old, k) for k in fresh}
+            return False
+        material = (
+            prev is None
+            or prev.algorithm_version != version
+            or jsonable(inputs) != prev.inputs
+            or abs(row["flip_score"] - old.flip_score) >= self.settings.ai_reanalyze_flip_delta
+            or row["decision_verdict"] != prev.decision_verdict
+        )
+        if material:
+            row |= fresh
+            return True
+        analysis = reclamp_analysis(
+            old.kept_ai_analysis or {},
+            max_buy_price=row["max_buy_price"],
+            quick_sale_price=row["quick_sale_price"],
+            optimistic_sale_price=row["optimistic_sale_price"],
+        )
+        row |= {
+            "ai_analysis": analysis,
+            "ai_provider": old.ai_provider,
+            "ai_analyzed_at": old.kept_ai_analyzed_at,
+            **reviewed_fields(
+                row["decision"], row["verdict"], Verdict(analysis.get("verdict", row["verdict"]))
+            ),
+            **fresh,
+            "ai_for_analysis_id": analysis_id,
+        }
+        return False
 
     async def _current_analyses(self, listing_ids: list[uuid.UUID]) -> dict[uuid.UUID, Any]:
         """The analysis each listing's opportunity points at (what the next one is compared to)."""
@@ -912,6 +1019,9 @@ class AnalysisPipeline:
                 Analysis.result_hash,
                 Analysis.algorithm_version,
                 Analysis.inputs,
+                Analysis.decision["decision_verdict"].astext.label(
+                    "decision_verdict"
+                ),  # the engine's, never lowered
             )
             .join(Analysis, Analysis.id == Opportunity.analysis_id)
             .where(Opportunity.listing_id.in_(listing_ids))

@@ -9,20 +9,29 @@ import pytest
 
 from app.workers import vision_queue
 from app.workers.main import _cron_jobs, _functions
-from app.workers.vision_queue import VISION_HIGH_TOP, queue_vision, vision_order
+from app.workers.vision_queue import VISION_HIGH_TOP, queue_vision, vision_order, worth_vision
 from tests.api.test_api import API
 from tests.api.test_extension_api import CARD, _paired
 from tests.integration.test_pipeline import build_market
 
 
-def _outcome(rap: float | None, flip: int, *, uploaded: bool = True, vision: bool = False) -> Any:
+def _outcome(
+    rap: float | None,
+    flip: int,
+    *,
+    uploaded: bool = True,
+    vision: bool | str = False,
+    trigger: str | None = None,
+) -> Any:
+    """``vision``: False (never checked), True (checked by the model) or an analyzer name (e.g. "heuristic")."""
     lid = uuid.uuid4()
+    analyzer = "claude_vision" if vision is True else vision
     listing = SimpleNamespace(
         images=[SimpleNamespace(url="https://img/1.jpg", local_path="ab/abcd.jpg" if uploaded else None)],
-        identification={"vision": {"x": 1}} if vision else {},
+        identification={"vision": {"analyzer": analyzer}} if vision else {},
     )
     result = SimpleNamespace(risk_adjusted_profit=rap, flip=SimpleNamespace(score=flip))
-    return SimpleNamespace(listing_id=lid, listing=listing, result=result)
+    return SimpleNamespace(listing_id=lid, listing=listing, result=result, trigger=trigger)
 
 
 def test_order_best_first_and_only_worth_checking() -> None:
@@ -38,6 +47,58 @@ def test_order_best_first_and_only_worth_checking() -> None:
     order = vision_order([a, b, c, d, e, f, g, h])
     assert order == [str(o.listing_id) for o in (b, c, a, d)]
     assert vision_order([a, b], after_vision=True) == []
+
+
+def test_always_checks_every_complete_gallery_not_yet_checked_best_first() -> None:
+    a = _outcome(12.0, 50)
+    b = _outcome(30.0, 40)
+    c = _outcome(12.0, 70)
+    d = _outcome(None, 65)
+    e = _outcome(-5.0, 20)  # not worth it by profit or flip: checked all the same
+    f = _outcome(50.0, 80, uploaded=False)  # the browser has not uploaded the photos yet
+    g = _outcome(50.0, 80, vision=True)  # already checked by the model
+    h = _outcome(50.0, 80)
+    h.listing.images.append(SimpleNamespace(url="https://img/2.jpg", local_path=None))  # half uploaded
+    removed = _outcome(50.0, 80)  # a removed photo does not hold the gallery back, a missing one does
+    removed.listing.images.append(SimpleNamespace(url="https://img/3.jpg", local_path=None, removed_at="x"))
+    order = vision_order([a, b, c, d, e, f, g, h, removed], always=True)
+    # Profit first, then flip; no estimate after those that have one, as in the gated order.
+    assert order == [str(o.listing_id) for o in (removed, b, c, a, e, d)]
+    assert vision_order([a, b], after_vision=True, always=True) == []
+
+
+def test_a_photo_check_means_a_model_analysis_not_the_local_measures() -> None:
+    local_only = _outcome(30.0, 80, vision="heuristic")  # measured locally (or the model call failed)
+    by_model = _outcome(30.0, 80, vision=True)
+    unnamed = _outcome(30.0, 80)
+    unnamed.listing.identification = {"vision": {"x": 1}}  # a stored block that names no analyzer
+    assert worth_vision(local_only, always=True) is True  # asked again
+    assert worth_vision(unnamed, always=True) is True
+    assert worth_vision(by_model, always=True) is False
+    # Only the analyses that touch the photos ask again: a price change never does.
+    assert not worth_vision(_outcome(30.0, 80, vision="heuristic", trigger="price_change"), always=True)
+    assert worth_vision(_outcome(30.0, 80, vision="heuristic", trigger="photos"), always=True)
+    assert worth_vision(_outcome(30.0, 80, vision=True, trigger="photos"), always=True)  # new photos: again
+
+
+def test_the_settings_decide_when_always_is_not_given(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core.config import Settings
+
+    def with_settings(**kw: Any) -> None:
+        monkeypatch.setattr(vision_queue, "get_settings", lambda: Settings(**kw))
+
+    clear = _outcome(-5.0, 20)
+    done_locally = _outcome(50.0, 80, vision="heuristic")
+    with_settings(ai_vision_always=True, ai_api_key="k")
+    assert worth_vision(clear) is True
+    with_settings(ai_vision_always=True, ai_api_key="k", ai_vision_enabled=False)  # photos switched off
+    assert worth_vision(clear) is False
+    with_settings(ai_vision_always=True)  # no key: no model to ask, no empty jobs
+    assert worth_vision(clear) is False
+    # Without a model the local measures are all there is, and they are done once: no job per analysis.
+    assert worth_vision(done_locally) is False
+    with_settings(ai_api_key="k")  # a model, but "always" off: the value-of-information gate stays
+    assert worth_vision(clear) is False and worth_vision(done_locally) is True
 
 
 async def test_queue_top_few_high_then_default_in_order(monkeypatch: pytest.MonkeyPatch) -> None:

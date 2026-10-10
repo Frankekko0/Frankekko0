@@ -32,7 +32,8 @@ from app.vision.types import ImageAnalysis
 
 log = get_logger(__name__)
 # Bump when the prompt or the schema of the photo analysis changes: every stored answer is then stale.
-VISION_PROMPT_VERSION = "vision-2026.10-2"
+# (-3: answers stored before a failed model call stopped being cached may hold the local fallback as a "result".)
+VISION_PROMPT_VERSION = "vision-2026.10-3"
 RETENTION_DAYS = 90
 Scope = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
@@ -119,7 +120,11 @@ class CachedImageAnalyzer(ImageAnalyzer):
         if hit is not None:
             log.info("vision.cache_hit", photos=len(have))
             return ImageAnalysis.model_validate(hit)
+        # A model analyzer that cannot answer raises (``VisionDeferred``): nothing is stored, so the next run asks
+        # the model again instead of being served the failure.
         result = await self.inner.analyze(photos, context)
+        if result.analyzer == "heuristic" and self.inner.name != "heuristic":
+            return result  # the local measures are no answer of the model: never remembered as one
         try:
             await self.store.put(key, self.model, len(have), result.model_dump(mode="json"))
         except Exception as exc:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import statistics
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -15,7 +16,7 @@ from app.db.models import InventoryItem, Listing, Opportunity, PredictionOutcome
 from app.intelligence import survival
 from app.opportunities.queries import price_band
 from app.profit.calculator import CostProfile, sale_revenue
-from app.selling import learning, listing_draft, pricing
+from app.selling import learning, listing_draft, pricing, repricing
 from app.selling.stages import STAGES
 
 DEFECT_IT = {
@@ -123,6 +124,48 @@ async def resale_plan(
     )
 
 
+@dataclass(frozen=True)
+class RepriceView:
+    """A purchase's resale plan and, for an item that is listed with a price, today's advice on that price."""
+
+    plan: pricing.ResalePlan | None
+    fit: survival.SurvivalFit
+    reference: float | None
+    floor: float | None  # the lowest price a markdown may reach; None when there is no advice
+    advice: repricing.RepriceAdvice | None
+
+
+def markdown_floor(plan: pricing.ResalePlan, item: InventoryItem) -> float:
+    """Never below the plan's floor, and never below the minimum price the user set for the item."""
+    return max(plan.floor, float(item.min_price)) if item.min_price is not None else plan.floor
+
+
+async def reprice_advice(
+    session: AsyncSession,
+    p: Purchase,
+    item: InventoryItem,
+    costs: CostProfile,
+    min_profit: float,
+    now: datetime | None = None,
+) -> RepriceView:
+    """The one place that turns a listed item into a price advice (used by the plan endpoint and by the agent)."""
+    now = now or datetime.now(UTC)
+    plan, fit, ref = await resale_plan(session, p, costs, min_profit, now)
+    floor: float | None = None
+    advice: repricing.RepriceAdvice | None = None
+    if plan is not None and item.stage == "listed" and item.listed_price is not None:
+        floor = markdown_floor(plan, item)
+        advice = repricing.advise(
+            days_listed=days_listed(item, now=now),
+            asking=float(item.listed_price),
+            floor=floor,
+            markdowns=plan.markdowns,
+            views=item.views,
+            favourites=item.favourites,
+        )
+    return RepriceView(plan, fit, ref, floor, advice)
+
+
 async def draft_for(session: AsyncSession, p: Purchase) -> listing_draft.ListingDraft:
     listing = await session.get(Listing, p.listing_id) if p.listing_id else None
     vision: dict[str, Any] = ((listing.identification or {}).get("vision") or {}) if listing else {}
@@ -211,14 +254,8 @@ def add_price_event(item: InventoryItem, price: Decimal, reason: str, now: datet
         item.initial_price = price
 
 
-def days_listed(item: InventoryItem, today: date | None = None) -> float:
+def days_listed(item: InventoryItem, today: date | None = None, *, now: datetime | None = None) -> float:
     if item.listed_at is None:
         return 0.0
-    return max(
-        0.0,
-        (
-            (datetime.now(UTC) if today is None else datetime.combine(today, datetime.min.time(), UTC))
-            - item.listed_at
-        ).total_seconds()
-        / 86400,
-    )
+    ref = now or (datetime.now(UTC) if today is None else datetime.combine(today, datetime.min.time(), UTC))
+    return max(0.0, (ref - item.listed_at).total_seconds() / 86400)

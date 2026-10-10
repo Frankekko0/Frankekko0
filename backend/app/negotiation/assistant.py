@@ -9,9 +9,14 @@ fees), never pressure. Sending is left to the user (FlipFinder does not act on V
 
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+from app.agent.guardrails import injection_suspected, neutralise
+from app.analysis.text import off_platform_hits
 
 PRESSURE_PHRASES = (
     "ultimo prezzo",
@@ -47,6 +52,10 @@ class NegotiationPlan:
     willingness_factors: list[str] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
     messages: dict[str, str] = field(default_factory=dict)
+    # Where each message comes from: {"source": "template" | "model", "violations": [codes]}. The templates are
+    # the default; the model's drafts replace them one by one, only when they pass ``negotiation.guard``.
+    message_meta: dict[str, dict[str, Any]] = field(default_factory=dict)
+    ai: dict[str, Any] = field(default_factory=lambda: ai_block())
     note: str = ""
 
     def as_dict(self) -> dict[str, Any]:
@@ -61,8 +70,28 @@ class NegotiationPlan:
             "willingness_factors": self.willingness_factors,
             "reasons": self.reasons,
             "messages": self.messages,
+            "messages_meta": self.message_meta,
+            "ai": self.ai,
             "note": self.note,
         }
+
+
+def ai_block(**fields: Any) -> dict[str, Any]:
+    """What the answer says about the model's part in the messages (nothing, until a draft is asked for)."""
+    return {
+        "enabled": False,  # the model can be asked to write the messages
+        "used": False,  # at least one message below is the model's
+        "provider": None,
+        "model": None,
+        "fallback": None,  # why the templates stayed: disabled | no_model | injection | rate_limited | ...
+        "retry_after": None,
+        "prompt_version": None,
+        "tone": None,
+        "cached": False,
+        "generated_at": None,
+        "injection_suspected": False,
+        **fields,
+    }
 
 
 def eur(v: float) -> str:
@@ -97,7 +126,42 @@ def willingness(sig: SellerSignals) -> tuple[int, list[str]]:
 
 def _short(title: str, limit: int = 40) -> str:
     t = " ".join(title.split())
-    return t if len(t) <= limit else t[: limit - 1].rstrip() + "…"
+    if len(t) <= limit:
+        return t
+    cut = t[: limit - 1]
+    if t[limit - 1] != " " and " " in cut:  # do not cut a word in half
+        cut = cut.rsplit(" ", 1)[0]
+    return cut.rstrip() + "…"
+
+
+GENERIC_ITEM = "l'articolo"
+_PRICE_IN_TITLE = re.compile(
+    r"(?:€|\beur(?:o|os)?\b)\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s*(?:€|eur(?:o|os)?\b)", re.IGNORECASE
+)
+
+
+def item_label(title: str | None, limit: int = 40) -> str:
+    """The item as named in a message: the start of the listing title, made inert (no markup that could close
+    the untrusted-text delimiters), without prices, and replaced by a generic word when the title carries a
+    contact, a link, a payment outside the platform, an order or pressure. The title is the seller's text: only
+    this label ever reaches a message, never the title itself."""
+    clean = " ".join(_PRICE_IN_TITLE.sub(" ", neutralise(title or "")).split())
+    if not clean or off_platform_hits(clean) or injection_suspected(clean) or pressure_phrases(clean):
+        return GENERIC_ITEM
+    return _short(clean, limit)
+
+
+def opening_offer(suggested: float | None, max_buy: float | None) -> float | None:
+    """The price to open with, always room below the most worth paying. It is the offer engine's own suggestion
+    (``Opportunity.suggested_offer``); without one, a notch under the maximum (the engine's 95% rule, in whole
+    euros), so the seller has something to haggle down from and the buyer something to come up to. The stored
+    suggestion was made with the economics of the analysis: it is clamped to the maximum of the user asking now."""
+    if suggested is not None and suggested > 0:
+        return suggested if max_buy is None else min(suggested, max_buy)
+    if max_buy is None or max_buy <= 0:
+        return None
+    lower = float(math.floor(max_buy * 0.95))
+    return lower if lower > 0 else round(max_buy * 0.95, 2)
 
 
 def build_plan(
@@ -113,6 +177,8 @@ def build_plan(
 ) -> NegotiationPlan:
     sig = signals or SellerSignals()
     score, factors = willingness(sig)
+    if ideal_offer is not None and max_buy is not None:
+        ideal_offer = min(ideal_offer, max_buy)  # the opening offer is never above what is worth paying
     plan = NegotiationPlan(
         asked=asked,
         ideal_offer=ideal_offer,
@@ -145,7 +211,7 @@ def build_plan(
         plan.reasons.append(
             "Al prezzo richiesto, tra protezione acquirenti e spedizione, il margine per me non regge"
         )
-    short = _short(title)
+    short = item_label(title)
     offer = ideal_offer if ideal_offer is not None else max_buy
     if offer is None or offer >= asked:
         plan.note = "Il prezzo richiesto è già dentro la soglia: non serve trattare, salvo un lotto."
@@ -176,6 +242,7 @@ def build_plan(
             plan.messages["accept"] = f"Ciao, mi interessa {short}: la prendo al prezzo indicato. Grazie!"
         elif max_buy is not None and max_buy < asked * 0.75:
             plan.note = "Lo sconto necessario supera il 25%: è probabile che il venditore non accetti. Meglio osservare."
+    plan.message_meta = {k: {"source": "template", "violations": []} for k in plan.messages}
     return plan
 
 

@@ -78,6 +78,12 @@ class Opportunity(Base):
         Index("ix_opportunities_ultra", "is_ultra_deal", postgresql_where=text("is_active")),
         Index("ix_opportunities_analyzed_at", "analyzed_at"),
         Index("ix_opportunities_active_rap", "is_active", text("risk_adjusted_profit DESC NULLS LAST")),
+        # What still waits for the model's review (see ``app.ai.queue``).
+        Index(
+            "ix_opportunities_ai_queue",
+            "flip_score",
+            postgresql_where=text("is_active AND ai_for_analysis_id IS DISTINCT FROM analysis_id"),
+        ),
         CheckConstraint(
             "decision_verdict IS NULL OR decision_verdict IN "
             "('STRONG_BUY','BUY','NEGOTIATE','WATCHLIST','PASS','INSUFFICIENT_EVIDENCE')",
@@ -173,6 +179,13 @@ class Opportunity(Base):
     ai_analysis: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     ai_provider: Mapped[str | None] = mapped_column(String(32))
     ai_analyzed_at: Mapped[datetime | None] = mapped_column()
+    # The model-analysis queue is this row: the review above was written for the analysis ``ai_for_analysis_id``
+    # (a row whose current analysis differs waits for one); ``ai_attempts`` counts the failures that count,
+    # ``ai_next_attempt_at`` is the backoff (or the lease of a queued job), ``ai_last_error`` the last reason.
+    ai_for_analysis_id: Mapped[uuid.UUID | None] = mapped_column()
+    ai_attempts: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")
+    ai_next_attempt_at: Mapped[datetime | None] = mapped_column()
+    ai_last_error: Mapped[str | None] = mapped_column(String(48))
 
     analyzed_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), default=utcnow)

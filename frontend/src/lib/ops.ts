@@ -94,10 +94,46 @@ export interface Negotiation {
   willingness_factors: string[];
   reasons: string[];
   messages: Record<string, string>;
+  /** Where each message comes from; absent on an older server (then every message is a template). */
+  messages_meta?: Record<string, MessageMeta>;
+  ai?: NegotiationAi;
   note: string;
+}
+export type DraftTone = "polite" | "direct" | "firm";
+export interface MessageMeta {
+  source: "template" | "model";
+  /** The rules a model draft broke (the template stayed). */
+  violations: string[];
+  tone?: DraftTone | null;
+}
+export interface NegotiationAi {
+  /** The model can be asked to write the messages (feature on and a model configured). */
+  enabled: boolean;
+  /** At least one message is the model's. */
+  used: boolean;
+  provider: string | null;
+  model: string | null;
+  /** Why the templates stayed: disabled, no_model, injection, cooldown, daily_cap, rate_limited, unavailable, no_answer, guardrail. */
+  fallback: string | null;
+  retry_after: number | null;
+  prompt_version: string | null;
+  tone: DraftTone | null;
+  cached: boolean;
+  generated_at: string | null;
+  injection_suspected: boolean;
 }
 export function useNegotiation(opportunityId: string, enabled: boolean) {
   return useQuery({ queryKey: ["negotiation", opportunityId], queryFn: () => api<Negotiation>(`/opportunities/${opportunityId}/negotiation`), enabled });
+}
+/** Ask the model to write the messages (one request per click). Always answers with a usable plan; ``ai.fallback`` says why the templates stayed. */
+export function useDraftNegotiation(opportunityId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { tone: DraftTone; regenerate?: boolean }) =>
+      api<Negotiation>(`/opportunities/${opportunityId}/negotiation/draft`, { method: "POST", body }),
+    onSuccess: (data) => qc.setQueryData(["negotiation", opportunityId], data),
+    onError: (e) => toast.error(errorMessage(e)),
+  });
 }
 
 // ------------------------------------------------------------------ autonomy

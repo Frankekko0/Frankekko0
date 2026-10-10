@@ -116,6 +116,9 @@ async def test_case_m_deep_analysis_is_spent_at_the_boundary_and_not_on_a_clear_
         for img in o.listing.images:
             img.local_path = "ab/x.jpg"
     assert not worth_vision(clear_pass) and worth_vision(boundary)
+    # AI_VISION_ALWAYS: no value-of-information gate, every complete gallery is checked (best candidate first).
+    assert worth_vision(clear_pass, always=True) and worth_vision(boundary, always=True)
+    assert set(vision_order(outcomes, always=True)) == {str(clear_pass.listing_id), str(boundary.listing_id)}
     assert vision_order(outcomes) == [str(boundary.listing_id)]
     for o in outcomes:
         if worth_vision(o):

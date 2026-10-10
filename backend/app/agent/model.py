@@ -27,6 +27,8 @@ class AnthropicAgentModel:
     def __init__(self, llm: LLMClient, tier: Tier = "cheap") -> None:
         self.llm = llm
         self.tier = tier
+        # The label of a run says who answered: this class serves the Gemini client too.
+        self.provider = str(getattr(getattr(llm, "settings", None), "ai_provider", "anthropic"))
 
     @property
     def model_name(self) -> str | None:

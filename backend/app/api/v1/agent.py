@@ -9,6 +9,8 @@ from sqlalchemy import select
 
 from app.agent.review import KIND
 from app.ai.budget import AiBudget
+from app.ai.limiter import get_limiter
+from app.ai.queue import queue_stats
 from app.api.deps import DB, CurrentUser
 from app.core.config import get_settings
 from app.db.models import AgentRun, Opportunity
@@ -22,9 +24,20 @@ async def usage(user: CurrentUser) -> dict[str, Any]:
     """Spend of today and of the month against the caps (prices are assumptions, see DEPENDENCIES.md)."""
     settings = get_settings()
     status = await AiBudget(settings).status()
+    limiter = get_limiter()
     return status.as_dict() | {
         "ai_enabled": bool(settings.ai_api_key),
+        "provider": settings.ai_provider,
         "models": {"strong": settings.ai_model, "cheap": settings.ai_model_cheap},
+        # Requests left on each model this minute and today (the free tier is capped by requests, not by cost),
+        # and the cooldown after a 429.
+        "limits": {
+            "strong": await limiter.snapshot(settings.ai_model, "strong"),
+            "cheap": await limiter.snapshot(settings.ai_model_cheap, "cheap"),
+        },
+        # The strong model's review of the best deals: how many wait, are waiting for their next try, ran out of
+        # attempts (stay as the rules wrote them until the analysis changes) or are reviewed already.
+        "analyst_queue": await queue_stats(settings),
         # Photo sets analysed once and found again instead of being paid for twice.
         "vision_cache": await VisionCacheStore().stats(),
     }

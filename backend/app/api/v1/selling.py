@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from itertools import pairwise
@@ -12,6 +13,7 @@ from fastapi import APIRouter, Query, Response
 from pydantic import Field, field_validator
 from sqlalchemy import func, select
 
+from app.ai.llm import get_llm
 from app.api.deps import DB, CurrentUser, Economics
 from app.core.errors import AppError, NotFoundError
 from app.db.models import (
@@ -25,10 +27,10 @@ from app.db.models import (
     Purchase,
     Sale,
 )
-from app.negotiation import assistant
+from app.negotiation import assistant, drafts, guard
 from app.profit.calculator import max_buy_price, profit_for
 from app.schemas.common import Message, Money, Schema
-from app.selling import accounting, learning, offers, repricing, service
+from app.selling import accounting, learning, offers, service
 from app.selling.stages import LABELS, StageError, check_move
 
 router = APIRouter(tags=["selling"])
@@ -132,20 +134,9 @@ async def patch_inventory(
 async def selling_plan(purchase_id: uuid.UUID, user: CurrentUser, econ: Economics, db: DB) -> dict[str, Any]:
     """The resale listing draft, the price and markdown plan, and what to do about the price today."""
     p, item = await _item(db, user.id, purchase_id)
-    min_profit = float(econ.targets.min_profit)
-    plan, fit, ref = await service.resale_plan(db, p, econ.costs, min_profit)
+    view = await service.reprice_advice(db, p, item, econ.costs, float(econ.targets.min_profit))
+    plan, fit, ref = view.plan, view.fit, view.reference
     draft = await service.draft_for(db, p)
-    advice = None
-    if plan is not None and item.stage == "listed" and item.listed_price is not None:
-        floor = max(plan.floor, float(item.min_price)) if item.min_price is not None else plan.floor
-        advice = repricing.advise(
-            days_listed=service.days_listed(item),
-            asking=float(item.listed_price),
-            floor=floor,
-            markdowns=plan.markdowns,
-            views=item.views,
-            favourites=item.favourites,
-        ).as_dict()
     return {
         "item": _item_out(p, item),
         "reference_price": ref,
@@ -159,7 +150,7 @@ async def selling_plan(purchase_id: uuid.UUID, user: CurrentUser, econ: Economic
             else "A nessun prezzo di mercato si raggiunge il profitto minimo."
         ),
         "survival": {"basis": fit.source, "reliable": fit.reliable, "events": fit.events, "n": fit.n},
-        "reprice": advice,
+        "reprice": view.advice.as_dict() if view.advice else None,
     }
 
 
@@ -368,10 +359,16 @@ async def learning_outcomes(user: CurrentUser, db: DB) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------ the negotiation assistant (§4.16)
-@router.get("/opportunities/{opportunity_id}/negotiation", response_model=dict[str, Any])
-async def negotiation(
-    opportunity_id: uuid.UUID, user: CurrentUser, econ: Economics, db: DB
-) -> dict[str, Any]:
+@dataclass
+class _Built:
+    plan: assistant.NegotiationPlan
+    opportunity: Opportunity
+    listing: Listing
+    median: float | None  # what similar items sold for, when there are enough sales
+
+
+async def _build_plan(db: DB, econ: Economics, opportunity_id: uuid.UUID) -> _Built:
+    """The deterministic plan (figures and template messages) for the requesting user's economics."""
     o = await db.get(Opportunity, opportunity_id)
     if o is None:
         raise NotFoundError("Opportunità non trovata.")
@@ -385,7 +382,12 @@ async def negotiation(
         if sale
         else None
     )
-    ideal = (o.decision or {}).get("threshold_price")
+    # The opening offer leaves room to negotiate (the offer engine's own suggestion); the threshold price is the most
+    # worth paying, where the engine says to stop, so it is never the opening offer.
+    ideal = assistant.opening_offer(
+        float(o.suggested_offer) if o.suggested_offer is not None else None,
+        float(max_buy) if max_buy is not None else None,
+    )
 
     def profit_at(price: float) -> tuple[float, float | None]:
         if sale is None:
@@ -421,15 +423,14 @@ async def negotiation(
         else 0
     )
     sold_ok = (o.sold_comparables_count or 0) >= 3 and o.fair_market_value is not None
+    median = float(o.fair_market_value) if sold_ok and o.fair_market_value is not None else None
     plan = assistant.build_plan(
         title=li.title,
         asked=float(asked),
         profit_at=profit_at,
         max_buy=float(max_buy) if max_buy is not None else None,
-        ideal_offer=float(ideal) if ideal else (float(max_buy) if max_buy is not None else None),
-        similar_sold_median=float(o.fair_market_value)
-        if sold_ok and o.fair_market_value is not None
-        else None,
+        ideal_offer=ideal,
+        similar_sold_median=median,
         signals=assistant.SellerSignals(
             days_online=(now - start).total_seconds() / 86400,
             price_drops=n_drops,
@@ -438,7 +439,48 @@ async def negotiation(
             bundle_possible=others >= 2,
         ),
     )
-    return {"opportunity_id": str(o.id), **plan.as_dict()}
+    return _Built(plan, o, li, median)
+
+
+@router.get("/opportunities/{opportunity_id}/negotiation", response_model=dict[str, Any])
+async def negotiation(
+    opportunity_id: uuid.UUID, user: CurrentUser, econ: Economics, db: DB
+) -> dict[str, Any]:
+    """Figures and template messages. Deterministic: it never calls the model; a draft the model wrote earlier for
+    the same figures is shown in place of the templates it replaces."""
+    b = await _build_plan(db, econ, opportunity_id)
+    facts = guard.NegotiationFacts.from_plan(b.plan, tone="polite", title=b.listing.title, median=b.median)
+    await drafts.attach(db, user.id, b.opportunity.id, b.plan, facts, b.listing.title, get_llm())
+    return {"opportunity_id": str(b.opportunity.id), **b.plan.as_dict()}
+
+
+class NegotiationDraftIn(Schema):
+    tone: Literal["polite", "direct", "firm"] = "polite"
+    regenerate: bool = False
+
+
+@router.post("/opportunities/{opportunity_id}/negotiation/draft", response_model=dict[str, Any])
+async def draft_negotiation(
+    opportunity_id: uuid.UUID, body: NegotiationDraftIn, user: CurrentUser, econ: Economics, db: DB
+) -> dict[str, Any]:
+    """Ask the model to write the messages (one request per click). The figures stay the code's: the model writes
+    words around placeholders, each message is checked on its own, and a message that fails keeps its template.
+    Always answers with a usable plan; ``ai.fallback`` says why the templates stayed. Nothing is sent anywhere."""
+    b = await _build_plan(db, econ, opportunity_id)
+    facts = guard.NegotiationFacts.from_plan(b.plan, tone=body.tone, title=b.listing.title, median=b.median)
+    await drafts.draft(
+        db,
+        user.id,
+        b.opportunity.id,
+        b.plan,
+        facts,
+        b.listing.title,
+        get_llm(),
+        tone=body.tone,
+        regenerate=body.regenerate,
+    )
+    await db.commit()
+    return {"opportunity_id": str(b.opportunity.id), **b.plan.as_dict()}
 
 
 # ------------------------------------------------------------------ learning on real records

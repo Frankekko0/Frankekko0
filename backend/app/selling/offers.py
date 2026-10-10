@@ -80,8 +80,8 @@ def evaluate_offer(
             profit,
             waiting,
             f"Sotto il minimo accettabile ({_eur(floor)}): il margine richiesto non resta.",
-            f"{hello} Purtroppo a {_eur(offer)} non riesco, il prezzo minimo per me è {_eur(floor)}. "
-            "Se ti va, ne riparliamo. Grazie comunque!",
+            f"{hello} Purtroppo a {_eur(offer)} non riesco ad accettare. "
+            "Se ti va, ne riparliamo. Grazie comunque!",  # the floor is the seller's own limit: never said to the buyer
         )
     if offer >= floor and profit >= waiting:
         return OfferDecision(

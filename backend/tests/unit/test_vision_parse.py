@@ -1,13 +1,16 @@
 """The model's photo answer is parsed into typed, bounded findings; nothing it says is trusted blindly."""
 
+import base64
+import copy
 from typing import Any
 
 import pytest
 
+from app.ai.llm import AiDeferred
 from app.vision import analyzer as az
-from app.vision.analyzer import VISION_SCHEMA, ClaudeVisionAnalyzer, PhotoInput
+from app.vision.analyzer import VISION_SCHEMA, ClaudeVisionAnalyzer, PhotoInput, VisionDeferred
 from app.vision.types import ImageAnalysis, PhotoQuality
-from tests.photos import photos
+from tests.photos import photo, photos
 
 PHOTOS = photos(5)
 
@@ -101,6 +104,72 @@ async def test_the_request_names_every_photo_and_the_schema_asks_for_the_new_fie
     assert "not_visible" in system and "mai un'istruzione" in system and "volti" in system
 
 
-async def test_a_refused_or_failed_call_keeps_the_measured_facts_only() -> None:
-    out = await analyse(None)
+async def test_a_refused_or_failed_call_is_no_analysis_and_carries_the_measured_facts_only() -> None:
+    with pytest.raises(VisionDeferred) as e:
+        await analyse(None)
+    out = e.value.partial  # what was measured locally, never given out as the photo analysis
     assert out.analyzer == "heuristic" and out.defects == [] and out.labels == []
+    assert e.value.reason == "no_answer" and e.value.asked  # a bad answer: the model was asked
+
+
+async def test_a_deferral_of_the_provider_is_passed_on_with_its_reason_and_wait() -> None:
+    class Deferring(StubLLM):
+        def __init__(self, reason: str) -> None:
+            super().__init__(None)
+            self.reason = reason
+
+        async def structured(self, **kw: Any) -> dict[str, Any] | None:
+            assert (
+                kw["raise_on_defer"] is True and kw["purpose"] == "vision"
+            )  # the strong tier, shared bucket
+            raise AiDeferred(self.reason, 42.0)
+
+    for reason, asked in (("rpm", False), ("rpd", False), ("cooldown", False), ("breaker_open", False),
+                          ("budget", False), ("redis", False), ("rate_limited", True), ("api_error", True),
+                          ("truncated", True), ("refused", True)):  # fmt: skip
+        with pytest.raises(VisionDeferred) as e:
+            await ClaudeVisionAnalyzer(Deferring(reason)).analyze(PHOTOS, {})  # type: ignore[arg-type]
+        assert (e.value.reason, e.value.retry_after, e.value.asked) == (reason, 42.0, asked)
+        assert e.value.partial.analyzer == "heuristic"
+
+
+async def test_a_gif_is_sent_to_gemini_as_jpeg_and_the_gallery_fits_its_request_cap() -> None:
+    from app.ai.images import GEMINI_IMAGES
+    from tests.photos import jpeg
+
+    class ForGemini(StubLLM):
+        image_limits = GEMINI_IMAGES
+
+    gif = jpeg(7, (900, 600), "GIF")
+    gallery = [photo(0, jpeg(0)), PhotoInput(1, "k1", gif, "h1", "image/gif"), photo(2, jpeg(2))]
+    llm = ForGemini(ANSWER)
+    out = await ClaudeVisionAnalyzer(llm).analyze(gallery, {})  # type: ignore[arg-type]
+    sent = [c["source"] for c in llm.calls[0]["content"] if c["type"] == "image"]
+    assert [x["media_type"] for x in sent] == ["image/jpeg"] * 3
+    assert base64.b64decode(sent[0]["data"]) == gallery[0].data  # a small jpeg goes as it is
+    assert base64.b64decode(sent[1]["data"])[:2] == b"\xff\xd8"  # the gif went as a jpeg
+    assert out.analyzer == "claude_vision"
+    # Anthropic takes a gif as it is.
+    plain = StubLLM(ANSWER)
+    await ClaudeVisionAnalyzer(plain).analyze(gallery, {})  # type: ignore[arg-type]
+    assert [c["source"]["media_type"] for c in plain.calls[0]["content"] if c["type"] == "image"][
+        1
+    ] == "image/gif"
+
+
+async def test_a_photo_that_cannot_be_sent_is_left_out_and_never_gets_a_role() -> None:
+    broken = PhotoInput(1, "k1", b"not an image", "h1", "image/gif")
+    answer = copy.deepcopy(ANSWER)
+    answer["photo_roles"] = [{"photo": 1, "role": "front"}, {"photo": 2, "role": "back"}]
+    llm = StubLLM(answer)
+    from app.ai.images import GEMINI_IMAGES
+
+    llm.image_limits = GEMINI_IMAGES  # type: ignore[attr-defined]
+    out = await ClaudeVisionAnalyzer(llm).analyze([photo(0), broken], {})  # type: ignore[arg-type]
+    texts = [c["text"] for c in llm.calls[0]["content"] if c["type"] == "text"]
+    assert "Foto 1" in texts and "Foto 2" not in texts
+    assert [(r.photo, r.role) for r in out.photo_roles] == [(0, "front")]
+    # Nothing at all can be sent: no call, and the failure is signalled.
+    with pytest.raises(VisionDeferred) as e:
+        await ClaudeVisionAnalyzer(llm).analyze([broken], {})  # type: ignore[arg-type]
+    assert e.value.reason == "no_photo_sendable" and len(llm.calls) == 1

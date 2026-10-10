@@ -28,6 +28,7 @@ from app.market.jobs import sync_price_evidence_task
 from app.marketplace.registry import close_provider
 from app.workers import tasks
 from app.workers.queue import QUEUE_DEFAULT, QUEUE_HIGH, close_queue, redis_settings
+from app.workers.vision_queue import VISION_MAX_TRIES
 
 log = get_logger("app.worker")
 
@@ -36,9 +37,12 @@ def _functions() -> list[Any]:
     return [
         func(tasks.analyze_listing, keep_result=0, max_tries=4, timeout=120),
         func(tasks.analyze_batch, keep_result=0, max_tries=4, timeout=300),
-        func(tasks.vision_task, keep_result=0, max_tries=2, timeout=180),
-        func(tasks.ai_analyze_task, keep_result=0, max_tries=2, timeout=180),
+        func(tasks.vision_task, keep_result=0, max_tries=VISION_MAX_TRIES, timeout=180),
+        # One try: the backoff is kept on the opportunity (``ai_next_attempt_at``) and the sweep queues it again.
+        func(tasks.ai_analyze_task, keep_result=0, max_tries=1, timeout=180),
+        func(tasks.ai_sweep_task, keep_result=0, max_tries=1, timeout=120),
         func(tasks.review_candidates_task, keep_result=0, max_tries=1, timeout=300),
+        func(tasks.agent_propose_task, keep_result=0, max_tries=1, timeout=300),
         func(tasks.autonomy_cycle_task, keep_result=0, max_tries=1, timeout=300),
         func(tasks.business_daily_task, keep_result=0, max_tries=1, timeout=600),
         func(tasks.deliver_alert_task, keep_result=0, max_tries=5, timeout=60),
@@ -70,6 +74,10 @@ def _cron_jobs() -> list[Any]:
         cron(tasks.mark_stale_listings_task, minute={5, 20, 35, 50}, second=30, timeout=120, unique=True),
         cron(tasks.recompute_learning, minute={7, 37}, second=20, timeout=300),
         cron(tasks.review_candidates_task, minute={9, 39}, second=40, timeout=300, unique=True),
+        # The strong model's review of the best waiting opportunities, paced to the provider's request caps.
+        cron(tasks.ai_sweep_task, second={17}, timeout=120, unique=True),
+        # The agent's proposals, just before the cycle whose rules then fill what the limits leave.
+        cron(tasks.agent_propose_task, minute={10, 40}, second=30, timeout=300, unique=True),
         cron(tasks.autonomy_cycle_task, minute={12, 42}, second=10, timeout=300, unique=True),
         cron(tasks.business_daily_task, hour=6, minute=11, second=0, timeout=600, unique=True),
         cron(tasks.prune, hour=3, minute=17, second=0, timeout=300),

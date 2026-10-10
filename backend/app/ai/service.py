@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -13,16 +14,18 @@ from sqlalchemy.orm import selectinload
 from app.ai.claude_analyst import ClaudeDealAnalyst
 from app.ai.deal_analyst import DealAnalysis, DealContext, RuleBasedDealAnalyst, ScenarioSummary
 from app.ai.llm import get_llm
+from app.ai.queue import qualifies_for_strong_ai
+from app.ai.verdicts import has_valid_review, is_llm_provider, reviewed_fields
 from app.authenticity.assess import brand_rules
+from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.db.models import Listing, Opportunity
-from app.decision.engine import DecisionVerdict, apply_review_ceiling
-from app.domain.enums import Verdict
+from app.db.session import session_scope
 from app.identification.engine import ListingText
 from app.ingestion.catalog import load_catalog
 from app.ingestion.service import get_engine
 from app.media.archive import read_copy
-from app.vision.analyzer import PhotoInput, get_image_analyzer
+from app.vision.analyzer import PhotoInput, VisionDeferred, get_image_analyzer
 from app.vision.provenance import photo_provenance
 
 log = get_logger(__name__)
@@ -80,34 +83,90 @@ def context_from_opportunity(opp: Opportunity, listing: Listing, brand_name: str
     )
 
 
-async def run_ai_analysis(db: AsyncSession, opp: Opportunity) -> dict[str, Any]:
+async def deal_context(db: AsyncSession, opp: Opportunity) -> DealContext:
+    """Read phase of a deal analysis: everything the analyst may use, from the stored opportunity."""
     listing = (await db.execute(select(Listing).where(Listing.id == opp.listing_id))).scalar_one()
-    ctx = context_from_opportunity(opp, listing, listing.brand.name if listing.brand else None)
-    llm = get_llm()
-    analyst = ClaudeDealAnalyst(llm) if llm.enabled else RuleBasedDealAnalyst()
-    analysis: DealAnalysis = await analyst.analyze(ctx)
+    return context_from_opportunity(opp, listing, listing.brand.name if listing.brand else None)
+
+
+def store_analysis(opp: Opportunity, analysis: DealAnalysis) -> dict[str, Any]:
+    """Write phase: the analysis on the opportunity, and the analyst's caution on the decision.
+
+    The analyst may be more cautious than the decision engine, never less: when it is, the decision is lowered with
+    the reason on record, so there is still one verdict, not two (``reviewed_fields`` can only lower). A model
+    review is marked as written for the opportunity's current analysis, which takes it out of the queue."""
     opp.ai_analysis = analysis.model_dump(mode="json")
     opp.ai_provider = analysis.provider
     opp.ai_analyzed_at = datetime.now(UTC)
-    opp.verdict = analysis.verdict.value
-    # The analyst may be more cautious than the decision engine, never less: when it is, the
-    # decision is lowered with the reason on record, so there is still one verdict, not two.
-    ceiling = {Verdict.CONSIDER: DecisionVerdict.WATCHLIST, Verdict.SKIP: DecisionVerdict.PASS}.get(
-        analysis.verdict
-    )
-    if opp.decision and ceiling is not None:
-        lowered = apply_review_ceiling(
-            opp.decision, ceiling, "La revisione dell'analista AI consiglia più cautela"
-        )
-        if lowered is not opp.decision:
-            opp.decision = lowered
-            opp.decision_verdict = lowered["verdict"]
-            opp.recommended_action = lowered["action"]
+    if is_llm_provider(analysis.provider):
+        opp.ai_for_analysis_id = opp.analysis_id
+        opp.ai_attempts = 0
+        opp.ai_next_attempt_at = None
+        opp.ai_last_error = None
+    for column, value in reviewed_fields(opp.decision, opp.verdict, analysis.verdict).items():
+        setattr(opp, column, value)
     return opp.ai_analysis
 
 
+async def run_ai_analysis(db: AsyncSession, opp: Opportunity, *, strict: bool = True) -> dict[str, Any]:
+    """Run the deal analyst on a stored opportunity inside the caller's session (the manual request).
+
+    With a model configured and ``strict`` (the default), a call that is refused by the quota, fails or gives
+    no usable answer raises ``AiDeferred`` and nothing is written: the rules' text never replaces a record or is
+    presented as the model's. Without a model the rule-based analyst answers, but never over a valid model review."""
+    ctx = await deal_context(db, opp)
+    llm = get_llm()
+    if not llm.enabled:
+        if has_valid_review(opp) and opp.ai_analysis:
+            return opp.ai_analysis
+        return store_analysis(opp, RuleBasedDealAnalyst().analyze_sync(ctx))
+    analysis = await ClaudeDealAnalyst(llm).analyze(ctx, ref=str(opp.id), strict=strict)
+    return store_analysis(opp, analysis)
+
+
+async def review_opportunity(opportunity_id: uuid.UUID, settings: Settings | None = None) -> str:
+    """The queued review in three steps, so that no connection or transaction is held while the model answers:
+    read the stored numbers, call the model (strict: ``AiDeferred`` when there is no usable answer), then write
+    only if the opportunity is still on the analysis that was read. Returns ``done``, ``skipped`` (nothing to do:
+    gone, closed, no longer at the threshold, already reviewed) or ``stale`` (re-analysed meanwhile: the answer
+    was for other numbers and is discarded; the new analysis is in the queue)."""
+    settings = settings or get_settings()
+    llm = get_llm()
+    if not llm.enabled:
+        return "skipped"
+    async with session_scope() as s:
+        opp = await s.get(Opportunity, opportunity_id)
+        if (
+            opp is None
+            or opp.analysis_id is None
+            or has_valid_review(opp)
+            or not qualifies_for_strong_ai(
+                settings, flip_score=opp.flip_score, data_quality=opp.data_quality, is_active=opp.is_active
+            )
+        ):
+            return "skipped"
+        analysis_id = opp.analysis_id
+        ctx = await deal_context(s, opp)
+    analysis = await ClaudeDealAnalyst(llm).analyze(ctx, ref=str(opportunity_id), strict=True)
+    async with session_scope() as s:
+        row = (
+            await s.execute(
+                select(Opportunity).where(Opportunity.id == opportunity_id).with_for_update(of=Opportunity)
+            )
+        ).scalar_one_or_none()
+        if row is None or not row.is_active or row.analysis_id != analysis_id:
+            return "stale"
+        store_analysis(row, analysis)
+    return "done"
+
+
 async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
-    """Analyze listing photos and refresh identification. Returns True if anything changed."""
+    """Analyze listing photos and refresh identification. Returns True if anything changed.
+
+    When a model is meant to read the photos and cannot (quota, outage, refusal, bad answer) this raises
+    ``VisionDeferred`` instead of returning: the local measures are stored when the listing has no model analysis
+    yet (they are not one: ``analyzer`` stays "heuristic", so the photos still count as unchecked) and are never
+    written over an existing model analysis. The caller commits, then retries later."""
     listing = (
         await db.execute(
             select(Listing).options(selectinload(Listing.images)).where(Listing.id == listing_id)
@@ -126,13 +185,25 @@ async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
         PhotoInput(i.position, i.image_key, await read_copy(i.local_path), i.sha256, i.content_type)
         for i in images
     ]
-    vision = await analyzer.analyze(
-        photos,
-        {
-            "category_slugs": sorted(catalog.categories_by_slug),
-            "brand_rules": brand_rules(brand_slug) if brand_slug else None,
-        },
-    )
+    deferred: VisionDeferred | None = None
+    try:
+        vision = await analyzer.analyze(
+            photos,
+            {
+                "category_slugs": sorted(catalog.categories_by_slug),
+                "brand_rules": brand_rules(brand_slug) if brand_slug else None,
+            },
+        )
+        if vision.analyzer == "heuristic" and analyzer.name != "heuristic":
+            # A model analyzer must not end here: it is a failure all the same.
+            deferred = VisionDeferred("no_model_analysis", 300.0, vision)
+    except VisionDeferred as exc:
+        vision, deferred = exc.partial, exc
+    old_vision = (listing.identification or {}).get("vision") or {}
+    if deferred is not None and old_vision.get("analyzer") not in (None, "heuristic"):
+        # A good model analysis stays as it is: the local measures never replace it.
+        log.warning("vision.deferred", listing_id=str(listing.id), reason=deferred.reason, kept="model")
+        raise deferred
     # Keep each photo's hash (later listings are compared with it) and look for the same photos
     # in other sellers' listings.
     for img, h in zip(images, vision.photo_hashes, strict=False):
@@ -172,12 +243,20 @@ async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
         listing.model_name = result.model.value[:120]
     if result.category.value and listing.category_id is None:
         listing.category_id = catalog.category_id(result.category.value)
-    old_vision = ident_before.get("vision") or {}
     changed = (
         vision.analyzer != "heuristic"
         or ident_before.get("confidence") != result.confidence
         or old_vision.get("photo_checks") != new_ident["vision"].get("photo_checks")
         or old_vision.get("provenance") != new_ident["vision"].get("provenance")
     )
-    log.info("vision.analyzed", listing_id=str(listing.id), analyzer=vision.analyzer, changed=changed)
+    log.info(
+        "vision.analyzed",
+        listing_id=str(listing.id),
+        analyzer=vision.analyzer,
+        changed=changed,
+        deferred=deferred.reason if deferred else None,
+    )
+    if deferred is not None:
+        deferred.changed = changed
+        raise deferred
     return changed

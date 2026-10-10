@@ -25,6 +25,7 @@ class Limits:
     allowed_brands: tuple[str, ...] = ()  # empty: any brand
     allowed_categories: tuple[str, ...] = ()
     max_messages_per_day: int = 5
+    max_reprices_per_day: int = 10  # markdowns proposed per day
     premortem_above: Decimal = Decimal("25")  # purchases from this cost up need a pre-mortem on record
     # Automatic suspension.
     max_error_rate: float = 0.30
@@ -51,7 +52,8 @@ class Limits:
 MONEY_KEYS = ("daily_budget", "weekly_budget", "max_per_item", "premortem_above", "max_loss")
 INT_KEYS = {
     "max_items": (1, 500), "min_flip": (0, 100), "min_confidence": (0, 100), "max_risk": (0, 100),
-    "max_messages_per_day": (0, 100), "window_days": (1, 90), "dry_run_days": (0, 60),
+    "max_messages_per_day": (0, 100), "max_reprices_per_day": (0, 100), "window_days": (1, 90),
+    "dry_run_days": (0, 60),
 }  # fmt: skip
 FLOAT_KEYS = {"max_error_rate": (0.0, 1.0), "max_forecast_error": (0.0, 5.0)}
 LIST_KEYS = ("allowed_brands", "allowed_categories")

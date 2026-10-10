@@ -5,21 +5,32 @@ the app uses (text/image blocks, tool definitions, tool_use/tool_result turns) a
 is translated back, so callers do not change. Budget and breaker are shared with ``LLMClient``. On the free
 tier Google may use what you send to improve its products and the limits are low and may change: keep
 ``AI_VISION_ENABLED=false`` if photos must not leave your server, and set ``AI_PRICE_*`` to 0 for the free tier.
+Photos go inline (base64) as png/jpeg/webp: any other type is converted to JPEG, and the photo analysis fits the
+whole gallery under ``GEMINI_IMAGES.budget`` (the request cap is 20 MB), see ``app.ai.images``.
 """
 
 from __future__ import annotations
 
+import base64
 import json
+import re
 from decimal import Decimal
 from typing import Any
 
 import httpx
 
+from app.ai.images import GEMINI_IMAGES, fit_images
 from app.ai.limiter import get_limiter
 from app.ai.llm import AiDeferred, LLMClient, ModelTurn, Tier, ToolCall, log, retry_after_seconds
 
 BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _DROP = {"additionalProperties", "$schema", "title", "default", "examples"}
+# Gemini 2.5 thinks before it answers and the thinking tokens count against ``maxOutputTokens``. Reading photos
+# needs little of it and a long gallery must not end as MAX_TOKENS, so the thinking of the photo analysis is
+# capped. Set only for the family known to take the field (older models reject it; 1024 is valid for 2.5
+# Flash, Flash-Lite and Pro).
+THINKING_BUDGET = {"vision": 1024}
+_TAKES_THINKING = re.compile(r"^(models/)?gemini-2\.5")
 
 
 def to_gemini_schema(node: Any) -> Any:
@@ -59,7 +70,14 @@ def _parts(content: Any, names: dict[str, str]) -> list[dict[str, Any]]:
             parts.append({"text": b["text"]})
         elif t == "image":
             src = b["source"]
-            parts.append({"inlineData": {"mimeType": src["media_type"], "data": src["data"]}})
+            mime, data = src["media_type"], src["data"]
+            if mime not in GEMINI_IMAGES.accepted:  # a GIF (or any other type) is a 400: send a JPEG of it
+                converted = fit_images([(base64.b64decode(data), mime)], GEMINI_IMAGES)[0]
+                if converted is None:
+                    log.warning("llm.image_dropped", media_type=mime)
+                    continue
+                mime, data = converted
+            parts.append({"inlineData": {"mimeType": mime, "data": data}})
         elif t == "tool_use":
             names[b["id"]] = b["name"]
             parts.append({"functionCall": {"name": b["name"], "args": b.get("input", {})}})
@@ -88,6 +106,8 @@ def to_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 class GeminiClient(LLMClient):
+    image_limits = GEMINI_IMAGES  # read by the photo analysis: the types and the size Gemini takes inline
+
     @property
     def enabled(self) -> bool:
         return self.settings.ai_api_key is not None
@@ -179,14 +199,18 @@ class GeminiClient(LLMClient):
         ref: str | None = None,
         raise_on_defer: bool = False,
     ) -> dict[str, Any] | None:
+        generation: dict[str, Any] = {
+            "maxOutputTokens": max_tokens,
+            "responseMimeType": "application/json",
+            "responseSchema": to_gemini_schema(schema),
+        }
+        budget = THINKING_BUDGET.get(purpose)
+        if budget is not None and _TAKES_THINKING.match(self.model_for(tier)):
+            generation["thinkingConfig"] = {"thinkingBudget": budget}
         body = {
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": to_contents([{"role": "user", "content": content}]),
-            "generationConfig": {
-                "maxOutputTokens": max_tokens,
-                "responseMimeType": "application/json",
-                "responseSchema": to_gemini_schema(schema),
-            },
+            "generationConfig": generation,
         }
         done = await self._generate(
             tier=tier, purpose=purpose, ref=ref, body=body, raise_on_defer=raise_on_defer
@@ -199,6 +223,11 @@ class GeminiClient(LLMClient):
                 raise AiDeferred(reason, 300.0)
 
         parts, finish = self._candidate(done[0])
+        blocked = (done[0].get("promptFeedback") or {}).get("blockReason")
+        if blocked:  # the prompt itself was refused: there is no candidate, not a bad answer
+            log.info("llm.refused", purpose=purpose, category=blocked)
+            unusable("refused")
+            return None
         if finish in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST"):
             log.info("llm.refused", purpose=purpose, category=finish)
             unusable("refused")

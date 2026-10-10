@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -181,6 +181,18 @@ async def usage_for(session: AsyncSession, user_id: uuid.UUID, now: datetime) ->
             )
         )
     ).scalar_one()
+    reprices = (
+        await session.execute(
+            select(func.count())
+            .select_from(AutonomyAction)
+            .where(
+                AutonomyAction.user_id == user_id,
+                AutonomyAction.kind == "reprice",
+                AutonomyAction.status.in_(COUNTED),
+                AutonomyAction.created_at >= day_start,
+            )
+        )
+    ).scalar_one()
     rows = (
         await session.execute(
             select(Purchase, InventoryItem)
@@ -210,7 +222,12 @@ async def usage_for(session: AsyncSession, user_id: uuid.UUID, now: datetime) ->
         for p, _ in rows
     )
     return policy.Usage(
-        await spent(day_start), await spent(week_start), len(rows) + pending_buys, messages, holdings
+        await spent(day_start),
+        await spent(week_start),
+        len(rows) + pending_buys,
+        messages,
+        holdings,
+        reprices,
     )
 
 
@@ -274,19 +291,170 @@ def facts_of(o: Opportunity, li: Listing, verified: bool | None, premortem_done:
 async def record(
     session: AsyncSession, user_id: uuid.UUID, kind: str, status: str, *, opp: Opportunity | None, payload: dict[str, Any],
     reasons: list[dict[str, str]], channel: str, verifier_out: dict[str, Any] | None,
+    inventory_id: uuid.UUID | None = None,
 ) -> AutonomyAction:  # fmt: skip
     a = AutonomyAction(
-        id=uuid.uuid4(), user_id=user_id, kind=kind, opportunity_id=opp.id if opp else None, payload=payload,
-        status=status, reasons=reasons, channel=channel, verifier=verifier_out,
+        id=uuid.uuid4(), user_id=user_id, kind=kind, opportunity_id=opp.id if opp else None, inventory_id=inventory_id,
+        payload=payload, status=status, reasons=reasons, channel=channel, verifier=verifier_out,
         resolved_at=datetime.now(UTC) if status in ("blocked", "failed", "dry_run") else None,
     )  # fmt: skip
     session.add(a)
     await session.flush()
+    subject = (
+        ("opportunity", opp.id) if opp else (("inventory", inventory_id) if inventory_id else (None, None))
+    )
     await audit(
-        session, user_id, "autonomy.action", actor="agent", subject_type="opportunity", subject_id=opp.id if opp else None,
-        payload={"action_id": str(a.id), "kind": kind, "status": status, "reasons": reasons, "channel": channel},
+        session, user_id, "autonomy.action", actor="agent", subject_type=subject[0], subject_id=subject[1],
+        payload={
+            "action_id": str(a.id), "kind": kind, "status": status, "reasons": reasons, "channel": channel,
+            "source": payload.get("source", "rules"), **({"run_id": payload["run_id"]} if "run_id" in payload else {}),
+        },
     )  # fmt: skip
     return a
+
+
+async def already_proposed(session: AsyncSession, user_id: uuid.UUID, now: datetime) -> set[uuid.UUID]:
+    """The opportunities this user was already offered a purchase of in the last week (and did not turn down)."""
+    ids = (
+        await session.execute(
+            select(AutonomyAction.opportunity_id).where(
+                AutonomyAction.user_id == user_id, AutonomyAction.kind == "buy",
+                AutonomyAction.status.in_(("pending_user", "dry_run", "done")), AutonomyAction.created_at >= now - timedelta(days=7),
+            )
+        )
+    ).scalars().all()  # fmt: skip
+    return {i for i in ids if i is not None}
+
+
+async def _through_channel(
+    kind: policy.Kind, mode: str, payload: dict[str, Any]
+) -> tuple[str, str, dict[str, Any]]:
+    """Hand a decided action to the one channel its mode allows: ``(status, channel name, detail)``."""
+    channel_name = "dry_run" if mode == "dry_run" else "assisted"
+    try:
+        out = await get_channel("vinted", channel_name).execute(kind, payload)
+        return out.status, channel_name, out.detail
+    except ChannelRefused as exc:
+        return "failed", channel_name, {"refused": str(exc)}
+    except UnsupportedPlatform as exc:
+        return "failed", channel_name, {"unsupported": str(exc)}
+
+
+def _tagged(
+    payload: dict[str, Any], source: str, run_id: uuid.UUID | None, reason: str | None
+) -> dict[str, Any]:
+    """Who proposed this: the rules of the cycle or the agent (with its run and its reason, as inert text)."""
+    payload["source"] = source
+    if run_id is not None:
+        payload["run_id"] = str(run_id)
+    if reason:
+        payload["reason"] = reason
+    return payload
+
+
+async def propose_buy(
+    session: AsyncSession, user_id: uuid.UUID, opp: Opportunity, li: Listing, *, limits: Limits,
+    usage: policy.Usage, sw: policy.Switches, now: datetime, llm: Any | None, source: str = "rules",
+    run_id: uuid.UUID | None = None, reason: str | None = None,
+) -> tuple[AutonomyAction, policy.Usage]:  # fmt: skip
+    """One purchase through the verifier, the policy and the channel, recorded either way.
+
+    The cycle and the agent both come through here, so a proposal meets the same checks whoever made it. Nothing
+    is bought: the result is a blocked record, a dry run, or a task for the user. Returns the record and the usage
+    updated for what it took (the caller passes that on to the next proposal)."""
+    v = verifier.verify(opp, li, now)
+    if llm is not None:
+        v.second_opinion = await verifier.second_opinion(llm, opp, li)
+        if v.second_opinion and not v.second_opinion["agrees"]:
+            v.issues.append(
+                verifier.Issue(
+                    "second_opinion",
+                    "Il secondo parere del modello non concorda: " + "; ".join(v.second_opinion["issues"]),
+                )
+            )
+    intel = (opp.decision or {}).get("intelligence") or {}
+    pre = intel.get("premortem") or {}
+    premortem_done = not pre.get("required") or bool(pre.get("modes"))
+    proposed = policy.Proposed(
+        policy.Kind.BUY, opp.total_acquisition_cost, facts_of(opp, li, v.agrees, premortem_done)
+    )
+    verdict = policy.evaluate(proposed, limits, usage, sw)
+    payload = _tagged(
+        {
+            "cost": str(opp.total_acquisition_cost),
+            "price": str(opp.listing_price),
+            "title": li.title[:120],
+            "url": li.url,
+        },
+        source, run_id, reason,
+    )  # fmt: skip
+    if not v.agrees and opp.decision:
+        # The verifier does not agree: the decision itself comes down to WATCHLIST, with the reason on record.
+        why = "; ".join(i.label for i in v.issues if i.blocking)
+        opp.decision = apply_review_ceiling(
+            opp.decision, DecisionVerdict.WATCHLIST, f"Il verificatore non conferma: {why}", code="verifier"
+        )
+        opp.decision_verdict = opp.decision["verdict"]
+        opp.recommended_action = opp.decision["action"]
+    if not verdict.allowed:
+        reasons = [{"code": x.code, "label": x.label} for x in verdict.violations]
+        blocked = await record(
+            session, user_id, "buy", "blocked", opp=opp, payload=payload, reasons=reasons, channel="-",
+            verifier_out=v.as_dict(),
+        )  # fmt: skip
+        return blocked, usage
+    status, channel_name, detail = await _through_channel(policy.Kind.BUY, verdict.mode, payload)
+    act = await record(
+        session, user_id, "buy", status, opp=opp, payload={**payload, **detail}, reasons=[], channel=channel_name,
+        verifier_out=v.as_dict(),
+    )  # fmt: skip
+    if status != "failed":
+        facts = facts_of(opp, li, True, True)
+        cost = opp.total_acquisition_cost
+        usage = replace(
+            usage, spent_today=usage.spent_today + cost, spent_week=usage.spent_week + cost,
+            owned_items=usage.owned_items + 1,
+            holdings=(*usage.holdings, Holding(float(cost), facts.brand, facts.category, li.size_normalized, price_band(float(opp.listing_price)))),
+        )  # fmt: skip
+    return act, usage
+
+
+async def propose_reprice(
+    session: AsyncSession, user_id: uuid.UUID, purchase: Purchase, item: InventoryItem, *, price: Decimal,
+    floor: Decimal, current: Decimal, limits: Limits, usage: policy.Usage, sw: policy.Switches, now: datetime,
+    source: str = "rules", run_id: uuid.UUID | None = None, reason: str | None = None,
+) -> tuple[AutonomyAction, policy.Usage]:  # fmt: skip
+    """A markdown of a listed item through the policy and the channel. The price comes from the selling plan, never
+    from a model; it must be below the current asking price and not below the floor. The user changes the price on
+    Vinted (or, in a dry run, nobody does): FlipFinder never touches the listing."""
+    proposed = policy.Proposed(policy.Kind.REPRICE, price=price, floor=floor, current=current)
+    verdict = policy.evaluate(proposed, limits, usage, sw)
+    payload = _tagged(
+        {
+            "title": purchase.title[:120],
+            "url": item.listing_url,
+            "price": str(price),
+            "from_price": str(current),
+            "floor": str(floor),
+            "purchase_id": str(purchase.id),
+        },
+        source, run_id, reason,
+    )  # fmt: skip
+    if not verdict.allowed:
+        reasons = [{"code": x.code, "label": x.label} for x in verdict.violations]
+        blocked = await record(
+            session, user_id, "reprice", "blocked", opp=None, payload=payload, reasons=reasons, channel="-",
+            verifier_out=None, inventory_id=item.id,
+        )  # fmt: skip
+        return blocked, usage
+    status, channel_name, detail = await _through_channel(policy.Kind.REPRICE, verdict.mode, payload)
+    act = await record(
+        session, user_id, "reprice", status, opp=None, payload={**payload, **detail}, reasons=[],
+        channel=channel_name, verifier_out=None, inventory_id=item.id,
+    )  # fmt: skip
+    if status != "failed":
+        usage = replace(usage, reprices_today=usage.reprices_today + 1)
+    return act, usage
 
 
 async def run_cycle(
@@ -315,16 +483,7 @@ async def run_cycle(
     result = CycleResult("ran")
     usage = await usage_for(session, user_id, now)
     sw = switches_of(row, now)
-    already = set(
-        (
-            await session.execute(
-                select(AutonomyAction.opportunity_id).where(
-                    AutonomyAction.user_id == user_id, AutonomyAction.kind == "buy",
-                    AutonomyAction.status.in_(("pending_user", "dry_run", "done")), AutonomyAction.created_at >= now - timedelta(days=7),
-                )
-            )
-        ).scalars().all()
-    )  # fmt: skip
+    already = await already_proposed(session, user_id, now)
     cands = (
         await session.execute(
             select(Opportunity, Listing)
@@ -344,89 +503,16 @@ async def run_cycle(
             continue
         taken += 1
         result.proposed += 1
-        v = verifier.verify(opp, li, now)
-        if llm is not None:
-            v.second_opinion = await verifier.second_opinion(llm, opp, li)
-            if v.second_opinion and not v.second_opinion["agrees"]:
-                v.issues.append(
-                    verifier.Issue(
-                        "second_opinion",
-                        "Il secondo parere del modello non concorda: "
-                        + "; ".join(v.second_opinion["issues"]),
-                    )
-                )
-        intel = (opp.decision or {}).get("intelligence") or {}
-        pre = intel.get("premortem") or {}
-        premortem_done = not pre.get("required") or bool(pre.get("modes"))
-        proposed = policy.Proposed(
-            policy.Kind.BUY, opp.total_acquisition_cost, facts_of(opp, li, v.agrees, premortem_done)
-        )
-        verdict = policy.evaluate(proposed, limits, usage, sw)
-        payload = {
-            "cost": str(opp.total_acquisition_cost),
-            "price": str(opp.listing_price),
-            "title": li.title[:120],
-            "url": li.url,
-        }
-        if not v.agrees and opp.decision:
-            # The verifier does not agree: the decision itself comes down to WATCHLIST, with the reason on record.
-            reason = "; ".join(i.label for i in v.issues if i.blocking)
-            opp.decision = apply_review_ceiling(
-                opp.decision,
-                DecisionVerdict.WATCHLIST,
-                f"Il verificatore non conferma: {reason}",
-                code="verifier",
-            )
-            opp.decision_verdict = opp.decision["verdict"]
-            opp.recommended_action = opp.decision["action"]
-        if not verdict.allowed:
-            result.blocked += 1
-            reasons = [{"code": x.code, "label": x.label} for x in verdict.violations]
-            result.actions.append(
-                (
-                    await record(
-                        session,
-                        user_id,
-                        "buy",
-                        "blocked",
-                        opp=opp,
-                        payload=payload,
-                        reasons=reasons,
-                        channel="-",
-                        verifier_out=v.as_dict(),
-                    )
-                ).id
-            )
-            continue
-        channel_name = "dry_run" if verdict.mode == "dry_run" else "assisted"
-        try:
-            channel = get_channel("vinted", channel_name)
-            out = await channel.execute(policy.Kind.BUY, payload)
-            status, detail = out.status, out.detail
-        except ChannelRefused as exc:
-            status, detail = "failed", {"refused": str(exc)}
-            result.failed += 1
-        except UnsupportedPlatform as exc:
-            status, detail = "failed", {"unsupported": str(exc)}
-            result.failed += 1
-        act = await record(
-            session,
-            user_id,
-            "buy",
-            status,
-            opp=opp,
-            payload={**payload, **detail},
-            reasons=[],
-            channel=channel_name,
-            verifier_out=v.as_dict(),
+        act, usage = await propose_buy(
+            session, user_id, opp, li, limits=limits, usage=usage, sw=sw, now=now, llm=llm
         )
         result.actions.append(act.id)
-        if status != "failed":
+        if act.status == "blocked":
+            result.blocked += 1
+        elif act.status == "failed":
+            result.failed += 1
+        else:
             result.executed += 1
-            usage = policy.Usage(
-                usage.spent_today + opp.total_acquisition_cost, usage.spent_week + opp.total_acquisition_cost, usage.owned_items + 1,
-                usage.messages_today, (*usage.holdings, Holding(float(opp.total_acquisition_cost), facts_of(opp, li, True, True).brand, facts_of(opp, li, True, True).category, li.size_normalized, price_band(float(opp.listing_price)))),
-            )  # fmt: skip
     return result
 
 
@@ -440,9 +526,11 @@ async def dry_run_report(session: AsyncSession, user_id: uuid.UUID) -> dict[str,
         .all()
     )
     by_status: dict[str, int] = {}
+    by_kind: dict[str, int] = {}
     reasons: dict[str, int] = {}
     for a in rows:
         by_status[a.status] = by_status.get(a.status, 0) + 1
+        by_kind[a.kind] = by_kind.get(a.kind, 0) + 1
         for r in a.reasons or []:
             reasons[r["code"]] = reasons.get(r["code"], 0) + 1
     would_buy = [a for a in rows if a.status == "dry_run" and a.opportunity_id]
@@ -454,17 +542,22 @@ async def dry_run_report(session: AsyncSession, user_id: uuid.UUID) -> dict[str,
             still += 1
         else:
             gone += 1
-    verifier_disagreed = sum(1 for a in rows if a.verifier and a.verifier.get("agrees") is False)
+    # Only purchases go through the verifier: markdowns must not dilute its disagreement rate.
+    buys = [a for a in rows if a.kind == "buy"]
+    verifier_disagreed = sum(1 for a in buys if a.verifier and a.verifier.get("agrees") is False)
     n = len(rows)
     return {
         "actions": n,
         "by_status": by_status,
+        "by_kind": by_kind,
+        "by_agent": sum(1 for a in rows if (a.payload or {}).get("source") == "agent"),
+        "would_have_repriced": sum(1 for a in rows if a.kind == "reprice" and a.status == "dry_run"),
         "blocked_reasons": dict(sorted(reasons.items(), key=lambda kv: -kv[1])),
         "would_have_bought": len(would_buy),
         "still_available": still,
         "gone_since": gone,
         "verifier_disagreed": verifier_disagreed,
-        "verifier_disagreement_rate": round(verifier_disagreed / n, 3) if n else None,
+        "verifier_disagreement_rate": round(verifier_disagreed / len(buys), 3) if buys else None,
         "note": "Nessuna azione registrata: il collaudo non ha ancora dati."
         if not n
         else "Il collaudo mostra cosa avrebbe fatto, non quanto avrebbe guadagnato: servono le vendite reali.",
