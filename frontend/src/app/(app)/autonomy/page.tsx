@@ -10,7 +10,7 @@ import { EmptyState, SectionHeader, Skeleton } from "@/components/ui/feedback";
 import { Field, Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/misc";
 import { StatTile } from "@/components/ui/stat";
-import { pct, timeAgo } from "@/lib/format";
+import { eur, pct, timeAgo } from "@/lib/format";
 import {
   useAudit,
   useAutonomy,
@@ -74,13 +74,28 @@ function ActionRow({ a }: { a: AutonomyAction }) {
   const resolve = useResolveAction();
   const st = STATUS[a.status];
   const title = (a.payload.title as string | undefined) ?? a.kind.replace(/_/g, " ");
+  // What the agent or the cycle prepared; a markdown carries the price to set (the plan's, never a model's).
+  const money = (v: unknown) => (v === undefined || v === null || Number.isNaN(Number(v)) ? null : Number(v));
+  const price = money(a.payload.price);
+  const was = money(a.payload.from_price);
+  const todo = typeof a.payload.todo === "string" ? a.payload.todo : null;
+  const why = typeof a.payload.reason === "string" ? a.payload.reason : null;
   return (
     <li className="rounded-xl border border-line p-3">
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={st.tone}>{st.label}</Badge>
+        {a.payload.source === "agent" && <Badge tone="neutral">Agent</Badge>}
+        {a.kind === "reprice" && <Badge tone="neutral">Markdown</Badge>}
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{title}</span>
         <span className="text-xs text-fg-3">{timeAgo(a.created_at)}</span>
       </div>
+      {a.kind === "reprice" && price !== null && (
+        <p className="mt-1.5 text-[13px] text-fg-2">
+          Lower the price{was !== null && <> from {eur(was)}</>} to <strong>{eur(price)}</strong>
+        </p>
+      )}
+      {why && <p className="mt-1.5 text-[13px] text-fg-2">Why: {why}</p>}
+      {a.status === "pending_user" && todo && <p className="mt-1.5 text-[13px] text-fg-2">{todo}</p>}
       {a.reasons.length > 0 && (
         <ul className="mt-1.5 list-disc pl-5 text-[13px] text-fg-2">{a.reasons.map((r) => <li key={r.code}>{r.label}</li>)}</ul>
       )}

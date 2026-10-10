@@ -60,6 +60,16 @@ def to_gemini_schema(node: Any) -> Any:
     return out
 
 
+def _declaration(t: dict[str, Any]) -> dict[str, Any]:
+    d: dict[str, Any] = {"name": t["name"], "description": t.get("description", "")}
+    params = to_gemini_schema(t.get("input_schema", {"type": "object"}))
+    if params.get(
+        "properties"
+    ):  # Gemini rejects an OBJECT with empty properties: a tool without inputs has none
+        d["parameters"] = params
+    return d
+
+
 def _parts(content: Any, names: dict[str, str]) -> list[dict[str, Any]]:
     if isinstance(content, str):
         return [{"text": content}]
@@ -122,10 +132,6 @@ class GeminiClient(LLMClient):
         key = self.settings.ai_api_key.get_secret_value() if self.settings.ai_api_key else None
         if not key:
             return None
-        if not self.breaker.allow():
-            log.warning("llm.breaker_open", purpose=purpose)
-            refuse("breaker_open", self.breaker.cooldown)
-            return None
         check = await self.budget.check(purpose)
         if not check.allowed:
             log.warning("llm.budget_stop", purpose=purpose, reason=check.reason)
@@ -136,6 +142,10 @@ class GeminiClient(LLMClient):
         if not adm.allowed:
             log.info("ai.deferred", purpose=purpose, reason=adm.reason, retry_after=adm.retry_after)
             refuse(adm.reason, adm.retry_after)
+            return None
+        if not self.breaker.allow():
+            log.warning("llm.breaker_open", purpose=purpose)
+            refuse("breaker_open", self.breaker.cooldown)
             return None
         try:
             async with httpx.AsyncClient(timeout=self.settings.ai_timeout_seconds) as http:
@@ -150,6 +160,7 @@ class GeminiClient(LLMClient):
                 wait = retry_after_seconds(delay)
                 log.warning("llm.rate_limited", purpose=purpose, retry_after=wait)
                 await get_limiter().penalize(model, wait)  # quota, not an outage: the breaker stays closed
+                self.breaker.release()
                 refuse("rate_limited", wait)
                 return None
             if r.status_code >= 500:
@@ -161,6 +172,7 @@ class GeminiClient(LLMClient):
                 r.status_code >= 400
             ):  # our request is wrong (400/403/404): retrying will not help, the breaker is not tripped
                 log.warning("llm.request_rejected", purpose=purpose, status=r.status_code)
+                self.breaker.release()
                 refuse("rejected", 3600.0)
                 return None
             data = r.json()
@@ -263,18 +275,7 @@ class GeminiClient(LLMClient):
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": to_contents(messages),
             "generationConfig": {"maxOutputTokens": max_tokens},
-            "tools": [
-                {
-                    "functionDeclarations": [
-                        {
-                            "name": t["name"],
-                            "description": t.get("description", ""),
-                            "parameters": to_gemini_schema(t.get("input_schema", {"type": "object"})),
-                        }
-                        for t in tools
-                    ]
-                }
-            ],
+            "tools": [{"functionDeclarations": [_declaration(t) for t in tools]}],
         }
         done = await self._generate(tier=tier, purpose=purpose, ref=ref, body=body)
         if done is None:

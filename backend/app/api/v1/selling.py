@@ -169,7 +169,7 @@ async def evaluate_buyer_offer(
     plan, fit, ref = await service.resale_plan(db, p, econ.costs, float(econ.targets.min_profit))
     if plan is None or ref is None:
         raise AppError("Senza un prezzo di riferimento non posso valutare l'offerta.", code="no_reference")
-    floor = max(plan.floor, float(item.min_price)) if item.min_price is not None else plan.floor
+    floor = service.markdown_floor(plan, item)
     decision = offers.evaluate_offer(
         offer=float(body.offer),
         asking=float(item.listed_price),

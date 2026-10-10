@@ -321,3 +321,26 @@ async def test_a_blocked_prompt_is_a_refusal_not_a_bad_answer(monkeypatch: pytes
     with pytest.raises(AiDeferred) as e:
         await c.structured(system="s", content=[], schema={"type": "object"}, raise_on_defer=True)
     assert e.value.reason == "refused"
+
+
+def test_a_tool_without_inputs_declares_no_parameters() -> None:
+    d = gemini._declaration(
+        {"name": "t", "description": "d", "input_schema": {"type": "object", "properties": {}}}
+    )
+    assert "parameters" not in d
+    d2 = gemini._declaration(
+        {"name": "t", "input_schema": {"type": "object", "properties": {"a": {"type": "string"}}}}
+    )
+    assert d2["parameters"]["properties"]["a"] == {"type": "string"}
+
+
+def test_the_half_open_trial_slot_is_given_back_when_the_call_is_refused() -> None:
+    from app.ai.breaker import CircuitBreaker
+
+    t = [0.0]
+    b = CircuitBreaker(failures=1, cooldown=60, clock=lambda: t[0])
+    b.failure()
+    t[0] = 61
+    assert b.allow() and not b.allow()  # one trial only
+    b.release()
+    assert b.allow()

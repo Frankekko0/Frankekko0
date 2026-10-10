@@ -120,10 +120,6 @@ class LLMClient:
 
         if self._client is None:
             return None
-        if not self.breaker.allow():
-            log.warning("llm.breaker_open", purpose=purpose)
-            refuse("breaker_open", self.breaker.cooldown)
-            return None
         check = await self.budget.check(purpose)
         if not check.allowed:
             log.warning("llm.budget_stop", purpose=purpose, reason=check.reason)
@@ -134,6 +130,10 @@ class LLMClient:
         if not adm.allowed:
             log.info("ai.deferred", purpose=purpose, reason=adm.reason, retry_after=adm.retry_after)
             refuse(adm.reason, adm.retry_after)
+            return None
+        if not self.breaker.allow():
+            log.warning("llm.breaker_open", purpose=purpose)
+            refuse("breaker_open", self.breaker.cooldown)
             return None
         try:
             response = await self._client.beta.messages.create(

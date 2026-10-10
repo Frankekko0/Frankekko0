@@ -37,6 +37,10 @@ class CircuitBreaker:
             return True
         return False
 
+    def release(self) -> None:
+        """The call that held the half-open trial slot ended without a verdict (quota, rejected request): give it back."""
+        self._trial_out = False
+
     def success(self) -> None:
         self._failures = 0
         self._opened_at = None

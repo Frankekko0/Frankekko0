@@ -531,7 +531,8 @@ async def _gate(ctx: ToolContext) -> tuple[Limits, policy.Switches, datetime]:
     suspension or autonomy switched off nothing is proposed and nothing is written (as in the cycle)."""
     uid = _need_user(ctx)
     now = _now(ctx)
-    row = await ctx.session.get(AutonomySettings, uid)
+    # Read again every time: the user may press the kill switch while the run is going, and that must stop it.
+    row = await ctx.session.get(AutonomySettings, uid, populate_existing=True)
     if row is not None and row.killed:
         raise ToolError("interruttore d'emergenza attivo: nessuna proposta")
     if row is not None and row.suspended_at is not None:

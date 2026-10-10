@@ -848,6 +848,59 @@ async def test_without_quota_the_agent_does_not_start_and_leaves_no_run(
         assert (await s.execute(select(func.count()).select_from(AgentRun))).scalar_one() == 0
 
 
+class DrainingLimiter:
+    """The quota of the model, seen once per look: each entry is what is left the moment the agent checks."""
+
+    def __init__(self, rpm_left: list[int]) -> None:
+        self.rpm_left = list(rpm_left)
+
+    async def snapshot(self, model: str, tier: str) -> dict[str, Any]:
+        left = self.rpm_left.pop(0) if len(self.rpm_left) > 1 else self.rpm_left[0]
+        return {
+            "model": model, "rpm_limit": 10, "rpd_limit": 200, "rpm_left": left, "rpd_left": 200, "cooldown_s": 0,
+        }  # fmt: skip
+
+
+async def test_a_run_that_has_used_its_share_of_the_quota_stops_and_keeps_what_it_proposed(
+    auth_client: httpx.AsyncClient, make_listing: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = await seed(make_listing)
+    uid = await user_id(auth_client)
+    await enable(auth_client)
+    # Plenty at the start and for the first turn; then the reserve for the photo checks is all that is left.
+    limiter = DrainingLimiter([10, 10, 1])
+    monkeypatch.setattr(propose_mod, "get_limiter", lambda: limiter)
+    model = ScriptedModel(
+        [
+            call("propose_purchase", opportunity_id=ids["strong"], reason="Buono"),
+            call("propose_purchase", opportunity_id=ids["buy"], reason="Anche questo"),
+            call("finish_proposals", summary="Ok."),
+        ]
+    )
+    run = await run_propose(uid, model, llm=FakeLLM(None))
+    assert run is not None and run.status == "stopped" and run.stop_reason == "model_unavailable"
+    assert len(model.seen) == 1  # the second turn was never asked of the provider
+    assert len(await agent_actions(uid)) == 1  # what was prepared before stays on record
+
+
+async def test_the_kill_switch_pressed_during_a_run_stops_the_next_proposal(
+    auth_client: httpx.AsyncClient, make_listing: Any
+) -> None:
+    ids = await seed(make_listing)
+    uid = await user_id(auth_client)
+    await enable(auth_client)
+    reg = proposal_registry()
+    async with session_scope() as s:
+        ctx = ctx_for(s, uid, ids)
+        first = await reg.call(ctx, "propose_purchase", {"opportunity_id": ids["strong"], "reason": "Prima"})
+        assert first.ok
+        # The user presses the stop button while the run goes on (another request, another transaction).
+        assert (await auth_client.post(f"{API}/autonomy/kill")).status_code == 200
+        second = await reg.call(ctx, "propose_purchase", {"opportunity_id": ids["buy"], "reason": "Seconda"})
+    assert not second.ok and "interruttore d'emergenza" in (second.error or "")
+    assert len(await agent_actions(uid)) == 1
+
+
 # ------------------------------------------------------------------ nothing can execute
 async def test_the_review_agent_cannot_reach_the_proposal_tools(clean_db: None, make_listing: Any) -> None:
     ids = await seed(make_listing)

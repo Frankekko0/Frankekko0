@@ -29,6 +29,7 @@ from app.agent.loop import AgentOutcome, run_agent
 from app.agent.model import AgentModel
 from app.agent.tools import ToolContext, ToolRegistry, proposal_registry
 from app.ai.limiter import get_limiter
+from app.ai.llm import ModelTurn
 from app.api.deps import economics_for
 from app.autonomy import engine
 from app.core.config import Settings
@@ -148,10 +149,12 @@ def fingerprint(
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-async def has_quota_room(model: AgentModel, llm: Any | None, settings: Settings) -> tuple[bool, str]:
-    """Whether the provider can take a run now, keeping the reserves for photo checks and the interactive calls.
-    Read-only: the calls themselves go through the limiter as everywhere else. No ``llm`` (a scripted model in a
-    test) means no provider to protect."""
+async def has_quota_room(
+    model: AgentModel, llm: Any | None, settings: Settings, need: int = MIN_RUN_REQUESTS
+) -> tuple[bool, str]:
+    """Whether the provider can take ``need`` more requests now, keeping the reserves for photo checks and the
+    interactive calls. Read-only: the calls themselves go through the limiter as everywhere else. No ``llm`` (a
+    scripted model in a test) means no provider to protect."""
     if llm is None:
         return True, ""
     tier = str(getattr(model, "tier", "cheap"))
@@ -165,9 +168,33 @@ async def has_quota_room(model: AgentModel, llm: Any | None, settings: Settings)
         if left is None:  # unlimited
             continue
         kept = min(reserve, max(0, int(limit) - 1))
-        if int(left) - kept < min(MIN_RUN_REQUESTS, max(1, int(limit) - kept)):
+        if int(left) - kept < min(need, max(1, int(limit) - kept)):
             return False, why
     return True, ""
+
+
+class KeepsReserve:
+    """The run's model, held to the reserves on every turn and not only when the run starts: a run that has already
+    spent its share stops (``model_unavailable``) instead of eating the requests kept for photo checks and for the
+    user's own clicks. What it proposed up to then stays recorded."""
+
+    def __init__(self, inner: AgentModel, llm: Any | None, settings: Settings) -> None:
+        self.inner, self.llm, self.settings = inner, llm, settings
+        self.provider = inner.provider
+        self.tier = getattr(inner, "tier", "cheap")
+
+    @property
+    def model_name(self) -> str | None:
+        return self.inner.model_name
+
+    async def turn(
+        self, *, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]], ref: str | None
+    ) -> ModelTurn | None:
+        room, why = await has_quota_room(self.inner, self.llm, self.settings, need=1)
+        if not room:
+            log.info("agent.propose_paused", reason=why)
+            return None
+        return await self.inner.turn(system=system, messages=messages, tools=tools, ref=ref)
 
 
 async def propose_for_user(
@@ -250,7 +277,7 @@ async def propose_for_user(
     outcome: AgentOutcome = await run_agent(
         system=SYSTEM_PROMPT,
         task=task_text(len(opps), len(listed), settings.agent_max_proposals_per_run),
-        model=model,
+        model=KeepsReserve(model, llm, settings),
         registry=registry or proposal_registry(),
         ctx=ctx,
         allowed_tools=TOOLS_PROPOSE,
