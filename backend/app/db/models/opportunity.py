@@ -183,6 +183,10 @@ class Opportunity(Base):
     # (a row whose current analysis differs waits for one); ``ai_attempts`` counts the failures that count,
     # ``ai_next_attempt_at`` is the backoff (or the lease of a queued job), ``ai_last_error`` the last reason.
     ai_for_analysis_id: Mapped[uuid.UUID | None] = mapped_column()
+    # The flip score of the analysis the review was written for. A re-analysis that only moves the market a little
+    # keeps the review (``ai_for_analysis_id`` follows the new analysis) but this stays, so that "has the deal moved
+    # enough for a new review" is measured from what the model saw, not from the previous row.
+    ai_reviewed_flip: Mapped[int | None] = mapped_column(SmallInteger)
     ai_attempts: Mapped[int] = mapped_column(SmallInteger, default=0, server_default="0")
     ai_next_attempt_at: Mapped[datetime | None] = mapped_column()
     ai_last_error: Mapped[str | None] = mapped_column(String(48))

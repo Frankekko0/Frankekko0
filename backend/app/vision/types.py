@@ -215,3 +215,9 @@ class ImageAnalysis(BaseModel):
     # Facts parsed from that text (size, composition, codes, country, brands, label photos).
     ocr_facts: dict[str, Any] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
+    # Which photos these local measures were taken from (``app.vision.analyzer.photos_fingerprint``): a run held back
+    # by a quota reuses them instead of decoding and reading the same photos again.
+    photos_key: str | None = None
+    # Set when the model gave up on this gallery (it blocked it, or the answer never fit): the listing stays on
+    # the rules' analysis, and is not asked again, until its photos change.
+    model_gave_up: str | None = None

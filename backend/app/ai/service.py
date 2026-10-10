@@ -25,7 +25,13 @@ from app.identification.engine import ListingText
 from app.ingestion.catalog import load_catalog
 from app.ingestion.service import get_engine
 from app.media.archive import read_copy
-from app.vision.analyzer import PhotoInput, VisionDeferred, get_image_analyzer
+from app.vision.analyzer import (
+    PhotoInput,
+    VisionDeferred,
+    get_image_analyzer,
+    photos_fingerprint,
+    stored_measures,
+)
 from app.vision.provenance import photo_provenance
 
 log = get_logger(__name__)
@@ -94,12 +100,14 @@ def store_analysis(opp: Opportunity, analysis: DealAnalysis) -> dict[str, Any]:
 
     The analyst may be more cautious than the decision engine, never less: when it is, the decision is lowered with
     the reason on record, so there is still one verdict, not two (``reviewed_fields`` can only lower). A model
-    review is marked as written for the opportunity's current analysis, which takes it out of the queue."""
+    review is marked as written for the opportunity's current analysis, which takes it out of the queue, and
+    remembers the flip score it was written for (the baseline of "has the deal moved enough for a new review")."""
     opp.ai_analysis = analysis.model_dump(mode="json")
     opp.ai_provider = analysis.provider
     opp.ai_analyzed_at = datetime.now(UTC)
     if is_llm_provider(analysis.provider):
         opp.ai_for_analysis_id = opp.analysis_id
+        opp.ai_reviewed_flip = opp.flip_score
         opp.ai_attempts = 0
         opp.ai_next_attempt_at = None
         opp.ai_last_error = None
@@ -108,56 +116,73 @@ def store_analysis(opp: Opportunity, analysis: DealAnalysis) -> dict[str, Any]:
     return opp.ai_analysis
 
 
-async def run_ai_analysis(db: AsyncSession, opp: Opportunity, *, strict: bool = True) -> dict[str, Any]:
-    """Run the deal analyst on a stored opportunity inside the caller's session (the manual request).
+class AnalysisChanged(Exception):
+    """The opportunity was re-analysed (or removed) while the model answered: the answer was written for numbers
+    that are no longer the current ones, so it is discarded."""
 
-    With a model configured and ``strict`` (the default), a call that is refused by the quota, fails or gives
-    no usable answer raises ``AiDeferred`` and nothing is written: the rules' text never replaces a record or is
-    presented as the model's. Without a model the rule-based analyst answers, but never over a valid model review."""
-    ctx = await deal_context(db, opp)
+
+async def _analyse(
+    opportunity_id: uuid.UUID, settings: Settings, *, queued: bool
+) -> tuple[str, dict[str, Any] | None]:
+    """The one way a model review is made, whoever asks (the queue or the manual request), in three steps so that no
+    connection or transaction is held while the model answers: read the stored numbers, call the model (strict:
+    ``AiDeferred`` when there is no usable answer, the rules' text never takes its place), then write under a row
+    lock only if the opportunity is still on the analysis that was read.
+
+    Returns ``(status, analysis)``: ``done`` (the stored analysis), ``skipped`` (queued only: nothing to do),
+    ``gone`` (no such opportunity) or ``stale`` (re-analysed meanwhile). Without a model the rule-based analyst
+    answers (manual request only), but never over a valid model review."""
     llm = get_llm()
-    if not llm.enabled:
-        if has_valid_review(opp) and opp.ai_analysis:
-            return opp.ai_analysis
-        return store_analysis(opp, RuleBasedDealAnalyst().analyze_sync(ctx))
-    analysis = await ClaudeDealAnalyst(llm).analyze(ctx, ref=str(opp.id), strict=strict)
-    return store_analysis(opp, analysis)
-
-
-async def review_opportunity(opportunity_id: uuid.UUID, settings: Settings | None = None) -> str:
-    """The queued review in three steps, so that no connection or transaction is held while the model answers:
-    read the stored numbers, call the model (strict: ``AiDeferred`` when there is no usable answer), then write
-    only if the opportunity is still on the analysis that was read. Returns ``done``, ``skipped`` (nothing to do:
-    gone, closed, no longer at the threshold, already reviewed) or ``stale`` (re-analysed meanwhile: the answer
-    was for other numbers and is discarded; the new analysis is in the queue)."""
-    settings = settings or get_settings()
-    llm = get_llm()
-    if not llm.enabled:
-        return "skipped"
+    if queued and not llm.enabled:
+        return "skipped", None
     async with session_scope() as s:
         opp = await s.get(Opportunity, opportunity_id)
-        if (
-            opp is None
-            or opp.analysis_id is None
+        if opp is None:
+            return "gone", None
+        if queued and (
+            opp.analysis_id is None
             or has_valid_review(opp)
             or not qualifies_for_strong_ai(
                 settings, flip_score=opp.flip_score, data_quality=opp.data_quality, is_active=opp.is_active
             )
         ):
-            return "skipped"
+            return "skipped", None
+        if not llm.enabled and has_valid_review(opp) and opp.ai_analysis:
+            return "done", opp.ai_analysis
         analysis_id = opp.analysis_id
         ctx = await deal_context(s, opp)
-    analysis = await ClaudeDealAnalyst(llm).analyze(ctx, ref=str(opportunity_id), strict=True)
+    if llm.enabled:
+        analysis = await ClaudeDealAnalyst(llm).analyze(ctx, ref=str(opportunity_id), strict=True)
+    else:
+        analysis = RuleBasedDealAnalyst().analyze_sync(ctx)
     async with session_scope() as s:
         row = (
             await s.execute(
                 select(Opportunity).where(Opportunity.id == opportunity_id).with_for_update(of=Opportunity)
             )
         ).scalar_one_or_none()
-        if row is None or not row.is_active or row.analysis_id != analysis_id:
-            return "stale"
-        store_analysis(row, analysis)
-    return "done"
+        if row is None or row.analysis_id != analysis_id or (queued and not row.is_active):
+            return "stale", None
+        return "done", store_analysis(row, analysis)
+
+
+async def review_opportunity(opportunity_id: uuid.UUID, settings: Settings | None = None) -> str:
+    """The queued review (see ``_analyse``). Returns ``done``, ``skipped`` (nothing to do: gone, closed, no longer at
+    the threshold, already reviewed) or ``stale`` (re-analysed meanwhile: the answer was for other numbers and is
+    discarded; the new analysis is in the queue)."""
+    status, _ = await _analyse(opportunity_id, settings or get_settings(), queued=True)
+    return "skipped" if status == "gone" else status
+
+
+async def run_ai_analysis(opportunity_id: uuid.UUID, settings: Settings | None = None) -> dict[str, Any]:
+    """The manual request: the same read, call and locked write as the queued review, on any opportunity and again
+    over an earlier review. A call that is refused by the quota, fails or gives no usable answer raises ``AiDeferred``
+    and nothing is written. ``AnalysisChanged`` when the opportunity was re-analysed meanwhile (nothing is written
+    either: the caller asks again)."""
+    status, analysis = await _analyse(opportunity_id, settings or get_settings(), queued=False)
+    if status != "done" or analysis is None:
+        raise AnalysisChanged(status)
+    return analysis
 
 
 async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
@@ -185,6 +210,9 @@ async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
         PhotoInput(i.position, i.image_key, await read_copy(i.local_path), i.sha256, i.content_type)
         for i in images
     ]
+    photos_key = photos_fingerprint(photos)
+    old_vision = (listing.identification or {}).get("vision") or {}
+    keep_model = old_vision.get("analyzer") not in (None, "heuristic")
     deferred: VisionDeferred | None = None
     try:
         vision = await analyzer.analyze(
@@ -192,6 +220,11 @@ async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
             {
                 "category_slugs": sorted(catalog.categories_by_slug),
                 "brand_rules": brand_rules(brand_slug) if brand_slug else None,
+                # What an earlier run measured on these very photos: a run held back by a cap wakes many times and
+                # must not decode and read them again each time.
+                "local": stored_measures(old_vision, photos_key),
+                # A stored model analysis is never overwritten by local measures: nothing to measure when held.
+                "store_local": not keep_model,
             },
         )
         if vision.analyzer == "heuristic" and analyzer.name != "heuristic":
@@ -199,11 +232,17 @@ async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
             deferred = VisionDeferred("no_model_analysis", 300.0, vision)
     except VisionDeferred as exc:
         vision, deferred = exc.partial, exc
-    old_vision = (listing.identification or {}).get("vision") or {}
-    if deferred is not None and old_vision.get("analyzer") not in (None, "heuristic"):
-        # A good model analysis stays as it is: the local measures never replace it.
-        log.warning("vision.deferred", listing_id=str(listing.id), reason=deferred.reason, kept="model")
+    if deferred is not None and (keep_model or not deferred.store):
+        # A good model analysis stays as it is (the local measures never replace it), and measures that are
+        # already stored need no second write.
+        (log.warning if keep_model else log.info)(
+            "vision.deferred",
+            listing_id=str(listing.id),
+            reason=deferred.reason,
+            kept="model" if keep_model else "measures",
+        )
         raise deferred
+    vision.photos_key = photos_key
     # Keep each photo's hash (later listings are compared with it) and look for the same photos
     # in other sellers' listings.
     for img, h in zip(images, vision.photo_hashes, strict=False):

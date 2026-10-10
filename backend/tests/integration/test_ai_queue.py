@@ -314,7 +314,7 @@ async def test_a_review_resets_the_queue_state_and_leaves_the_queue(
 
 # ------------------------------------------------------------------ the sweep: best first, within the quota room
 async def test_the_sweep_takes_the_highest_flip_first_within_the_room_the_reserves_leave(
-    clean_db: None, make_listing: Any, env: Env
+    clean_db: None, make_listing: Any, env: Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ids = await seed(make_listing)
     # rpm 4 with a reserve of 1 leaves 3 this minute; five rows wait.
@@ -334,6 +334,7 @@ async def test_the_sweep_takes_the_highest_flip_first_within_the_room_the_reserv
     ]  # spread over the minute (60 / rpm)
 
     env.queued.clear()
+    monkeypatch.setattr(queue_mod, "_pace_minute", lambda: 7)  # the next minute (the pace is kept per minute)
     again = await tasks.ai_sweep_task({})  # the three are leased: the next best are taken, not the same ones
     assert [a[0] for _, a, _ in env.queued] == [ids["negotiate"], ids["watch"], ids["dear"]][
         : again["queued"]
@@ -601,15 +602,15 @@ async def test_without_a_model_the_rules_answer_but_never_over_a_valid_review(
     keyless = LLMClient(Settings(ai_api_key=None))
     monkeypatch.setattr(service, "get_llm", lambda: keyless)
     assert not keyless.enabled
-    async with session_scope() as s:
-        o = await s.get(Opportunity, uuid.UUID(ids["strong"]))
-        assert o is not None
-        kept = await service.run_ai_analysis(s, o)
-        assert kept["provider"] == "claude" and o.ai_provider == "claude"  # the review stays
-        fresh = await s.get(Opportunity, uuid.UUID(ids["buy"]))
-        assert fresh is not None
-        assert (await service.run_ai_analysis(s, fresh))["provider"] == "rules"
-        assert fresh.ai_for_analysis_id is None  # the rules' text is not a review: the row stays in the queue
+    kept = await service.run_ai_analysis(uuid.UUID(ids["strong"]))
+    assert (
+        kept["provider"] == "claude" and (await row(ids["strong"])).ai_provider == "claude"
+    )  # the review stays
+    assert (await service.run_ai_analysis(uuid.UUID(ids["buy"])))["provider"] == "rules"
+    fresh = await row(ids["buy"])
+    assert (
+        fresh.ai_provider == "rules" and fresh.ai_for_analysis_id is None
+    )  # not a review: the row stays queued
 
 
 async def test_the_listing_text_reaches_the_model_as_delimited_untrusted_data(
@@ -702,3 +703,262 @@ async def test_a_listing_below_the_threshold_or_without_a_key_is_never_kicked(
     await tasks.analyze_batch({"queue": "default"}, listing_ids)
     assert not [f for f, _, _ in env.queued if f == "ai_analyze_task"]
     assert (await tasks.ai_sweep_task({}))["queued"] == 0
+
+
+# ------------------------------------------------------------------ the manual request is the same three steps
+async def reanalyse_during_the_call(env: Env, opp_id: str, price_drop: D = D("2")) -> None:
+    """Make the model's answer arrive after the listing was re-analysed (a new analysis, committed) meanwhile."""
+    original = env.fake._create
+
+    async def reanalysed_meanwhile(**kwargs: Any) -> Any:
+        listing_id = (await row(opp_id)).listing_id
+        async with session_scope() as s:
+            await s.execute(
+                update(Listing).where(Listing.id == listing_id).values(price=Listing.price - price_drop)
+            )
+        await reanalyse(listing_id, NOW + timedelta(hours=1))
+        return await original(**kwargs)
+
+    env.fake.beta.messages.create = reanalysed_meanwhile  # type: ignore[assignment]
+
+
+async def test_a_manual_review_of_an_analysis_that_changed_meanwhile_is_discarded_not_written_over_the_new_one(
+    clean_db: None, make_listing: Any, env: Env
+) -> None:
+    ids = await seed(make_listing)
+    env.configure(text_response(answer("SKIP")))  # a verdict that would lower the old decision
+    before = await row(ids["strong"])
+    await reanalyse_during_the_call(env, ids["strong"])
+
+    with pytest.raises(service.AnalysisChanged):
+        await service.run_ai_analysis(uuid.UUID(ids["strong"]))
+    after = await row(ids["strong"])
+    assert after.analysis_id != before.analysis_id  # the listing really was re-analysed
+    assert (
+        after.ai_provider == "rules" and after.ai_for_analysis_id is None
+    )  # no review stands in the old one's name
+    assert (
+        after.decision_verdict == "STRONG_BUY" and "reviewed_from" not in after.decision
+    )  # the engine's own
+    assert after.ai_reviewed_flip is None
+    assert ids["strong"] in [str(i) for i in await claim_pending(env.cfg, 50)]  # still waiting for its review
+
+
+async def test_a_manual_review_holds_no_connection_while_the_model_answers_and_is_written_for_its_analysis(
+    clean_db: None, make_listing: Any, env: Env
+) -> None:
+    ids = await seed(make_listing)
+    env.configure(text_response(answer("CONSIDER")))
+    seen: list[int] = []
+    original = env.fake._create
+
+    async def probing(**kwargs: Any) -> Any:
+        async with session_scope() as s:
+            busy = await s.execute(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity WHERE state <> 'idle' AND pid <> pg_backend_pid()"
+                    " AND datname = current_database()"
+                )
+            )
+            seen.append(int(busy.scalar_one()))
+        return await original(**kwargs)
+
+    env.fake.beta.messages.create = probing  # type: ignore[assignment]
+    stored = await service.run_ai_analysis(uuid.UUID(ids["strong"]))
+    assert seen == [0] and stored["verdict"] == "CONSIDER"
+    o = await row(ids["strong"])
+    assert o.ai_for_analysis_id == o.analysis_id and o.ai_reviewed_flip == o.flip_score
+    assert (o.verdict, o.decision_verdict) == ("CONSIDER", "WATCHLIST")
+
+
+async def test_a_manual_review_repeated_over_an_earlier_one_replaces_it_for_the_same_analysis(
+    clean_db: None, make_listing: Any, env: Env
+) -> None:
+    ids = await seed(make_listing)
+    env.configure(
+        text_response(answer("CONSIDER", summary="prima")),
+        text_response(answer("CONSIDER", summary="seconda")),
+    )
+    await service.run_ai_analysis(uuid.UUID(ids["strong"]))
+    again = await service.run_ai_analysis(
+        uuid.UUID(ids["strong"])
+    )  # asked for again: the model is called again
+    assert again["summary"] == "seconda" and len(env.fake.calls) == 2
+
+
+async def test_a_manual_review_of_an_unknown_opportunity_says_so(
+    clean_db: None, make_listing: Any, env: Env
+) -> None:
+    env.configure()
+    with pytest.raises(service.AnalysisChanged):
+        await service.run_ai_analysis(uuid.uuid4())
+    assert env.fake.calls == []
+
+
+# ------------------------------------------------------------------ a review that hangs or is cancelled leaves a trace
+async def test_a_review_that_outlives_its_budget_is_recorded_as_a_failed_attempt_and_backs_off(
+    clean_db: None, make_listing: Any, env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    ids = await seed(make_listing)
+    env.configure(ai_timeout_seconds=0.05)
+    monkeypatch.setattr(queue_mod, "REVIEW_MARGIN_SECONDS", 0)  # the budget is 3 x 0.05 s
+
+    async def hangs(*a: Any, **k: Any) -> str:
+        await asyncio.sleep(30)
+        return "done"
+
+    monkeypatch.setattr(tasks, "review_opportunity", hangs)
+    assert await tasks.ai_analyze_task({}, ids["strong"]) == "deferred"
+    o = await row(ids["strong"])
+    assert (o.ai_attempts, o.ai_last_error) == (1, "timeout") and o.ai_provider == "rules"
+    assert o.ai_next_attempt_at is not None and o.ai_next_attempt_at > datetime.now(UTC) + timedelta(
+        seconds=20
+    )
+    assert env.llm.breaker._failures == 1  # a provider that does not answer is a failing one
+
+
+async def test_a_job_cancelled_from_outside_writes_down_why_and_stays_cancelled(
+    clean_db: None, make_listing: Any, env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    ids = await seed(make_listing)
+    env.configure()
+    started = asyncio.Event()
+
+    async def hangs(*a: Any, **k: Any) -> str:
+        started.set()
+        await asyncio.sleep(30)
+        return "done"
+
+    monkeypatch.setattr(tasks, "review_opportunity", hangs)
+    job = asyncio.create_task(tasks.ai_analyze_task({}, ids["strong"]))
+    await started.wait()
+    job.cancel()  # the worker's own timeout, or a shutdown
+    with pytest.raises(asyncio.CancelledError):
+        await job
+    o = await row(ids["strong"])
+    assert (o.ai_attempts, o.ai_last_error) == (1, "cancelled")  # not an invisible retry for ever
+    assert o.ai_next_attempt_at is not None and o.ai_next_attempt_at > datetime.now(UTC)
+    for _ in range(7):  # and the row ends up exhausted instead of looping
+        await defer_opportunity(uuid.UUID(ids["strong"]), "timeout", 0.0, settings=env.cfg)
+    assert (await queue_stats(env.cfg))["exhausted"] >= 1
+
+
+# ------------------------------------------------------------------ "moved enough" is measured from what the model saw
+async def test_the_flip_a_review_was_written_for_is_the_baseline_not_the_previous_row(
+    clean_db: None, make_listing: Any, env: Env
+) -> None:
+    ids = await seed(make_listing)
+    env.configure(text_response(answer("CONSIDER")))
+    await service.review_opportunity(uuid.UUID(ids["strong"]), env.cfg)
+    reviewed = await row(ids["strong"])
+    assert reviewed.ai_reviewed_flip == reviewed.flip_score  # remembered with the review
+
+    # The market has been drifting: earlier small moves kept the review, each one measured from the row before,
+    # so the row's flip is now close to the new one while the review was written for a flip 10 points higher.
+    async with session_scope() as s:
+        await s.execute(
+            update(Opportunity)
+            .where(Opportunity.id == uuid.UUID(ids["strong"]))
+            .values(ai_reviewed_flip=reviewed.flip_score + 10)
+        )
+    async with session_scope() as s:
+        await IngestionService(s, "test").ingest(
+            [make_listing(price=45, status="sold", published_days_ago=12, sold_after_days=4)], now=NOW
+        )
+    outcome = await reanalyse(reviewed.listing_id, NOW + timedelta(minutes=5))
+    assert outcome.analysis_created is True and outcome.trigger == "recompute"
+    after = await row(ids["strong"])
+    assert (
+        abs(after.flip_score - reviewed.flip_score) < env.cfg.ai_reanalyze_flip_delta
+    )  # small step from the row
+    assert outcome.ai_pending is True, "the drift since the review adds up: a new review is due"
+    assert (
+        after.ai_provider == "rules" and after.ai_for_analysis_id is None and after.ai_reviewed_flip is None
+    )
+
+
+async def test_a_kept_review_keeps_the_flip_it_was_written_for(
+    clean_db: None, make_listing: Any, env: Env
+) -> None:
+    ids = await seed(make_listing)
+    env.configure(text_response(answer("CONSIDER")))
+    await service.review_opportunity(uuid.UUID(ids["strong"]), env.cfg)
+    reviewed = await row(ids["strong"])
+    async with session_scope() as s:
+        await IngestionService(s, "test").ingest(
+            [make_listing(price=45, status="sold", published_days_ago=12, sold_after_days=4)], now=NOW
+        )
+    outcome = await reanalyse(reviewed.listing_id, NOW + timedelta(minutes=5))
+    after = await row(ids["strong"])
+    assert outcome.ai_pending is False and after.ai_for_analysis_id == after.analysis_id
+    assert after.ai_reviewed_flip == reviewed.flip_score  # not the row's new flip
+    again = await reanalyse(reviewed.listing_id, NOW + timedelta(minutes=5))  # the same analysis once more
+    assert again.analysis_created is False
+    assert (await row(ids["strong"])).ai_reviewed_flip == reviewed.flip_score
+
+
+# ------------------------------------------------------------------ the kick keeps to the sweep's pace
+async def test_with_no_limits_of_its_own_the_kicks_and_the_sweep_share_one_batch_per_minute(
+    clean_db: None, make_listing: Any, env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = await seed(make_listing)
+    env.configure(
+        ai_rpm_strong=0, ai_rpd_strong=0, ai_sweep_batch=5
+    )  # unlimited: nothing else bounds the rate
+    minute = [1000]
+    monkeypatch.setattr(queue_mod, "_pace_minute", lambda: minute[0])
+    names = ["inject", "strong", "buy", "negotiate", "watch", "dear"]
+    await set_flips({ids[n]: 90 - i for i, n in enumerate(names)})
+    candidates = [(90 - i, uuid.UUID(ids[n])) for i, n in enumerate(names)]
+
+    assert await queue_mod.kick(candidates[:5], env.cfg) == 5
+    assert (
+        await queue_mod.kick(candidates[:5], env.cfg) == 0
+    )  # a second batch in the same minute adds nothing
+    assert len(env.queued) == 5
+    env.queued.clear()
+    assert (await tasks.ai_sweep_task({})) == {
+        "queued": 0,
+        "reason": "pace",
+    }  # nor does the sweep: 5 per minute
+    assert env.queued == []
+
+    minute[0] += 1  # the next minute: a fresh pace
+    out = await tasks.ai_sweep_task({})
+    assert out["queued"] == 5 and out["room"] == 5  # and again 5, no more, for the whole minute
+    assert await queue_mod.kick(candidates[:5], env.cfg) == 0
+
+
+async def test_the_sweep_gives_back_the_room_it_did_not_use_so_that_the_kicks_can_have_it(
+    clean_db: None, make_listing: Any, env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = await seed(make_listing)
+    env.configure(ai_rpm_strong=0, ai_rpd_strong=0, ai_sweep_batch=5, ai_auto_analyze_min_flip_score=95)
+    monkeypatch.setattr(queue_mod, "_pace_minute", lambda: 2000)
+    await set_flips({v: 50 for v in ids.values()})  # nothing waits (below the threshold)
+    assert (await tasks.ai_sweep_task({}))["queued"] == 0
+    env.cfg = ai_settings(
+        ai_rpm_strong=0, ai_rpd_strong=0, ai_sweep_batch=5, ai_auto_analyze_min_flip_score=0
+    )
+    candidates = [(60 + i, uuid.UUID(ids[n])) for i, n in enumerate(("strong", "buy", "negotiate"))]
+    await set_flips({ids["strong"]: 60, ids["buy"]: 61, ids["negotiate"]: 62})
+    assert await queue_mod.kick(candidates, env.cfg) == 3  # the idle sweep did not eat the minute's room
+
+
+async def test_the_pace_never_grants_more_than_the_cap_whatever_the_callers(
+    clean_db: None, env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    env.configure()
+    monkeypatch.setattr(queue_mod, "_pace_minute", lambda: 3000)
+    results = await asyncio.gather(*(queue_mod.take_pace("m", 2, 5) for _ in range(10)))
+    assert sum(granted for granted, _ in results) == 5
+    key = results[0][1]
+    await queue_mod.give_back_pace(key, 2)
+    assert (await queue_mod.take_pace("m", 5, 5))[0] == 2
+    assert (await queue_mod.take_pace("m", 0, 5))[0] == 0 and (await queue_mod.take_pace("m", 3, 0))[0] == 0

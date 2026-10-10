@@ -8,7 +8,9 @@
   certainty level. It never asserts authenticity. The photos go to the model as bytes of the local
   copy (converted or shrunk to what the provider takes), never as an address on Vinted. When the model
   gives no answer it raises :class:`VisionDeferred` (with the local analysis attached) instead of passing
-  the local analysis off as the photo analysis.
+  the local analysis off as the photo analysis. It asks whether a call would be let through (a cap, a cooldown,
+  the breaker, the spend budget) before decoding or reading anything, and the local measures of a gallery are
+  taken once and reused (:func:`stored_measures`): a job held back by a quota costs nothing on each wake.
 
 A photo the browser has not uploaded yet is not analysed and is counted as missing.
 """
@@ -16,11 +18,13 @@ A photo the browser has not uploaded yet is not analysed and is counted as missi
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from typing import Any
 
 from app.ai.images import ANTHROPIC_IMAGES, ImageLimits, fit_images
+from app.ai.limiter import Admission
 from app.ai.llm import AiDeferred, LLMClient
 from app.core.logging import get_logger
 from app.domain.enums import Certainty
@@ -80,20 +84,36 @@ def prepare_gallery(
 
 # Reasons the provider was not even asked (a cap, a cooldown, an open breaker): nothing was spent on the try.
 NOT_ASKED = frozenset({"breaker_open", "budget", "rpm", "rpd", "cooldown", "redis"})
-# Reasons asking again cannot help: the request is wrong (key, model, schema) or no photo can be sent.
-UNFIXABLE = frozenset({"rejected", "no_photo_sendable"})
+# Reasons asking again cannot help: the request is wrong (key, model, schema), the provider blocked the content
+# (the same photos are blocked every time) or no photo can be sent.
+UNFIXABLE = frozenset({"rejected", "refused", "no_photo_sendable"})
+# Reasons that belong to this very gallery: a block, or an answer that does not fit in the output. When the model
+# gives up on them the listing stays on the rules' analysis, with the reason shown, until its photos change.
+GALLERY_REASONS = frozenset({"refused", "truncated"})
+MAX_TRUNCATED_TRIES = 2  # a cut-off answer is asked once more (it may be a long one-off), no more
+GAVE_UP_NOTES = {
+    "refused": "Foto non analizzate dal modello: il fornitore ha rifiutato di leggerle (contenuto bloccato). "
+    "Restano solo le misure locali.",
+    "truncated": "Foto non analizzate dal modello: la risposta veniva troncata anche al secondo tentativo. "
+    "Restano solo le misure locali.",
+}
 
 
 class VisionDeferred(AiDeferred):
     """The model did not analyse the photos (quota, outage, refusal, bad answer) and must be asked again later.
 
     ``partial`` is what the local analysis measured (hashes, quality, OCR): it says nothing the model would, and
-    it is never the photo analysis. ``changed`` tells the caller whether storing it changed the listing."""
+    it is never the photo analysis. ``changed`` tells the caller whether storing it changed the listing.
+    ``store`` is False when ``partial`` adds nothing to what an earlier run already stored (or there is nothing
+    worth storing): the caller then writes nothing."""
 
-    def __init__(self, reason: str, retry_after: float, partial: ImageAnalysis) -> None:
+    def __init__(
+        self, reason: str, retry_after: float, partial: ImageAnalysis, *, store: bool = True
+    ) -> None:
         super().__init__(reason, retry_after)
         self.partial = partial
         self.changed = False
+        self.store = store
 
     @property
     def asked(self) -> bool:
@@ -103,6 +123,30 @@ class VisionDeferred(AiDeferred):
     @property
     def unfixable(self) -> bool:
         return self.reason in UNFIXABLE
+
+
+def photos_fingerprint(photos: list[PhotoInput]) -> str:
+    """What the uploaded photos are, without decoding them: position, identity and size of each local copy.
+    Local measures are reused only for the same fingerprint."""
+    raw = "|".join(f"{p.position}:{p.identity}:{len(p.data or b'')}" for p in photos[:MAX_IMAGES] if p.data)
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+def stored_measures(vision: dict[str, Any] | None, photos_key: str) -> ImageAnalysis | None:
+    """The local measures an earlier run stored for exactly these photos, ready to use again, else ``None``.
+
+    Only a record no model ever completed (``analyzer`` is "heuristic") counts: a model analysis carries answers
+    that belong to the model. The measures (hashes, quality, OCR) depend on the photos alone, so they are decoded
+    and read once, not on every run that is held back by a cap."""
+    if not vision or vision.get("analyzer") != "heuristic" or vision.get("photos_key") != photos_key:
+        return None
+    try:
+        local = ImageAnalysis.model_validate(vision)
+    except ValueError:
+        return None
+    local.model_gave_up = None  # a new attempt starts clean: the notes of an earlier give-up go with it
+    local.notes = [n for n in local.notes if n not in GAVE_UP_NOTES.values()]
+    return local
 
 
 class ImageAnalyzer(ABC):
@@ -454,12 +498,40 @@ class ClaudeVisionAnalyzer(ImageAnalyzer):
         self.llm = llm
         self.heuristic = HeuristicImageAnalyzer()
 
+    async def _held(self) -> Admission | None:
+        """Why a model call would be refused right now (a cap, a cooldown, an open breaker, the spend budget), else
+        ``None``. Read-only. A client without the pre-check (a stand-in) is never held: the call decides."""
+        check = getattr(self.llm, "admission", None)
+        if check is None:
+            return None
+        adm: Admission = await check("strong", "vision")
+        return None if adm.allowed else adm
+
     async def analyze(self, photos: list[PhotoInput], context: dict[str, Any]) -> ImageAnalysis:
-        base = await self.heuristic.analyze(photos, context)
         # Every uploaded photo, numbered by its gallery position (the answer refers to these numbers).
         numbered = [(p.position, p) for p in photos[:MAX_IMAGES] if p.data]
         if not numbered:
-            return base
+            return await self.heuristic.analyze(photos, context)
+        # Ask whether the model can be called BEFORE the expensive local work (decode, hashes, OCR) and the
+        # re-encoding of the gallery: a job held back by a cap wakes many times, and each wake must cost nothing.
+        # ``stored``: what an earlier run measured on these very photos (the caller checked they are the same).
+        stored: ImageAnalysis | None = context.get("local")
+        held = await self._held()
+        if held is not None and (stored is not None or not context.get("store_local", True)):
+            # Nothing to measure (done already, or a stored model analysis must not be touched) and nobody to ask.
+            log.info("vision.held_before_work", reason=held.reason, retry_after=held.retry_after)
+            raise VisionDeferred(
+                held.reason, held.retry_after, stored or ImageAnalysis(analyzer="heuristic"), store=False
+            )
+        base = (
+            stored.model_copy(deep=True)
+            if stored is not None
+            else await self.heuristic.analyze(photos, context)
+        )
+        if held is not None:
+            # The first run on these photos: measured once and stored, so a later wake finds it done.
+            raise VisionDeferred(held.reason, held.retry_after, base)
+        new = stored is None  # whether ``base`` holds measures that are not stored yet
         limits = getattr(self.llm, "image_limits", ANTHROPIC_IMAGES)
         fitted = await asyncio.to_thread(prepare_gallery, [p for _, p in numbered], limits)
         content: list[dict[str, Any]] = []
@@ -474,7 +546,7 @@ class ClaudeVisionAnalyzer(ImageAnalyzer):
                 {"type": "image", "source": {"type": "base64", "media_type": image[0], "data": image[1]}}
             )
         if not sent:
-            raise VisionDeferred("no_photo_sendable", 3600.0, base)
+            raise VisionDeferred("no_photo_sendable", 3600.0, base, store=new)
         rules = context.get("brand_rules") or {}
         if base.ocr:
             read = "\n".join(
@@ -514,9 +586,9 @@ class ClaudeVisionAnalyzer(ImageAnalyzer):
                 raise_on_defer=True,
             )
         except AiDeferred as exc:
-            raise VisionDeferred(exc.reason, exc.retry_after, base) from exc
+            raise VisionDeferred(exc.reason, exc.retry_after, base, store=new) from exc
         if data is None:
-            raise VisionDeferred("no_answer", 300.0, base)
+            raise VisionDeferred("no_answer", 300.0, base, store=new)
 
         def finding(key: str) -> VisualFinding | None:
             raw = data.get(key)

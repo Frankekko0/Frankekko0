@@ -48,11 +48,16 @@ async def test_rows_already_reviewed_by_the_model_are_not_queued_again_after_the
         alembic("upgrade", "0023")
         rows = await c.fetch(
             "SELECT ai_provider, ai_for_analysis_id = analysis_id AS reviewed, ai_for_analysis_id IS NULL AS empty,"
-            " ai_attempts, ai_next_attempt_at, ai_last_error FROM opportunities"
+            " ai_attempts, ai_next_attempt_at, ai_last_error, ai_reviewed_flip FROM opportunities"
         )
         by_provider = {r["ai_provider"]: r for r in rows}
         assert by_provider["claude"]["reviewed"] and by_provider["gemini"]["reviewed"]
         assert by_provider["rules"]["empty"] and by_provider[None]["empty"]  # these wait for their review
+        # the flip a kept review is measured from: the row's own for the reviewed rows, nothing for the others
+        assert by_provider["claude"]["ai_reviewed_flip"] == by_provider["gemini"]["ai_reviewed_flip"] == 85
+        assert (
+            by_provider["rules"]["ai_reviewed_flip"] is None and by_provider[None]["ai_reviewed_flip"] is None
+        )
         assert all(
             (r["ai_attempts"], r["ai_next_attempt_at"], r["ai_last_error"]) == (0, None, None) for r in rows
         )

@@ -11,10 +11,10 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.ai.llm import AiDeferred
-from app.ai.service import run_ai_analysis
+from app.ai.service import AnalysisChanged, run_ai_analysis
 from app.api.deps import DB, CurrentUser, Economics
 from app.core.cache import NS_FEED, cache
-from app.core.errors import NotFoundError, ProviderUnavailableError, RateLimitedError
+from app.core.errors import ConflictError, NotFoundError, ProviderUnavailableError, RateLimitedError
 from app.db.models import Favorite, Opportunity
 from app.opportunities.queries import OpportunityQueries, acquisition_lines, sale_lines
 from app.profit.evaluation import (
@@ -135,10 +135,18 @@ async def clear_state(opportunity_id: uuid.UUID, user: CurrentUser, db: DB) -> M
 async def refresh_ai_analysis(opportunity_id: uuid.UUID, user: CurrentUser, db: DB) -> dict[str, Any]:
     """Run the AI Deal Analyst (the model when configured, rule-based otherwise). When the model cannot answer
     (request cap reached, cooldown, outage, unusable answer) nothing is written and the answer says so: the rules'
-    text is never stored as the model's."""
-    opp = await _opportunity(db, opportunity_id)
+    text is never stored as the model's. The review is written only if the opportunity is still on the analysis it
+    was made for (409 otherwise: ask again)."""
+    await _opportunity(db, opportunity_id)  # 404 for an unknown id
+    await db.rollback()  # no connection or transaction is held while the model answers
     try:
-        analysis = await run_ai_analysis(db, opp)
+        analysis = await run_ai_analysis(opportunity_id)
+    except AnalysisChanged as exc:
+        raise ConflictError(
+            "L'annuncio è stato rianalizzato mentre il modello rispondeva: la revisione non è stata salvata. "
+            "Riprova.",
+            code="analysis_changed",
+        ) from exc
     except AiDeferred as exc:
         if exc.reason in ("rpm", "rpd", "cooldown", "rate_limited", "budget", "redis"):
             raise RateLimitedError(
@@ -148,7 +156,7 @@ async def refresh_ai_analysis(opportunity_id: uuid.UUID, user: CurrentUser, db: 
         raise ProviderUnavailableError(
             "Il modello AI non ha dato una risposta utilizzabile: riprova più tardi."
         ) from exc
-    await db.commit()
+    await cache.bump(NS_FEED)  # the review may have lowered the verdict the feed shows
     return analysis
 
 

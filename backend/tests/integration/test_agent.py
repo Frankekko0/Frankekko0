@@ -604,11 +604,10 @@ async def test_an_ai_review_that_is_more_cautious_lowers_the_decision_and_one_th
         llm = LLMClient(cfg, budget=AiBudget(cfg))
         llm._client = fake  # type: ignore[assignment]
         monkeypatch.setattr(service, "get_llm", lambda: llm)
+        await service.run_ai_analysis(uuid.UUID(opportunity))
         async with session_scope() as s:
             opp = await s.get(Opportunity, uuid.UUID(opportunity))
             assert opp is not None
-            await service.run_ai_analysis(s, opp)
-            await s.flush()
             s.expunge(opp)
             return opp
 

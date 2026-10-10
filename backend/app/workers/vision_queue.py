@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import random
+import uuid
 from collections.abc import Iterable
 from typing import Any
 
@@ -28,8 +29,9 @@ from app.agent.stages import needs_photo_check
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.db.models import Listing, ListingImage
+from app.db.session import session_scope
 from app.domain.enums import ListingStatus
-from app.vision.analyzer import VisionDeferred
+from app.vision.analyzer import GALLERY_REASONS, GAVE_UP_NOTES, MAX_TRUNCATED_TRIES, VisionDeferred
 from app.workers.queue import enqueue
 
 log = get_logger(__name__)
@@ -39,6 +41,7 @@ VISION_HIGH_TOP = 3
 _STEP_SECONDS = 0.001
 VISION_MAX_TRIES = 5  # times the model is asked for one gallery (``max_tries`` of ``vision_task``)
 _MAX_DEFER_SECONDS = 6 * 3600  # an arq job expires a day after it was due: wake up often enough to keep it
+_HELD_SPREAD = 15.0  # seconds: least spread added to the wait of a job a cap held back (see ``retry_vision``)
 
 
 PHOTO_ONLY = {"photos_checked", "label"}
@@ -70,10 +73,14 @@ def model_vision_on(settings: Settings) -> bool:
 
 def vision_done(listing: Any, model: bool) -> bool:
     """The photos were checked. With a model on, the local measures do not count: a listing analysed before the
-    model was switched on, or whose model call failed, is checked again (``analyzer`` is "heuristic" then)."""
+    model was switched on, or whose model call failed, is checked again (``analyzer`` is "heuristic" then). Unless the
+    model gave up on this very gallery (blocked it, or never fit its answer): asking again would cost a request each
+    time and get the same answer, so it waits for the photos to change (``trigger == "photos"``)."""
     vision = (listing.identification or {}).get("vision")
     if not vision:
         return False
+    if vision.get("model_gave_up") in GALLERY_REASONS:
+        return True
     return not model or vision.get("analyzer") not in (None, "heuristic")
 
 
@@ -105,8 +112,10 @@ def worth_vision(outcome: Any, after_vision: bool = False, *, always: bool | Non
 def vision_order(
     outcomes: Iterable[Any], after_vision: bool = False, *, always: bool | None = None
 ) -> list[str]:
-    """Listing ids worth a photo check, best first (risk-adjusted profit, then flip score). The order holds in
-    ``always`` mode too: under a daily quota the best candidates are checked first."""
+    """Listing ids worth a photo check, best first (risk-adjusted profit, then flip score). The order is the order
+    the jobs first run in, ``always`` mode too. Under a request cap the jobs that are held back come back in no
+    particular order (each is spread at random over its wait), so "best candidates first" holds for the first pass
+    and not for what is left when a daily quota runs out."""
     picked = [o for o in outcomes if worth_vision(o, after_vision, always=always)]
     picked.sort(
         key=lambda o: (
@@ -136,9 +145,11 @@ async def queue_vision(listing_ids: list[str], top: int = VISION_HIGH_TOP) -> in
 async def listings_awaiting_vision(db: AsyncSession, limit: int) -> list[str]:
     """Active listings whose whole gallery is stored here and that no model has analysed yet (never checked, or
     only measured locally), newest first. For the one-off catch-up of what was there before ``AI_VISION_ALWAYS``
-    (``python -m app.tools.vision_backfill``); the normal path is ``vision_order`` after an analysis."""
+    (``python -m app.tools.vision_backfill``); the normal path is ``vision_order`` after an analysis. A gallery the
+    model gave up on (blocked, or an answer that never fits) is left out: it would be asked for nothing."""
     photo = (ListingImage.listing_id == Listing.id) & ListingImage.removed_at.is_(None)
     analyzer = Listing.identification["vision"]["analyzer"].astext
+    gave_up = Listing.identification["vision"]["model_gave_up"].astext
     rows = await db.execute(
         select(Listing.id)
         .where(
@@ -147,6 +158,7 @@ async def listings_awaiting_vision(db: AsyncSession, limit: int) -> list[str]:
             exists().where(photo),
             ~exists().where(photo, ListingImage.local_path.is_(None)),
             or_(analyzer.is_(None), analyzer == "heuristic"),
+            or_(gave_up.is_(None), gave_up.notin_(GALLERY_REASONS)),
         )
         .order_by(Listing.first_seen_at.desc())
         .limit(limit)
@@ -165,25 +177,59 @@ async def queue_vision_safely(listing_ids: list[str], top: int = VISION_HIGH_TOP
         return 0
 
 
-async def retry_vision(ctx: dict[str, Any], listing_id: str, deferred: VisionDeferred) -> None:
+def gives_up(deferred: VisionDeferred, job_try: int) -> bool:
+    """Asking again is pointless: the request itself cannot succeed (``refused`` is a block that comes back for the
+    same photos, ``rejected`` a wrong key or model), the answer was cut off twice, or the tries are used up."""
+    if deferred.unfixable:
+        return True
+    if deferred.reason == "truncated":
+        return job_try >= MAX_TRUNCATED_TRIES
+    return deferred.asked and job_try >= VISION_MAX_TRIES
+
+
+async def retry_vision(ctx: dict[str, Any], listing_id: str, deferred: VisionDeferred) -> bool:
     """Back to the queue after a model call that gave no analysis: ``Retry`` when the provider said it can be
-    asked again (with a little spread, so jobs held back by the same cap do not all return together).
+    asked again (with a spread, so jobs held back by the same cap do not all return together). Returns True when
+    it gave up instead (see ``gives_up``): the caller then records the reason (``mark_model_gave_up``).
 
     arq counts every run as a try. A run that never asked the model (a cap, a cooldown, an open breaker) gives
     its try back, so a burst of galleries waiting for a free-tier quota is not dropped; runs that asked and got
-    no answer count, and after ``VISION_MAX_TRIES`` (at once when asking again cannot help: the request itself is
-    rejected) the listing is left with its local measures only (it is queued again by the next analysis that
-    touches its photos, or by ``python -m app.tools.vision_backfill``)."""
+    no answer count, and after ``VISION_MAX_TRIES`` (at once when asking again cannot help; a cut-off answer is
+    asked once more) the listing is left with its local measures only (it is queued again by the next analysis
+    that touches its photos, or by ``python -m app.tools.vision_backfill``)."""
     job_try = int(ctx.get("job_try", 1))
-    if deferred.unfixable or (deferred.asked and job_try >= VISION_MAX_TRIES):
+    if gives_up(deferred, job_try):
         log.warning("vision.gave_up", listing_id=listing_id, reason=deferred.reason, tries=job_try)
-        return
+        return True
     if not deferred.asked and ctx.get("redis") is not None and ctx.get("job_id"):
         with contextlib.suppress(Exception):  # at worst the try counts
             await ctx["redis"].decr(retry_key_prefix + str(ctx["job_id"]))
     wait = min(max(deferred.retry_after, 1.0), _MAX_DEFER_SECONDS)
-    wait += random.uniform(0, min(30.0, wait / 4))
+    # Jobs held by the same cap are told the same time: spread them (at least 15 s when nobody was asked, because
+    # a backlog of dozens would otherwise wake together every time a window slot frees).
+    spread = min(30.0, wait / 4)
+    wait += random.uniform(0, spread if deferred.asked else max(spread, _HELD_SPREAD))
     log.info(
         "vision.retry_later", listing_id=listing_id, reason=deferred.reason, wait_s=round(wait), tries=job_try
     )
     raise Retry(defer=wait)
+
+
+async def mark_model_gave_up(listing_id: str, reason: str) -> None:
+    """The model gave up on this gallery (it blocks it, or the answer never fits): record why on the stored local
+    measures, which stay the listing's analysis ("heuristic": the photos still do not count as checked by a model).
+    A listing carrying the reason is not queued again by the analyses that follow, only when its photos change.
+    Never touches a model analysis; at worst nothing is recorded and the listing is asked again later."""
+    if reason not in GALLERY_REASONS:
+        return
+    with contextlib.suppress(Exception):
+        async with session_scope() as s:
+            listing = await s.get(Listing, uuid.UUID(listing_id))
+            ident = dict(listing.identification or {}) if listing is not None else {}
+            vision = dict(ident.get("vision") or {})
+            if listing is None or not vision or vision.get("analyzer") not in (None, "heuristic"):
+                return
+            note = GAVE_UP_NOTES[reason]
+            vision["model_gave_up"] = reason
+            vision["notes"] = [*(n for n in vision.get("notes") or [] if n != note), note]
+            listing.identification = {**ident, "vision": vision}

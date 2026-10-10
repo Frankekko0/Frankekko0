@@ -18,6 +18,7 @@ from arq.worker import Worker, func
 from sqlalchemy import func as sa_func
 from sqlalchemy import select
 
+from app.ai.queue import review_job_timeout
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.core.redis import close_redis
@@ -38,8 +39,9 @@ def _functions() -> list[Any]:
         func(tasks.analyze_listing, keep_result=0, max_tries=4, timeout=120),
         func(tasks.analyze_batch, keep_result=0, max_tries=4, timeout=300),
         func(tasks.vision_task, keep_result=0, max_tries=VISION_MAX_TRIES, timeout=180),
-        # One try: the backoff is kept on the opportunity (``ai_next_attempt_at``) and the sweep queues it again.
-        func(tasks.ai_analyze_task, keep_result=0, max_tries=1, timeout=180),
+        # One try: the backoff is kept on the opportunity (``ai_next_attempt_at``) and the sweep queues it again. The
+        # timeout is past the model client's worst case (timeout x its retries), see ``review_job_timeout``.
+        func(tasks.ai_analyze_task, keep_result=0, max_tries=1, timeout=review_job_timeout(get_settings())),
         func(tasks.ai_sweep_task, keep_result=0, max_tries=1, timeout=120),
         func(tasks.review_candidates_task, keep_result=0, max_tries=1, timeout=300),
         func(tasks.agent_propose_task, keep_result=0, max_tries=1, timeout=300),

@@ -13,17 +13,22 @@ model, a cooldown after a 429).
   connection). Quota and outages do not count as attempts; an unusable answer does, and after ``AI_MAX_ATTEMPTS``
   the row stops being picked until its analysis changes (it stays visible in ``/ai/usage`` as exhausted).
 * ``analyze_batch`` kicks the best new rows of a batch (``kick``) so a fresh find does not wait for the minute.
+  The sweep and the kicks share one per-minute pace (``take_pace``, a Redis counter): together they queue at most the
+  room of that minute, which is ``AI_SWEEP_BATCH`` per minute when the provider has no limits of its own.
 """
 
 from __future__ import annotations
 
+import contextlib
 import math
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from redis.exceptions import RedisError
 from sqlalchemy import ColumnElement, and_, func, or_, select, update
 
 from app.ai.limiter import get_limiter
@@ -31,17 +36,41 @@ from app.ai.llm import get_llm
 from app.ai.verdicts import LLM_PROVIDERS
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
+from app.core.redis import get_redis
 from app.db.models import Opportunity
 from app.db.session import session_scope
 from app.workers.queue import enqueue
 
 log = get_logger(__name__)
 
-# Reasons that count as a failed attempt: the model answered but not usably, or the request itself is wrong.
+# Reasons that count as a failed attempt: the model answered but not usably, the request itself is wrong, or the
+# review hung or was cancelled (a provider that never answers must end up exhausted, not retried for ever).
 # Everything else (quota, cooldown, breaker, outage, budget) is waiting, not failing.
-COUNTED_REASONS = frozenset({"bad_answer", "truncated", "refused", "rejected", "error"})
+COUNTED_REASONS = frozenset(
+    {"bad_answer", "truncated", "refused", "rejected", "error", "timeout", "cancelled"}
+)
 LEASE_SECONDS = 300  # a queued job that never ran is picked again after this
 MAX_QUOTA_WAIT = 3600  # a quota wait is re-checked at least hourly (limits can change, Redis can blink)
+PACE_TTL = 120  # seconds a minute's pace counter is kept
+
+# How long one review may take. The Anthropic client retries a failed request twice (``max_retries`` in
+# ``app.ai.llm``), each attempt up to ``AI_TIMEOUT_SECONDS``; Gemini makes a single attempt.
+SDK_RETRIES = 2
+REVIEW_MARGIN_SECONDS = 30  # database steps and the client's backoff between its attempts
+JOB_GRACE_SECONDS = 30  # the job's own timeout is only a backstop behind the review's
+
+
+def review_budget_seconds(settings: Settings) -> float:
+    """The longest a review may legitimately take (the client's worst case plus a margin): the task stops waiting after
+    this and records a ``timeout``, so a hung provider moves the row's attempts and backoff."""
+    attempts = 1 if settings.ai_provider == "gemini" else SDK_RETRIES + 1
+    return settings.ai_timeout_seconds * attempts + REVIEW_MARGIN_SECONDS
+
+
+def review_job_timeout(settings: Settings) -> float:
+    """The worker's timeout for ``ai_analyze_task``: past the review's own budget, so that it is the budget that ends a
+    slow review (and writes the reason down) and not a cancellation from outside."""
+    return review_budget_seconds(settings) + JOB_GRACE_SECONDS
 
 
 def qualifies_for_strong_ai(
@@ -123,6 +152,39 @@ async def quota_room(settings: Settings, model: str) -> Room:
             return Room(0, "rpd", seconds_to_quota_reset(settings))
         n = min(n, spare)
     return Room(n)
+
+
+def _pace_minute() -> int:
+    return int(time.time() // 60)
+
+
+async def take_pace(model: str, wanted: int, cap: int) -> tuple[int, str]:
+    """Reserve up to ``wanted`` review jobs in this minute's pace, at most ``cap`` altogether for the sweep and the
+    kicks. Without a window of the provider's own (limits of 0) nothing else bounds the rate, and ``quota_room`` is
+    stateless, so each kick would see the whole room again. Returns ``(granted, key)``; ``key`` is for
+    ``give_back_pace``. Fails closed: with Redis down nothing is reserved and the sweep tries again next minute.
+    Calendar minutes, so the rate is held on average, not in every sliding 60 seconds."""
+    key = f"ff:ai:pace:{model}:{_pace_minute()}"
+    if wanted <= 0 or cap <= 0:
+        return 0, key
+    try:
+        redis = get_redis()
+        total = int(await redis.incrby(key, wanted))
+        await redis.expire(key, PACE_TTL)
+        over = min(wanted, max(0, total - cap))
+        if over:  # give back what was refused: concurrent callers may be refused too, but never over-granted
+            await redis.decrby(key, over)
+        return wanted - over, key
+    except RedisError as exc:
+        log.warning("ai.pace_redis_unavailable", error=str(exc))
+        return 0, key
+
+
+async def give_back_pace(key: str, n: int) -> None:
+    """Return the part of a reservation that was not used (the sweep found fewer rows than the room)."""
+    if n > 0:
+        with contextlib.suppress(RedisError):
+            await get_redis().decrby(key, n)
 
 
 async def defer_opportunity(
@@ -236,8 +298,9 @@ async def queue_stats(settings: Settings, now: datetime | None = None) -> dict[s
 
 async def kick(candidates: list[tuple[int, uuid.UUID]], settings: Settings | None = None) -> int:
     """Best effort, after an analysis batch: queue the review of the best new rows without waiting for the next
-    sweep. Within the quota room of this minute, and never ahead of a better row already waiting (the sweep keeps the
-    order). A failure here only costs the minute: the sweep finds the rows anyway."""
+    sweep. Within the quota room of this minute (shared with the sweep through ``take_pace``: together they never
+    queue more than the room), and never ahead of a better row already waiting (the sweep keeps the order). A failure
+    here only costs the minute: the sweep finds the rows anyway."""
     settings = settings or get_settings()
     llm = get_llm()
     if not candidates or not llm.enabled:
@@ -257,6 +320,10 @@ async def kick(candidates: list[tuple[int, uuid.UUID]], settings: Settings | Non
                 )
             ).scalar()
         picks = [c for c in sorted(candidates, key=lambda c: -c[0]) if best is None or c[0] >= best][: room.n]
+        if not picks:
+            return 0
+        granted, _ = await take_pace(llm.model_for("strong"), len(picks), room.n)  # shared with the sweep
+        picks = picks[:granted]
         for _, oid in picks:
             await enqueue("ai_analyze_task", str(oid), high=True, job_id=f"ai:{oid}")
         return len(picks)

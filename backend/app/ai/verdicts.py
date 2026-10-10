@@ -62,6 +62,24 @@ def reviewed_fields(
     return out
 
 
+def bounded_offer(value: Decimal | None, max_buy_price: Decimal | None) -> Decimal | None:
+    """The offer a model suggested, held to the computed maximum buy price (and not below zero). Where the engine
+    names no maximum (no price meets the targets) there is no offer: the model's number is not shown in its place."""
+    if value is None or max_buy_price is None:
+        return None
+    return max(Decimal(0), min(value, max_buy_price)).quantize(Decimal("0.01"))
+
+
+def bounded_resale(
+    value: Decimal | None, quick_sale_price: Decimal | None, optimistic_sale_price: Decimal | None
+) -> Decimal | None:
+    """The resale price a model suggested, held to the computed quick-optimistic range. Without both ends of the
+    range there is nothing to hold it to, so there is no price."""
+    if value is None or quick_sale_price is None or optimistic_sale_price is None:
+        return None
+    return min(max(value, quick_sale_price), optimistic_sale_price).quantize(Decimal("1"))
+
+
 def reclamp_analysis(
     stored: dict[str, Any],
     *,
@@ -70,21 +88,15 @@ def reclamp_analysis(
     optimistic_sale_price: Decimal | None,
 ) -> dict[str, Any]:
     """A stored review carried over to a re-computed analysis: its two numbers are held to the new computed ones
-    (the offer under the maximum buy price, the resale price inside the quick-optimistic range), so the text is
-    kept and the figures stay the engine's."""
+    (the offer under the maximum buy price, the resale price inside the quick-optimistic range; the same rule as a
+    fresh review, ``bounded_offer`` and ``bounded_resale``), so the text is kept and the figures stay the engine's."""
     out = dict(stored)
     offer = out.get("suggested_max_offer")
     if offer is not None:
-        if max_buy_price is None:
-            out["suggested_max_offer"] = None
-        elif Decimal(str(offer)) > max_buy_price:
-            out["suggested_max_offer"] = float(max_buy_price.quantize(Decimal("0.01")))
+        kept_offer = bounded_offer(Decimal(str(offer)), max_buy_price)
+        out["suggested_max_offer"] = float(kept_offer) if kept_offer is not None else None
     resale = out.get("recommended_resale_price")
     if resale is not None:
-        value = Decimal(str(resale))
-        if quick_sale_price is not None and value < quick_sale_price:
-            value = quick_sale_price
-        if optimistic_sale_price is not None and value > optimistic_sale_price:
-            value = optimistic_sale_price
-        out["recommended_resale_price"] = float(value.quantize(Decimal("1")))
+        kept_resale = bounded_resale(Decimal(str(resale)), quick_sale_price, optimistic_sale_price)
+        out["recommended_resale_price"] = float(kept_resale) if kept_resale is not None else None
     return out

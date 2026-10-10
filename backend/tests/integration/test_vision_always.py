@@ -148,8 +148,10 @@ async def test_a_cap_holds_the_call_back_without_asking_and_without_using_a_try(
     model_with(monkeypatch, fake)
 
     class Closed:
-        async def acquire(self, model: str, tier: str) -> Admission:
+        async def peek(self, model: str, tier: str) -> Admission:
             return Admission(False, 17.0, "rpm")
+
+        acquire = peek
 
     monkeypatch.setattr(llm_mod, "get_limiter", lambda: Closed())
     held = await run(listing_id)

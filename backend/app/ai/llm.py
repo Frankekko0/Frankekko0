@@ -22,7 +22,7 @@ import anthropic
 
 from app.ai.breaker import CircuitBreaker
 from app.ai.budget import AiBudget, get_budget
-from app.ai.limiter import get_limiter
+from app.ai.limiter import Admission, get_limiter
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 
@@ -108,6 +108,21 @@ class LLMClient:
         return self._budget or get_budget()
 
     # ------------------------------------------------------------------ shared plumbing
+    async def admission(self, tier: Tier = "strong", purpose: str = "analysis") -> Admission:
+        """Would a call be let through right now? The same gates as a call, in the same order (spend budget,
+        request caps, breaker), but read-only: nothing is counted and the breaker's half-open trial slot is not
+        taken. For work that is only worth doing when a call follows (decoding and reading photos): ask first,
+        the call itself still goes through its gates and may be refused after all."""
+        check = await self.budget.check(purpose)
+        if not check.allowed:
+            return Admission(False, 3600.0, "budget")
+        adm = await get_limiter().peek(self.model_for(tier), tier)
+        if not adm.allowed:
+            return adm
+        if self.breaker.state == "open":  # half-open lets the trial call through: that is admission enough
+            return Admission(False, self.breaker.cooldown, "breaker_open")
+        return Admission(True)
+
     async def _create(
         self, *, tier: Tier, purpose: str, ref: str | None, raise_on_defer: bool = False, **request: Any
     ) -> tuple[Any, Decimal] | None:
@@ -148,9 +163,16 @@ class LLMClient:
             await get_limiter().penalize(
                 model, wait
             )  # a quota error is not an outage: the breaker stays closed
+            self.breaker.release()  # ... and a trial call ending here gives its half-open slot back
             refuse("rate_limited", wait)
             return None
         except anthropic.APIStatusError as exc:
+            if exc.status_code < 500 and exc.status_code not in (408, 409):
+                # our request is wrong (400/401/403/404/413): asking again cannot help (408/409 may pass)
+                log.warning("llm.request_rejected", purpose=purpose, status=exc.status_code)
+                self.breaker.release()  # not an outage: the breaker is not tripped, a held trial slot is returned
+                refuse("rejected", 3600.0)
+                return None
             log.warning("llm.api_error", purpose=purpose, status=exc.status_code)
             self.breaker.failure()
             refuse("api_error", 60.0)

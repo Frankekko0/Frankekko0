@@ -6,6 +6,7 @@ Every task opens its own unit of work, logs failures with context (never secrets
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -20,7 +21,15 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 from app.agent.model import AnthropicAgentModel
 from app.agent.review import review_candidates
 from app.ai.llm import AiDeferred, get_llm
-from app.ai.queue import claim_pending, defer_opportunity, qualifies_for_strong_ai, quota_room
+from app.ai.queue import (
+    claim_pending,
+    defer_opportunity,
+    give_back_pace,
+    qualifies_for_strong_ai,
+    quota_room,
+    review_budget_seconds,
+    take_pace,
+)
 from app.ai.queue import kick as kick_ai_review
 from app.ai.service import review_opportunity, run_vision
 from app.alerts.channels.base import ChannelError
@@ -55,7 +64,7 @@ from app.tracking.status import Observation
 from app.vision.analyzer import VisionDeferred
 from app.vision.cache import VisionCacheStore
 from app.workers.queue import backoff_seconds, enqueue
-from app.workers.vision_queue import queue_vision, retry_vision, vision_order
+from app.workers.vision_queue import mark_model_gave_up, queue_vision, retry_vision, vision_order
 
 log = get_logger(__name__)
 ANALYSIS_BATCH_HIGH = 8  # small: likely deals should surface within seconds
@@ -342,7 +351,9 @@ async def vision_task(ctx: dict[str, Any], listing_id: str) -> None:
     if changed:
         await enqueue("analyze_listing", listing_id, True, job_id=f"analyze:{listing_id}")
     if deferred is not None:
-        await retry_vision(ctx, listing_id, deferred)  # raises Retry, or gives up after VISION_MAX_TRIES
+        gave_up = await retry_vision(ctx, listing_id, deferred)  # raises Retry unless it gave up
+        if gave_up:  # a blocked gallery is not asked again as it is: say why
+            await mark_model_gave_up(listing_id, deferred.reason)
 
 
 async def ai_analyze_task(ctx: dict[str, Any], opportunity_id: str) -> str:
@@ -359,10 +370,23 @@ async def ai_analyze_task(ctx: dict[str, Any], opportunity_id: str) -> str:
         await defer_opportunity(oid, room.reason, room.retry_after, settings=settings)
         return "deferred"
     try:
-        status = await review_opportunity(oid, settings)
+        # The review's own deadline is shorter than the worker's job timeout (``review_job_timeout``): a hung provider
+        # ends here, with the reason on the row, and not as a cancellation from outside that leaves no trace.
+        async with asyncio.timeout(review_budget_seconds(settings)):
+            status = await review_opportunity(oid, settings)
     except AiDeferred as exc:
         await defer_opportunity(oid, exc.reason, exc.retry_after, settings=settings)
         return "deferred"
+    except TimeoutError:
+        llm.breaker.failure()  # a provider that does not answer is a failing provider
+        log.warning("ai.review_timeout", opportunity_id=opportunity_id)
+        await defer_opportunity(oid, "timeout", 0.0, settings=settings)  # counts: it must end, not loop
+        return "deferred"
+    except asyncio.CancelledError:
+        # The worker cancelled the job (its own timeout, or it is stopping): write the reason down, shielded so that
+        # the write survives, and let the cancellation go on. It counts, like any review that did not end.
+        await asyncio.shield(defer_opportunity(oid, "cancelled", 0.0, settings=settings))
+        raise
     except Exception:
         log.exception("ai.review_failed", opportunity_id=opportunity_id)
         await defer_opportunity(oid, "error", 0.0, settings=settings)  # counts: it must end, not loop
@@ -380,10 +404,16 @@ async def ai_sweep_task(ctx: dict[str, Any]) -> dict[str, Any]:
     llm = get_llm()
     if not llm.enabled or settings.ai_auto_analyze_min_flip_score > 100:
         return {"queued": 0, "reason": "off"}
-    room = await quota_room(settings, llm.model_for("strong"))
+    model = llm.model_for("strong")
+    room = await quota_room(settings, model)
     if room.n <= 0:
         return {"queued": 0, "reason": room.reason}
-    ids = await claim_pending(settings, room.n)
+    # The kicks after an analysis batch share this minute's room: only what they left is taken here.
+    granted, pace_key = await take_pace(model, room.n, room.n)
+    if granted <= 0:
+        return {"queued": 0, "reason": "pace"}
+    ids = await claim_pending(settings, granted)
+    await give_back_pace(pace_key, granted - len(ids))  # the room not used stays for the kicks
     rpm, _ = settings.ai_limits("strong")
     step = 60.0 / rpm if rpm > 0 else 60.0 / max(1, len(ids))
     queued = 0

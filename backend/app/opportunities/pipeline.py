@@ -788,6 +788,7 @@ class AnalysisPipeline:
                         Opportunity.analysis_id,
                         Opportunity.ai_provider,
                         Opportunity.ai_for_analysis_id,
+                        Opportunity.ai_reviewed_flip,
                         Opportunity.ai_attempts,
                         Opportunity.ai_next_attempt_at,
                         Opportunity.ai_last_error,
@@ -956,6 +957,7 @@ class AnalysisPipeline:
         """
         fresh = {
             "ai_for_analysis_id": None,
+            "ai_reviewed_flip": None,
             "ai_attempts": 0,
             "ai_next_attempt_at": None,
             "ai_last_error": None,
@@ -981,11 +983,14 @@ class AnalysisPipeline:
         if not created:
             row |= stored | {k: getattr(old, k) for k in fresh}
             return False
+        # The flip score is compared with the one the review was written for, not with the previous row: that row is
+        # rewritten on every small move, so a drift in one direction would never add up to a new review.
+        reviewed_flip = old.ai_reviewed_flip if old.ai_reviewed_flip is not None else old.flip_score
         material = (
             prev is None
             or prev.algorithm_version != version
             or jsonable(inputs) != prev.inputs
-            or abs(row["flip_score"] - old.flip_score) >= self.settings.ai_reanalyze_flip_delta
+            or abs(row["flip_score"] - reviewed_flip) >= self.settings.ai_reanalyze_flip_delta
             or row["decision_verdict"] != prev.decision_verdict
         )
         if material:
@@ -1006,6 +1011,7 @@ class AnalysisPipeline:
             ),
             **fresh,
             "ai_for_analysis_id": analysis_id,
+            "ai_reviewed_flip": reviewed_flip,  # still the flip the model saw
         }
         return False
 

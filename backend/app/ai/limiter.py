@@ -45,6 +45,34 @@ class AiRateLimiter:
         midnight = (local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         return local.date().isoformat(), max(1.0, (midnight - local).total_seconds())
 
+    async def peek(self, model: str, tier: str) -> Admission:
+        """Would ``acquire`` let a request through right now? Read-only: nothing is counted, so asking does not use
+        up the quota. It is a hint, not a reservation (another process may take the slot before the real call):
+        work that is only worth doing when a call follows asks first, and the call still goes through ``acquire``."""
+        rpm, rpd = self.settings.ai_limits(tier)
+        if rpm <= 0 and rpd <= 0:
+            return Admission(True)
+        redis = get_redis()
+        try:
+            cool = await redis.ttl(f"ff:ai:cooldown:{model}")
+            if cool and cool > 0:
+                return Admission(False, float(cool), "cooldown")
+            day, secs_left = self._day()
+            if rpd > 0 and int(await redis.get(f"ff:ai:rpd:{model}:{day}") or 0) >= rpd:
+                return Admission(False, secs_left, "rpd")
+            if rpm > 0:
+                now_ms = int(time.time() * 1000)
+                key = f"ff:ai:rpm:{model}"
+                since = f"({now_ms - 60000}"  # as ``acquire`` keeps it: entries older than 60 s are gone
+                if int(await redis.zcount(key, since, "+inf")) >= rpm:
+                    oldest = await redis.zrangebyscore(key, since, "+inf", start=0, num=1, withscores=True)
+                    wait_ms = float(oldest[0][1]) + 60000 - now_ms if oldest else 1000.0
+                    return Admission(False, max(1.0, math.ceil(wait_ms / 1000)), "rpm")
+        except RedisError as exc:
+            log.warning("ai.limiter_redis_unavailable", error=str(exc))
+            return Admission(False, 30.0, "redis")
+        return Admission(True)
+
     async def acquire(self, model: str, tier: str) -> Admission:
         rpm, rpd = self.settings.ai_limits(tier)
         if rpm <= 0 and rpd <= 0:
