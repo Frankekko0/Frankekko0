@@ -30,6 +30,10 @@ Le fasi 8–8d non aggiungono servizi esterni: sopravvivenza, Monte Carlo, Kelly
 scanner girano nel tuo server. Il secondo parere del verificatore usa il modello **economico** solo se c'è la chiave e
 il tetto di spesa lo permette (mai provato dal vivo, L27).
 
+## Gemini (alternativa con chiave gratuita)
+
+`AI_PROVIDER=gemini` usa l'API di Google (`app/ai/gemini.py`, REST, nessuna dipendenza in più). La chiave gratuita si crea in Google AI Studio. Attenzione: nel piano gratuito Google può usare i dati inviati per migliorare i suoi prodotti e i limiti sono bassi e variabili; tieni `AI_VISION_ENABLED=false` se le foto non devono uscire dal server e imposta a 0 i quattro `AI_PRICE_*`. **Provato solo con un server finto nei test, mai dal vivo** (nessuna chiave): i nomi dei modelli vanno verificati in AI Studio.
+
 ## Facoltativi senza costo diretto
 
 | Servizio | Uso |

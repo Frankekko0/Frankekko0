@@ -134,6 +134,7 @@ class Settings(BaseSettings):
     default_currency: str = "EUR"
 
     # --- AI ------------------------------------------------------------------------------
+    ai_provider: Literal["anthropic", "gemini"] = "anthropic"
     ai_api_key: SecretStr | None = None
     ai_model: str = "claude-opus-5-5"
     ai_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"

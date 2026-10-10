@@ -246,5 +246,10 @@ _client: LLMClient | None = None
 def get_llm() -> LLMClient:
     global _client
     if _client is None:
-        _client = LLMClient()
+        if get_settings().ai_provider == "gemini":
+            from app.ai.gemini import GeminiClient
+
+            _client = GeminiClient()
+        else:
+            _client = LLMClient()
     return _client
