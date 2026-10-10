@@ -15,7 +15,8 @@ from typing import Any
 
 import httpx
 
-from app.ai.llm import LLMClient, ModelTurn, Tier, ToolCall, log
+from app.ai.limiter import get_limiter
+from app.ai.llm import AiDeferred, LLMClient, ModelTurn, Tier, ToolCall, log, retry_after_seconds
 
 BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _DROP = {"additionalProperties", "$schema", "title", "default", "examples"}
@@ -36,6 +37,10 @@ def to_gemini_schema(node: Any) -> Any:
             kinds = [t for t in v if t != "null"]
             out["type"] = kinds[0] if kinds else "string"
             if "null" in v:
+                out["nullable"] = True
+        elif k == "enum" and isinstance(v, list):
+            out[k] = [str(e) for e in v if e is not None]  # Gemini rejects null inside an enum
+            if any(e is None for e in v):
                 out["nullable"] = True
         elif k == "properties" and isinstance(v, dict):
             out[k] = {name: to_gemini_schema(sub) for name, sub in v.items()}
@@ -88,32 +93,61 @@ class GeminiClient(LLMClient):
         return self.settings.ai_api_key is not None
 
     async def _generate(
-        self, *, tier: Tier, purpose: str, ref: str | None, body: dict[str, Any]
+        self, *, tier: Tier, purpose: str, ref: str | None, body: dict[str, Any], raise_on_defer: bool = False
     ) -> tuple[dict[str, Any], Decimal] | None:
+        def refuse(reason: str, retry_after: float = 0.0) -> None:
+            if raise_on_defer:
+                raise AiDeferred(reason, retry_after)
+
         key = self.settings.ai_api_key.get_secret_value() if self.settings.ai_api_key else None
         if not key:
             return None
         if not self.breaker.allow():
             log.warning("llm.breaker_open", purpose=purpose)
+            refuse("breaker_open", self.breaker.cooldown)
             return None
         check = await self.budget.check(purpose)
         if not check.allowed:
             log.warning("llm.budget_stop", purpose=purpose, reason=check.reason)
+            refuse("budget", 3600.0)
             return None
         model = self.model_for(tier)
+        adm = await get_limiter().acquire(model, tier)
+        if not adm.allowed:
+            log.info("ai.deferred", purpose=purpose, reason=adm.reason, retry_after=adm.retry_after)
+            refuse(adm.reason, adm.retry_after)
+            return None
         try:
             async with httpx.AsyncClient(timeout=self.settings.ai_timeout_seconds) as http:
                 r = await http.post(
                     f"{BASE}/{model}:generateContent", json=body, headers={"x-goog-api-key": key}
                 )
-            if r.status_code >= 400:
+            if r.status_code == 429:
+                delay = r.headers.get("retry-after")
+                if not delay:
+                    for d in (r.json().get("error", {}).get("details") or []) if r.content else []:
+                        delay = d.get("retryDelay") or delay
+                wait = retry_after_seconds(delay)
+                log.warning("llm.rate_limited", purpose=purpose, retry_after=wait)
+                await get_limiter().penalize(model, wait)  # quota, not an outage: the breaker stays closed
+                refuse("rate_limited", wait)
+                return None
+            if r.status_code >= 500:
                 log.warning("llm.api_error", purpose=purpose, status=r.status_code)
                 self.breaker.failure()
+                refuse("api_error", 60.0)
+                return None
+            if (
+                r.status_code >= 400
+            ):  # our request is wrong (400/403/404): retrying will not help, the breaker is not tripped
+                log.warning("llm.request_rejected", purpose=purpose, status=r.status_code)
+                refuse("rejected", 3600.0)
                 return None
             data = r.json()
         except (httpx.HTTPError, ValueError):
             log.warning("llm.connection_error", purpose=purpose)
             self.breaker.failure()
+            refuse("connection", 60.0)
             return None
         self.breaker.success()
         u = data.get("usageMetadata", {})
@@ -143,6 +177,7 @@ class GeminiClient(LLMClient):
         purpose: str = "analysis",
         tier: Tier = "strong",
         ref: str | None = None,
+        raise_on_defer: bool = False,
     ) -> dict[str, Any] | None:
         body = {
             "systemInstruction": {"parts": [{"text": system}]},
@@ -153,23 +188,36 @@ class GeminiClient(LLMClient):
                 "responseSchema": to_gemini_schema(schema),
             },
         }
-        done = await self._generate(tier=tier, purpose=purpose, ref=ref, body=body)
+        done = await self._generate(
+            tier=tier, purpose=purpose, ref=ref, body=body, raise_on_defer=raise_on_defer
+        )
         if done is None:
             return None
+
+        def unusable(reason: str) -> None:
+            if raise_on_defer:
+                raise AiDeferred(reason, 300.0)
+
         parts, finish = self._candidate(done[0])
         if finish in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST"):
             log.info("llm.refused", purpose=purpose, category=finish)
+            unusable("refused")
             return None
         if finish == "MAX_TOKENS":
             log.warning("llm.truncated", purpose=purpose)
+            unusable("truncated")
             return None
-        text = "".join(p.get("text", "") for p in parts)
+        text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
             log.warning("llm.invalid_json", purpose=purpose)
+            unusable("bad_answer")
             return None
-        return data if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            unusable("bad_answer")
+            return None
+        return data
 
     async def converse(
         self,

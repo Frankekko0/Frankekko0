@@ -22,12 +22,33 @@ import anthropic
 
 from app.ai.breaker import CircuitBreaker
 from app.ai.budget import AiBudget, get_budget
+from app.ai.limiter import get_limiter
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 
 log = get_logger(__name__)
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 Tier = Literal["cheap", "strong"]
+
+
+class AiDeferred(Exception):
+    """The call was not made or did not complete for a reason that passes: quota, cooldown, outage, bad answer.
+    Callers that must not fall back to rules (the queued deal analysis) ask for it with ``raise_on_defer``."""
+
+    def __init__(self, reason: str, retry_after: float = 0.0) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.retry_after = retry_after
+
+
+def retry_after_seconds(value: str | None, default: float = 60.0) -> float:
+    """``Retry-After`` header or Gemini's ``"12s"`` retryDelay to seconds."""
+    if not value:
+        return default
+    try:
+        return max(1.0, float(str(value).rstrip("s")))
+    except ValueError:
+        return default
 
 
 @dataclass(frozen=True)
@@ -88,36 +109,56 @@ class LLMClient:
 
     # ------------------------------------------------------------------ shared plumbing
     async def _create(
-        self, *, tier: Tier, purpose: str, ref: str | None, **request: Any
+        self, *, tier: Tier, purpose: str, ref: str | None, raise_on_defer: bool = False, **request: Any
     ) -> tuple[Any, Decimal] | None:
-        """One call through the breaker and the budget; ``(response, cost)`` or ``None``."""
+        """One call through the breaker, the budget and the request caps; ``(response, cost)`` or ``None``
+        (or ``AiDeferred`` when ``raise_on_defer``)."""
+
+        def refuse(reason: str, retry_after: float = 0.0) -> None:
+            if raise_on_defer:
+                raise AiDeferred(reason, retry_after)
+
         if self._client is None:
             return None
         if not self.breaker.allow():
             log.warning("llm.breaker_open", purpose=purpose)
+            refuse("breaker_open", self.breaker.cooldown)
             return None
         check = await self.budget.check(purpose)
         if not check.allowed:
             log.warning("llm.budget_stop", purpose=purpose, reason=check.reason)
+            refuse("budget", 3600.0)
+            return None
+        model = self.model_for(tier)
+        adm = await get_limiter().acquire(model, tier)
+        if not adm.allowed:
+            log.info("ai.deferred", purpose=purpose, reason=adm.reason, retry_after=adm.retry_after)
+            refuse(adm.reason, adm.retry_after)
             return None
         try:
             response = await self._client.beta.messages.create(
-                model=self.model_for(tier),
+                model=model,
                 betas=[FALLBACK_BETA],
                 fallbacks="default",
                 **request,
             )
-        except anthropic.RateLimitError:
-            log.warning("llm.rate_limited", purpose=purpose)
-            self.breaker.failure()
+        except anthropic.RateLimitError as exc:
+            wait = retry_after_seconds(exc.response.headers.get("retry-after") if exc.response else None)
+            log.warning("llm.rate_limited", purpose=purpose, retry_after=wait)
+            await get_limiter().penalize(
+                model, wait
+            )  # a quota error is not an outage: the breaker stays closed
+            refuse("rate_limited", wait)
             return None
         except anthropic.APIStatusError as exc:
             log.warning("llm.api_error", purpose=purpose, status=exc.status_code)
             self.breaker.failure()
+            refuse("api_error", 60.0)
             return None
         except anthropic.APIConnectionError:
             log.warning("llm.connection_error", purpose=purpose)
             self.breaker.failure()
+            refuse("connection", 60.0)
             return None
         self.breaker.success()
         usage = response.usage
@@ -157,11 +198,13 @@ class LLMClient:
         purpose: str = "analysis",
         tier: Tier = "strong",
         ref: str | None = None,
+        raise_on_defer: bool = False,
     ) -> dict[str, Any] | None:
         done = await self._create(
             tier=tier,
             purpose=purpose,
             ref=ref,
+            raise_on_defer=raise_on_defer,
             max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": content}],

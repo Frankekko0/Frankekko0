@@ -139,15 +139,39 @@ class Settings(BaseSettings):
     ai_model: str = "claude-opus-5-5"
     ai_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     ai_vision_enabled: bool = True
+    # Photos are analysed for every listing with a complete gallery, not only when the value-of-information
+    # check says it pays. Sends photos to the provider for every such listing.
+    ai_vision_always: bool = False
     # What a photo analysis is assumed to cost in euros for the value-of-information check (model call plus
     # the wait). An assumption, not a measurement: see docs/DEPENDENCIES.md.
     vision_voi_cost_eur: float = Field(default=0.5, ge=0, le=20)
     # Local OCR of labels (RapidOCR, optional dependency): free, offline, no key needed.
     ocr_enabled: bool = True
-    ai_auto_analyze_min_flip_score: float = 80.0
+    ai_auto_analyze_min_flip_score: float = Field(default=80.0, ge=0, le=101)  # 101 = never
     ai_timeout_seconds: float = 90.0
     # Model routing: the cheap tier for volume, the strong one (``ai_model``) where the stakes are.
     ai_model_cheap: str = "claude-haiku-5-5"
+    # Request caps per model (0 = unlimited; None = a cautious default for Gemini's free tier, unlimited for
+    # Anthropic). The free tier has low limits that change: read yours in AI Studio and set these below them.
+    ai_rpm_strong: int | None = Field(default=None, ge=0)
+    ai_rpd_strong: int | None = Field(default=None, ge=0)
+    ai_rpm_cheap: int | None = Field(default=None, ge=0)
+    ai_rpd_cheap: int | None = Field(default=None, ge=0)
+    ai_quota_tz: str = "America/Los_Angeles"  # Gemini daily quotas reset at midnight Pacific time
+    ai_reserve_rpm: int = Field(default=1, ge=0)  # requests per minute left free for vision/interactive calls
+    ai_reserve_rpd: int = Field(default=10, ge=0)
+    ai_sweep_batch: int = Field(default=5, ge=1, le=50)
+    ai_backoff_base_seconds: int = Field(default=30, ge=1)
+    ai_backoff_max_seconds: int = Field(default=900, ge=1)
+    ai_max_attempts: int = Field(default=8, ge=1, le=50)
+    ai_reanalyze_flip_delta: int = Field(default=5, ge=0, le=100)
+    # The model writes the negotiation messages (numbers stay the code's), on explicit request only.
+    negotiation_ai_enabled: bool = False
+    negotiation_ai_max_calls_per_day: int = Field(default=20, ge=0)
+    negotiation_ai_cooldown_seconds: int = Field(default=60, ge=0)
+    # The agent may PROPOSE purchases and markdowns (assisted channel, through the autonomy policy). Never executes.
+    agent_propose_enabled: bool = False
+    agent_max_proposals_per_run: int = Field(default=3, ge=0, le=20)
     # Spend caps in USD (UTC day and calendar month). A call that would cross a cap is not made:
     # the application falls back to its rules. ``ai_call_reserve_usd`` is held back for one call.
     ai_daily_budget_usd: Decimal = Field(default=Decimal("1.00"), ge=0)
@@ -191,6 +215,17 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    def ai_limits(self, tier: str) -> tuple[int, int]:
+        """(requests per minute, per day) for a tier; 0 = unlimited."""
+        rpm, rpd = (
+            (self.ai_rpm_strong, self.ai_rpd_strong)
+            if tier == "strong"
+            else (self.ai_rpm_cheap, self.ai_rpd_cheap)
+        )
+        gemini = self.ai_provider == "gemini"
+        default_rpm, default_rpd = ((5, 100) if tier == "strong" else (10, 200)) if gemini else (0, 0)
+        return (default_rpm if rpm is None else rpm, default_rpd if rpd is None else rpd)
 
     def validate_for_production(self) -> None:
         """Fail fast when production runs with development secrets."""

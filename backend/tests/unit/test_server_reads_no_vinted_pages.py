@@ -12,6 +12,7 @@ APP = Path(__file__).resolve().parents[2] / "app"
 # Modules allowed to open network connections, and to whom.
 ALLOWED_NETWORK_CLIENTS = {
     "ai/llm.py": "Anthropic API",
+    "ai/gemini.py": "Google Gemini API",
     "alerts/channels/discord.py": "the user's Discord webhook",
     "alerts/channels/email.py": "the user's SMTP server",
     "alerts/channels/telegram.py": "Telegram bot API",
