@@ -149,10 +149,12 @@ async def draft(
         return
 
     result = await writer.write_messages(llm, plan, facts, title, ref=str(opportunity_id))
-    if result.fallback in ("rate_limited", "unavailable"):
-        # the model was not (successfully) called: give the click back
+    retry = int(result.retry_after) if result.retry_after else None
+    if result.refund:
+        # No request reached the provider (a cap, an open breaker, a 429): the click is given back. A request that
+        # was sent and came back unusable or failed (cut off, not JSON, refused, rejected, 5xx) keeps its cooldown and
+        # its daily count, or one user could spend the shared request budget with a prompt that keeps failing.
         await gate.release(user_id, opportunity_id)
-        retry = int(result.retry_after) if result.retry_after else None
         plan.ai.update(fallback=result.fallback, retry_after=retry)
         return
     now = datetime.now(UTC).isoformat()
@@ -188,7 +190,7 @@ async def draft(
         for kind, m in result.meta.items():
             if plan.message_meta.get(kind, {}).get("source") != "model":
                 plan.message_meta[kind] = {"source": "template", "violations": m["violations"]}
-        plan.ai["fallback"] = result.fallback
+        plan.ai.update(fallback=result.fallback, retry_after=retry)
     await log_event(
         db,
         "negotiation.drafted",
@@ -204,5 +206,6 @@ async def draft(
             "accepted": sorted(k for k, m in result.meta.items() if m["source"] == "model"),
             "rejected": result.rejected,
             "fallback": result.fallback,
+            "deferred": result.deferred,
         },
     )

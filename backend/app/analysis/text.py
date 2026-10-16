@@ -13,6 +13,7 @@ reader is only reported (``injection_suspected``), and changes no other result.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -100,17 +101,46 @@ _RISK_PHRASES: list[tuple[str, str, re.Pattern[str]]] = [
 ]
 
 
+# Invisible characters that are not in the Unicode "other" categories: fillers and joiners that render as nothing,
+# and the variation selectors. They can split a word ("Whats\u200bApp") without changing how it reads.
+_INVISIBLE = frozenset("\u034f\u115f\u1160\u17b4\u17b5\u3164\uffa0")
+
+
+def is_invisible(ch: str) -> bool:
+    if ch.isspace():
+        return False
+    return (
+        unicodedata.category(ch)
+        in ("Cf", "Cc", "Cs", "Co", "Cn")  # zero-width, soft hyphen, bidi, tags, controls
+        or ch in _INVISIBLE
+        or "\ufe00" <= ch <= "\ufe0f"
+        or "\U000e0100" <= ch <= "\U000e01ef"
+        or "\u180b" <= ch <= "\u180f"
+    )
+
+
+def strip_invisible(text: str, replacement: str = "") -> str:
+    """``text`` without the characters that render as nothing (zero-width space and joiners, soft hyphen, bidi
+    controls, Unicode tag characters, variation selectors, fillers, control characters other than whitespace), each
+    one replaced by ``replacement``. Matching on such a text cannot be defeated by hiding a word in invisible
+    characters; matching on the ``replacement=" "`` form also catches one used as an invisible space."""
+    return "".join(replacement if is_invisible(ch) else ch for ch in text)
+
+
 def off_platform_hits(text: str) -> list[dict[str, str]]:
     """Contact or payment outside the platform, advance payment and external links found in ``text``, as
     ``{code, label, evidence}``. The one definition shared by the listing analysis and by the checks on texts
     the app writes for the user (negotiation messages)."""
-    # lowercase, no accents, compatibility forms flattened (full-width letters become plain ones)
-    low = fold(text).replace("ß", "ss")
-    return [
-        {"code": code, "label": label, "evidence": m.group(0).strip()[:40]}
-        for code, label, rx in _RISK_PHRASES
-        if (m := rx.search(low))
-    ]
+    # Lowercase, no accents, compatibility forms flattened (full-width letters become plain ones), and with the
+    # invisible characters removed (a word split by them) and as spaces (one used as a separator): both are searched.
+    forms = dict.fromkeys(fold(strip_invisible(text, r)).replace("ß", "ss") for r in ("", " "))
+    out: list[dict[str, str]] = []
+    for code, label, rx in _RISK_PHRASES:
+        for low in forms:
+            if m := rx.search(low):
+                out.append({"code": code, "label": label, "evidence": m.group(0).strip()[:40]})
+                break
+    return out
 
 
 _VAGUE = (

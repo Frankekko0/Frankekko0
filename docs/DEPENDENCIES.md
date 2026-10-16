@@ -34,6 +34,23 @@ il tetto di spesa lo permette (mai provato dal vivo, L27).
 
 `AI_PROVIDER=gemini` usa l'API di Google (`app/ai/gemini.py`, REST, nessuna dipendenza in più). La chiave gratuita si crea in Google AI Studio. Attenzione: nel piano gratuito Google può usare i dati inviati per migliorare i suoi prodotti e i limiti sono bassi e variabili; tieni `AI_VISION_ENABLED=false` se le foto non devono uscire dal server e imposta a 0 i quattro `AI_PRICE_*`. **Provato solo con un server finto nei test, mai dal vivo** (nessuna chiave): i nomi dei modelli vanno verificati in AI Studio.
 
+### Come usare Gemini al massimo ruolo (gratuito)
+
+```
+AI_PROVIDER=gemini
+AI_API_KEY=<chiave di Google AI Studio>
+AI_MODEL=gemini-2.5-flash
+AI_MODEL_CHEAP=gemini-2.5-flash-lite
+AI_PRICE_STRONG_INPUT_PER_MTOK=0   # e gli altri tre AI_PRICE_*
+AI_RPM_STRONG / AI_RPD_STRONG / AI_RPM_CHEAP / AI_RPD_CHEAP = i tuoi limiti, un po' sotto quelli di AI Studio
+AI_AUTO_ANALYZE_MIN_FLIP_SCORE=80        # analisi forte di ogni annuncio sopra la soglia
+AI_VISION_ALWAYS=true                    # foto sempre analizzate (privacy: L32)
+NEGOTIATION_AI_ENABLED=true              # messaggi scritti dal modello, su richiesta
+AGENT_PROPOSE_ENABLED=true               # l'agente propone acquisti e ribassi (mai esegue)
+```
+
+Tutto passa dalla stessa quota: l'analisi forte procede alla velocità che i limiti permettono (annunci migliori per primi, ogni minuto al più `AI_SWEEP_BATCH`) e `GET /api/v1/ai/usage` mostra richieste rimaste, annunci in coda, rimandati ed esauriti. Alza `AI_RESERVE_RPM/RPD` se le foto restano indietro. Prima prova mai fatta con una chiave vera (L31): guarda i log `ai.deferred`, `llm.request_rejected`, `vision.gave_up`.
+
 ## Facoltativi senza costo diretto
 
 | Servizio | Uso |

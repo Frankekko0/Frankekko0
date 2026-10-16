@@ -20,7 +20,8 @@ import hashlib
 import json
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -39,7 +40,6 @@ from app.core.config import Settings
 from app.db.models import (
     Alert,
     AutonomyAction,
-    AutonomySettings,
     InventoryItem,
     MarketComparable,
     Opportunity,
@@ -79,13 +79,10 @@ class ToolContext:
     proposed_keys: set[str] = field(
         default_factory=set
     )  # "buy:<opportunity>" / "reprice:<item>" already handled
-    llm: Any | None = None  # for the verifier's second opinion
     now: datetime | None = None
     costs: CostProfile | None = None  # the user's cost profile and minimum profit, for the selling plan
     min_profit: float = 0.0
-    usage: policy.Usage | None = (
-        None  # what the user's limits have left, kept up to date as proposals are made
-    )
+    usage: policy.Usage | None = None  # what the user's limits have left, read again at every proposal
 
 
 Handler = Callable[[ToolContext, Any], Awaitable[dict[str, Any]]]
@@ -190,9 +187,14 @@ def _in_scope(ctx: ToolContext, opportunity_id: str) -> uuid.UUID:
     return oid
 
 
-async def _load(ctx: ToolContext, ids: list[str]) -> list[Opportunity]:
+async def _load(ctx: ToolContext, ids: list[str], *, fresh: bool = False) -> list[Opportunity]:
+    """The run's opportunities. ``fresh`` reads them (and their listings) from the database again instead of
+    handing back the copies the session loaded earlier in the run."""
     wanted = [_in_scope(ctx, i) for i in ids]
-    rows = (await ctx.session.execute(select(Opportunity).where(Opportunity.id.in_(wanted)))).scalars().all()
+    q = select(Opportunity).where(Opportunity.id.in_(wanted))
+    if fresh:
+        q = q.execution_options(populate_existing=True)
+    rows = (await ctx.session.execute(q)).scalars().all()
     by_id = {o.id: o for o in rows}
     missing = [str(i) for i in wanted if i not in by_id]
     if missing:
@@ -527,25 +529,49 @@ def _money(value: Any) -> float | None:
 
 
 async def _gate(ctx: ToolContext) -> tuple[Limits, policy.Switches, datetime]:
-    """The user's switches and limits, read now. A proposal needs autonomy to be on: with the kill switch, a
-    suspension or autonomy switched off nothing is proposed and nothing is written (as in the cycle)."""
+    """The user's switches, limits and what is left of them, all read now. A proposal needs autonomy to be on: with
+    the kill switch, a suspension or autonomy switched off nothing is proposed and nothing is written (as in the
+    cycle). Read again at every call: the user may press the kill switch while the run is going, and that must stop
+    it; and the cycle (or the user's "run now") may have used some of the budget since the last call."""
     uid = _need_user(ctx)
     now = _now(ctx)
-    # Read again every time: the user may press the kill switch while the run is going, and that must stop it.
-    row = await ctx.session.get(AutonomySettings, uid, populate_existing=True)
-    if row is not None and row.killed:
-        raise ToolError("interruttore d'emergenza attivo: nessuna proposta")
-    if row is not None and row.suspended_at is not None:
-        raise ToolError("autonomia sospesa per un'anomalia: nessuna proposta")
-    if row is None or not row.enabled:
-        raise ToolError("autonomia non attiva: nessuna proposta")
+    try:
+        row, sw = await engine.read_switches(ctx.session, uid, now)
+    except engine.AutonomyStopped as exc:
+        raise ToolError(str(exc)) from exc
     try:
         limits = parse_limits(row.limits)
     except LimitsError as exc:
         raise ToolError(f"limiti dell'utente non validi: {exc}") from exc
-    if ctx.usage is None:
-        ctx.usage = await engine.usage_for(ctx.session, uid, now)
-    return limits, engine.switches_of(row, now), now
+    ctx.usage = await engine.usage_for(ctx.session, uid, now)
+    return limits, sw, now
+
+
+@asynccontextmanager
+async def _proposal_txn(ctx: ToolContext) -> AsyncIterator[None]:
+    """One proposal in its own short transaction, serialised with the autonomy cycle for the same user.
+
+    The run holds no transaction between its tool calls (it waits for a model with none open): this ends whatever
+    read transaction the session has, takes the user's lock (waiting for a cycle in flight, then seeing what it
+    committed), lets the proposal read and write inside a savepoint, and commits at once, which releases the lock.
+    A proposal that fails rolls back to the savepoint, so nothing half-written stays and the objects the run has
+    loaded stay usable; a failure of the lock or of the commit itself rolls the whole transaction back."""
+    uid = _need_user(ctx)
+    await ctx.session.commit()
+    failure: Exception | None = None
+    try:
+        await engine.lock_user(ctx.session, uid)
+        try:
+            async with ctx.session.begin_nested():
+                yield
+        except Exception as exc:
+            failure = exc
+        await ctx.session.commit()
+    except BaseException:
+        await ctx.session.rollback()
+        raise
+    if failure is not None:
+        raise failure
 
 
 def _in_inventory_scope(ctx: ToolContext, purchase_id: str) -> uuid.UUID:
@@ -558,16 +584,20 @@ def _in_inventory_scope(ctx: ToolContext, purchase_id: str) -> uuid.UUID:
     return pid
 
 
-async def _listed_item(ctx: ToolContext, purchase_id: uuid.UUID) -> tuple[Purchase, InventoryItem]:
-    """A listed item with a price, of the run's user and nobody else's."""
+async def _listed_item(
+    ctx: ToolContext, purchase_id: uuid.UUID, *, fresh: bool = False
+) -> tuple[Purchase, InventoryItem]:
+    """A listed item with a price, of the run's user and nobody else's (``fresh``: read again from the database,
+    the user may have changed the price or sold it since the run loaded it)."""
     uid = _need_user(ctx)
-    row = (
-        await ctx.session.execute(
-            select(Purchase, InventoryItem)
-            .join(InventoryItem, InventoryItem.purchase_id == Purchase.id)
-            .where(Purchase.id == purchase_id, Purchase.user_id == uid, InventoryItem.user_id == uid)
-        )
-    ).one_or_none()
+    q = (
+        select(Purchase, InventoryItem)
+        .join(InventoryItem, InventoryItem.purchase_id == Purchase.id)
+        .where(Purchase.id == purchase_id, Purchase.user_id == uid, InventoryItem.user_id == uid)
+    )
+    if fresh:
+        q = q.execution_options(populate_existing=True)
+    row = (await ctx.session.execute(q)).one_or_none()
     if row is None:
         raise ToolError("articolo non trovato")
     p, item = row
@@ -602,7 +632,8 @@ def _recorded(ctx: ToolContext, act: AutonomyAction, key: str) -> dict[str, Any]
     if act.verifier:
         out["verifier"] = {
             "agrees": act.verifier["agrees"],
-            "issues": [neutralise(str(i["label"]))[:200] for i in act.verifier["issues"]],
+            # Some labels carry text the listing supplied (the dossier's contradictions): delimited like the listing.
+            "issues": [wrap_untrusted(str(i["label"]), 200) for i in act.verifier["issues"]],
         }
     if ctx.proposals_remaining <= 0:
         out["note"] += "; tetto di proposte raggiunto: chiudi con finish_proposals"
@@ -618,23 +649,29 @@ async def propose_purchase(ctx: ToolContext, a: ProposePurchaseIn) -> dict[str, 
     uid = _need_user(ctx)
     if ctx.proposals_remaining <= 0:
         raise ToolError("tetto di proposte di questa esecuzione raggiunto")
-    (o,) = await _load(ctx, [a.opportunity_id])
-    limits, sw, now = await _gate(ctx)
-    li = o.listing
-    if str(o.id) in ctx.flagged_injection or injection_suspected(f"{li.title}\n{li.description or ''}"):
-        ctx.flagged_injection.add(str(o.id))
-        raise ToolError("il testo dell'annuncio dà ordini a chi lo legge: non si propone l'acquisto")
-    key = f"buy:{o.id}"
-    if key in ctx.proposed_keys:
-        raise ToolError("acquisto già proposto in questa esecuzione")
-    if o.id in await engine.already_proposed(ctx.session, uid, now):
-        raise ToolError(f"acquisto già proposto negli ultimi {PROPOSAL_DEDUPE_DAYS} giorni")
-    assert ctx.usage is not None
-    act, ctx.usage = await engine.propose_buy(
-        ctx.session, uid, o, li, limits=limits, usage=ctx.usage, sw=sw, now=now, llm=ctx.llm,
-        source="agent", run_id=ctx.run_id, reason=neutralise(a.reason)[:300],
-    )  # fmt: skip
-    return _recorded(ctx, act, key)
+    _in_scope(ctx, a.opportunity_id)
+    async with _proposal_txn(ctx):
+        # Everything below is read after the lock: the opportunity and its listing as they are now, the switches, the
+        # budget used and the purchases already offered, including what the cycle committed while this run waited.
+        (o,) = await _load(ctx, [a.opportunity_id], fresh=True)
+        limits, sw, now = await _gate(ctx)
+        li = o.listing
+        if str(o.id) in ctx.flagged_injection or injection_suspected(f"{li.title}\n{li.description or ''}"):
+            ctx.flagged_injection.add(str(o.id))
+            raise ToolError("il testo dell'annuncio dà ordini a chi lo legge: non si propone l'acquisto")
+        key = f"buy:{o.id}"
+        if key in ctx.proposed_keys:
+            raise ToolError("acquisto già proposto in questa esecuzione")
+        if o.id in await engine.already_proposed(ctx.session, uid, now):
+            raise ToolError(f"acquisto già proposto negli ultimi {PROPOSAL_DEDUPE_DAYS} giorni")
+        assert ctx.usage is not None
+        # No second opinion from the model here (llm=None): it would be one more request per purchase outside the
+        # reserves kept for the photo checks and the user's clicks. The deterministic verifier still applies in full.
+        act, ctx.usage = await engine.propose_buy(
+            ctx.session, uid, o, li, limits=limits, usage=ctx.usage, sw=sw, now=now, llm=None,
+            source="agent", run_id=ctx.run_id, reason=neutralise(a.reason)[:300],
+        )  # fmt: skip
+        return _recorded(ctx, act, key)
 
 
 class ProposeRepriceIn(_Input):
@@ -668,29 +705,30 @@ async def propose_reprice(ctx: ToolContext, a: ProposeRepriceIn) -> dict[str, An
     if ctx.proposals_remaining <= 0:
         raise ToolError("tetto di proposte di questa esecuzione raggiunto")
     pid = _in_inventory_scope(ctx, a.purchase_id)
-    limits, sw, now = await _gate(ctx)
-    p, item = await _listed_item(ctx, pid)
-    key = f"reprice:{item.id}"
-    if key in ctx.proposed_keys:
-        raise ToolError("ribasso già proposto in questa esecuzione")
-    costs, min_profit = _economics(ctx)
-    view = await selling.reprice_advice(ctx.session, p, item, costs, min_profit, now)
-    advice = view.advice
-    # The agent may only LOWER a price, and only to the step the selling plan says is due: the model gives no number.
-    if advice is None or view.floor is None:
-        raise ToolError("manca un piano di prezzo per questo articolo: niente ribasso")
-    if advice.action != "lower" or advice.new_price is None:
-        raise ToolError(f"nessun ribasso da proporre adesso: {advice.reason}")
-    price = Decimal(str(advice.new_price)).quantize(Decimal("0.01"))
-    floor = Decimal(str(view.floor)).quantize(Decimal("0.01"))
-    assert item.listed_price is not None and ctx.usage is not None
-    if (why := await _already_marked_down(ctx, uid, item, price, now)) is not None:
-        raise ToolError(why)
-    act, ctx.usage = await engine.propose_reprice(
-        ctx.session, uid, p, item, price=price, floor=floor, current=item.listed_price, limits=limits,
-        usage=ctx.usage, sw=sw, now=now, source="agent", run_id=ctx.run_id, reason=neutralise(a.reason)[:300],
-    )  # fmt: skip
-    return _recorded(ctx, act, key)
+    async with _proposal_txn(ctx):
+        limits, sw, now = await _gate(ctx)
+        p, item = await _listed_item(ctx, pid, fresh=True)
+        key = f"reprice:{item.id}"
+        if key in ctx.proposed_keys:
+            raise ToolError("ribasso già proposto in questa esecuzione")
+        costs, min_profit = _economics(ctx)
+        view = await selling.reprice_advice(ctx.session, p, item, costs, min_profit, now)
+        advice = view.advice
+        # The agent may only LOWER a price, and only to the step the selling plan says is due: the model gives no number.
+        if advice is None or view.floor is None:
+            raise ToolError("manca un piano di prezzo per questo articolo: niente ribasso")
+        if advice.action != "lower" or advice.new_price is None:
+            raise ToolError(f"nessun ribasso da proporre adesso: {advice.reason}")
+        price = Decimal(str(advice.new_price)).quantize(Decimal("0.01"))
+        floor = Decimal(str(view.floor)).quantize(Decimal("0.01"))
+        assert item.listed_price is not None and ctx.usage is not None
+        if (why := await _already_marked_down(ctx, uid, item, price, now)) is not None:
+            raise ToolError(why)
+        act, ctx.usage = await engine.propose_reprice(
+            ctx.session, uid, p, item, price=price, floor=floor, current=item.listed_price, limits=limits,
+            usage=ctx.usage, sw=sw, now=now, source="agent", run_id=ctx.run_id, reason=neutralise(a.reason)[:300],
+        )  # fmt: skip
+        return _recorded(ctx, act, key)
 
 
 async def autonomy_status(ctx: ToolContext, _a: NoInput) -> dict[str, Any]:
@@ -730,7 +768,12 @@ async def plan_purchases(ctx: ToolContext, a: PlanPurchasesIn) -> dict[str, Any]
     limits, _sw, _now = await _gate(ctx)
     usage = ctx.usage
     assert usage is not None
-    if limits.daily_budget is None or limits.weekly_budget is None or limits.max_per_item is None:
+    if (
+        limits.daily_budget is None
+        or limits.weekly_budget is None
+        or limits.max_per_item is None
+        or limits.max_per_item <= 0  # a cap of zero buys nothing, like no cap at all
+    ):
         raise ToolError("senza budget giornaliero, settimanale e massimo per articolo non si compra")
     left = min(limits.daily_budget - usage.spent_today, limits.weekly_budget - usage.spent_week)
     room = 30 if limits.max_items is None else limits.max_items - usage.owned_items

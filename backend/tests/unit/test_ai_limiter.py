@@ -97,14 +97,13 @@ async def test_peek_sees_the_day_cap_and_the_cooldown() -> None:
     assert not held.allowed and held.reason == "cooldown" and 1 <= held.retry_after <= 30
 
 
-async def test_peek_of_an_unlimited_model_never_touches_redis(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.ai import limiter as mod
-
-    def boom() -> None:
-        raise AssertionError("redis touched")
-
-    monkeypatch.setattr(mod, "get_redis", boom)
-    assert (await AiRateLimiter(Settings(ai_provider="anthropic")).peek("m", "strong")).allowed
+async def test_an_unlimited_model_is_still_held_by_a_provider_429() -> None:
+    lim = AiRateLimiter(Settings(ai_provider="anthropic"))
+    assert (await lim.acquire("u", "strong")).allowed and (await lim.peek("u", "strong")).allowed
+    await lim.penalize("u", 30)
+    for call in (lim.acquire, lim.peek):
+        held = await call("u", "strong")
+        assert not held.allowed and held.reason == "cooldown" and 1 <= held.retry_after <= 30
 
 
 async def test_peek_fails_closed_when_redis_is_down(monkeypatch: pytest.MonkeyPatch) -> None:

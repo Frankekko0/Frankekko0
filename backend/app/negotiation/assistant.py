@@ -57,6 +57,9 @@ class NegotiationPlan:
     message_meta: dict[str, dict[str, Any]] = field(default_factory=dict)
     ai: dict[str, Any] = field(default_factory=lambda: ai_block())
     note: str = ""
+    # The ``accept`` message is the buyer's FIRST contact (nobody has written yet: the asking price is already worth
+    # paying), not a reply to the seller. The model's draft and the guard treat it that way (``negotiation.guard``).
+    accept_opens: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -155,9 +158,15 @@ def opening_offer(suggested: float | None, max_buy: float | None) -> float | Non
     """The price to open with, always room below the most worth paying. It is the offer engine's own suggestion
     (``Opportunity.suggested_offer``); without one, a notch under the maximum (the engine's 95% rule, in whole
     euros), so the seller has something to haggle down from and the buyer something to come up to. The stored
-    suggestion was made with the economics of the analysis: it is clamped to the maximum of the user asking now."""
-    if suggested is not None and suggested > 0:
-        return suggested if max_buy is None else min(suggested, max_buy)
+    suggestion was made with the economics of the analysis, which may be looser than those of the user asking now:
+    when it is not below that user's maximum it leaves no room (clamping it would open AT the maximum, and the first
+    offer and the counter reply would name the same figure), so the 95% rule applies, as without a suggestion."""
+    if (
+        suggested is not None
+        and suggested > 0
+        and (max_buy is None or round(suggested, 2) < round(max_buy, 2))
+    ):
+        return suggested
     if max_buy is None or max_buy <= 0:
         return None
     lower = float(math.floor(max_buy * 0.95))
@@ -215,6 +224,7 @@ def build_plan(
     offer = ideal_offer if ideal_offer is not None else max_buy
     if offer is None or offer >= asked:
         plan.note = "Il prezzo richiesto è già dentro la soglia: non serve trattare, salvo un lotto."
+        plan.accept_opens = True
         plan.messages = {"accept": f"Ciao, mi interessa {short}: la prendo al prezzo indicato. Grazie!"}
     else:
         why = (
@@ -240,6 +250,7 @@ def build_plan(
         if max_buy is not None and asked <= max_buy:
             plan.note = "Il prezzo richiesto è già dentro la soglia: una piccola offerta è facoltativa, si può anche accettare."
             plan.messages["accept"] = f"Ciao, mi interessa {short}: la prendo al prezzo indicato. Grazie!"
+            plan.accept_opens = True
         elif max_buy is not None and max_buy < asked * 0.75:
             plan.note = "Lo sconto necessario supera il 25%: è probabile che il venditore non accetti. Meglio osservare."
     plan.message_meta = {k: {"source": "template", "violations": []} for k in plan.messages}

@@ -158,6 +158,26 @@ def _pace_minute() -> int:
     return int(time.time() // 60)
 
 
+# Atomic: grant at most what is left of the cap (never a negative counter), and give the key its expiry in the same step,
+# so that a crash between two commands can leave neither an over-grant nor a counter that never expires.
+_TAKE_PACE = """
+local used = math.max(0, tonumber(redis.call('GET', KEYS[1]) or '0'))
+local grant = math.max(0, math.min(tonumber(ARGV[1]), tonumber(ARGV[2]) - used))
+if grant > 0 then
+  redis.call('INCRBY', KEYS[1], grant)
+  redis.call('EXPIRE', KEYS[1], ARGV[3])
+end
+return grant
+"""
+_GIVE_BACK_PACE = """
+local used = tonumber(redis.call('GET', KEYS[1]) or '0')
+if used > 0 then
+  redis.call('DECRBY', KEYS[1], math.min(used, tonumber(ARGV[1])))
+end
+return 0
+"""
+
+
 async def take_pace(model: str, wanted: int, cap: int) -> tuple[int, str]:
     """Reserve up to ``wanted`` review jobs in this minute's pace, at most ``cap`` altogether for the sweep and the
     kicks. Without a window of the provider's own (limits of 0) nothing else bounds the rate, and ``quota_room`` is
@@ -168,13 +188,8 @@ async def take_pace(model: str, wanted: int, cap: int) -> tuple[int, str]:
     if wanted <= 0 or cap <= 0:
         return 0, key
     try:
-        redis = get_redis()
-        total = int(await redis.incrby(key, wanted))
-        await redis.expire(key, PACE_TTL)
-        over = min(wanted, max(0, total - cap))
-        if over:  # give back what was refused: concurrent callers may be refused too, but never over-granted
-            await redis.decrby(key, over)
-        return wanted - over, key
+        granted = await get_redis().eval(_TAKE_PACE, 1, key, str(wanted), str(cap), str(PACE_TTL))  # type: ignore[misc]
+        return int(granted), key
     except RedisError as exc:
         log.warning("ai.pace_redis_unavailable", error=str(exc))
         return 0, key
@@ -184,7 +199,7 @@ async def give_back_pace(key: str, n: int) -> None:
     """Return the part of a reservation that was not used (the sweep found fewer rows than the room)."""
     if n > 0:
         with contextlib.suppress(RedisError):
-            await get_redis().decrby(key, n)
+            await get_redis().eval(_GIVE_BACK_PACE, 1, key, str(n))  # type: ignore[misc]
 
 
 async def defer_opportunity(

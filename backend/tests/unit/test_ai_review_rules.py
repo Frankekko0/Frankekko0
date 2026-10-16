@@ -324,6 +324,21 @@ def test_the_text_the_model_writes_loses_links_phone_numbers_and_bank_details() 
     )  # figures and ordinary punctuation are not mistaken for contacts
 
 
+def test_scrubbing_text_the_seller_made_the_model_repeat_does_not_stall_the_worker() -> None:
+    """Thousands of characters of a hostile shape: the patterns must stay cheap (the old e-mail pattern took a minute
+    on 'a@a@a@...'), so the scan is bounded and none of them is cubic."""
+    import time
+
+    for hostile in ("a@" * 5000, "a." * 10000, "a-" * 10000, "1 " * 10000, "www." * 5000):
+        started = time.perf_counter()
+        out = _scrub(hostile, 1500)
+        assert time.perf_counter() - started < 1.0, hostile[:6]
+        assert len(out) <= 1500
+    # A contact that straddles the limit is still recognised (the scan goes a little past it) and never half-kept.
+    straddling = "x" * 1495 + " +39 333 1234567 e altro testo"
+    assert "1234567" not in _scrub(straddling, 1500) and "333" not in _scrub(straddling, 1500)
+
+
 async def test_the_numbers_and_contacts_in_every_text_field_are_cleaned() -> None:
     data = {
         "verdict": "CONSIDER",

@@ -365,6 +365,9 @@ repository). Un valore vuoto equivale a "non impostato". Le principali:
 | `BACKEND_URL` (frontend, build) | `http://localhost:8000` | destinazione del proxy `/api` (in Docker: `http://backend:8000`) |
 | `ALGORITHM_VERSION` | `2026.10-2` | versione registrata con ogni analisi |
 | `IMAP_HOST` / `IMAP_PORT` / `IMAP_USER` / `IMAP_PASSWORD` / `IMAP_FOLDER` / `IMAP_POLL_MINUTES` | — / `993` / — / — / `INBOX` / `15` | lettura (sola lettura) delle email di notifica di Vinted |
+| `AI_PROVIDER` | `anthropic` | `anthropic` o `gemini` (chiave gratuita di Google AI Studio, vedi `docs/DEPENDENCIES.md`) |
+| `AI_RPM_*` / `AI_RPD_*` | prudenti per Gemini, 0 per Anthropic | richieste al minuto/giorno per modello (`STRONG`, `CHEAP`) |
+| `AI_VISION_ALWAYS` / `NEGOTIATION_AI_ENABLED` / `AGENT_PROPOSE_ENABLED` | `false` | foto sempre analizzate · messaggi di trattativa scritti dal modello · agente che propone acquisti e ribassi |
 | `VISION_VOI_COST_EUR` | `0.50` | costo assunto di un'analisi delle foto per il valore dell'informazione (vedi `docs/DEPENDENCIES.md`) |
 | `PARSER_CONFIG_PATH` | — | copia aggiornata di `vinted_parser.json` (selettori, etichette, pattern) senza ricostruire nulla |
 | `IMAGE_ARCHIVE_ENABLED` / `MEDIA_DIR` / `IMAGE_ARCHIVE_MAX_BYTES` | `true` / `var/media` / `10485760` | accetta e conserva le foto caricate dall'estensione, per la pagina di tracking e l'analisi (in Docker: volume `media`); `false`: nessun caricamento |

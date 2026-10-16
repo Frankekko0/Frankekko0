@@ -89,7 +89,7 @@ def _number(value: object) -> Decimal | None:
 
 _LINK = re.compile(
     r"(?:https?://|www\.)\S+"  # a link
-    r"|\S+@\S+\.\S+"  # an e-mail address
+    r"|[^\s@]+@[^\s@]+\.\S+"  # an e-mail address (no '@' in the parts: linear, where \S+@\S+ is cubic on 'a@a@a@...')
     r"|\b[\w-]+(?:\.[\w-]+)*\.[a-z]{2,24}/\S*"  # a link without the protocol: wa.me/39333..., bit.ly/x
     r"|\b(?:wa\.me|t\.me|telegram\.me|bit\.ly|tinyurl\.com|paypal\.me)\b\S*",  # the same, no path
     re.IGNORECASE,
@@ -99,14 +99,19 @@ _PHONE = re.compile(r"(?<!\w)[+(]?\d[\d\s().-]{7,}\d(?!\w)")
 _IBAN = re.compile(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,3})?\b", re.IGNORECASE)
 
 
+_SCAN_MARGIN = 256  # characters scanned past the limit, so that a contact straddling it is still recognised
+
+
 def _contact(match: re.Match[str]) -> str:
     return "[contatto rimosso]" if sum(c.isdigit() for c in match.group()) >= 9 else match.group()
 
 
 def _scrub(text: object, limit: int) -> str:
     """Text the model wrote, kept as plain words: no links, addresses, phone numbers or bank details (the seller's,
-    repeated), no control characters."""
-    clean = neutralise(str(text))
+    repeated), no control characters. Only the part that can be kept is scanned (the text may be thousands of
+    characters of anything the seller got the model to repeat, and the patterns are not free on those); what lies past
+    the margin is dropped anyway, and a link that begins inside it is matched whole up to the margin."""
+    clean = neutralise(str(text))[: limit + _SCAN_MARGIN]
     clean = _LINK.sub("[link rimosso]", clean)
     clean = _IBAN.sub("[contatto rimosso]", clean)
     return _PHONE.sub(_contact, clean)[:limit]

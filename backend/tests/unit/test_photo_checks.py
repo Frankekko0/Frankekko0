@@ -65,6 +65,7 @@ class FakeLLM:
         schema: dict[str, Any],
         purpose: str,
         raise_on_defer: bool = False,
+        report_unusable: bool = False,
     ) -> dict[str, Any]:
         self.content = content
         return self.data

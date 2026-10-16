@@ -81,10 +81,12 @@ async def test_a_trial_call_that_ends_without_a_verdict_gives_the_half_open_slot
     assert e.value.reason in ("rejected", "rate_limited") and len(fake.calls) == 3
     # The slot is back: the next call is a trial again and, the provider being healthy, it closes the breaker.
     # (Without the fix every later call in this process is refused with "breaker_open" for good.)
+    await get_redis().delete(
+        f"ff:ai:cooldown:{c.model_for('strong')}"
+    )  # a 429 leaves a shared cooldown: lift it
     clock.t = 62
     assert await ask(c) == {"ok": True}
     assert len(fake.calls) == 4 and c.breaker.state == "closed"
-    await get_redis().delete(f"ff:ai:cooldown:{c.model_for('strong')}")  # the 429 left a shared cooldown
 
 
 # ------------------------------------------------------------------ admission: would a call go through?

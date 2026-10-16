@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.agent.guardrails import CLOSE, OPEN, injection_suspected
-from app.analysis.text import off_platform_hits
+from app.analysis.text import is_invisible, off_platform_hits, strip_invisible
 from app.negotiation.assistant import NegotiationPlan, eur, item_label, pressure_phrases
 from app.selling.listing_draft import claims_not_supported
 
@@ -74,6 +74,7 @@ class NegotiationFacts:
     median: float | None
     bundle_possible: bool
     item_label: str
+    accept_opens: bool = False  # the ``accept`` message is the first contact with the seller, not a reply
 
     @classmethod
     def from_plan(
@@ -93,6 +94,7 @@ class NegotiationFacts:
             median=median if median and median < plan.asked else None,
             bundle_possible="bundle" in plan.messages,
             item_label=item_label(title),
+            accept_opens=plan.accept_opens and "accept" in plan.messages,
         )
 
     def values(self) -> dict[str, float | None]:
@@ -117,9 +119,13 @@ class NegotiationFacts:
         return frozenset(n for n in rule.allowed if self.available(n)) if rule else frozenset()
 
     def required(self, kind: str) -> frozenset[str]:
-        """The placeholders a message of this kind must contain (those whose figure exists)."""
+        """The placeholders a message of this kind must contain (those whose figure exists). A first-contact
+        ``accept`` must name the item: there is no earlier message for it to refer to."""
         rule = RULES.get(kind)
-        return rule.required & self.placeholders(kind) if rule else frozenset()
+        if not rule:
+            return frozenset()
+        need = rule.required & self.placeholders(kind)
+        return need | {"ITEM"} if kind == "accept" and self.accept_opens else need
 
     @property
     def distance(self) -> str:
@@ -135,19 +141,23 @@ class NegotiationFacts:
         return {
             "tono": self.tone,
             "distanza_offerta_dal_prezzo_richiesto": self.distance,
-            "messaggi": [
-                {
-                    "tipo": k,
-                    "segnaposto_disponibili": sorted(self.placeholders(k)),
-                    "segnaposto_obbligatori": sorted(self.required(k)),
-                }
-                for k in self.kinds
-            ],
+            "messaggi": [self._message_view(k) for k in self.kinds],
         }
+
+    def _message_view(self, kind: str) -> dict[str, Any]:
+        view: dict[str, Any] = {
+            "tipo": kind,
+            "segnaposto_disponibili": sorted(self.placeholders(kind)),
+            "segnaposto_obbligatori": sorted(self.required(kind)),
+        }
+        if kind == "accept":  # the writer prompt explains both; the guard enforces the one that applies
+            view["contesto"] = "primo_contatto" if self.accept_opens else "risposta"
+        return view
 
     def fingerprint_parts(self) -> list[Any]:
         return [
             self.asked, self.offer, self.max_price, self.median, list(self.kinds), self.item_label,
+            self.accept_opens,
         ]  # fmt: skip
 
 
@@ -157,11 +167,49 @@ _MONEY = re.compile(
     r"€|\$|£|\beur(?:o|os)?\b|\bcent(?:esimi)?\b|%|\bper ?cento\b|\bpercent\w*|\bsconto del\b|\bribasso del\b|\bdollar\w*",
     re.IGNORECASE,
 )
+# Italian numerals, simple and compound ("venti", "ventidue", "centoventi", "trecentocinquanta", "milleduecento",
+# "duemilacinquecento"): a whole word made only of numeral parts, with at least one real number in it (so "un" and
+# "uno" alone, the article, are not numbers, and "ventilatore" or "quarantena" are not either).
+_UNIT = r"(?:uno|un|due|tre|tré|quattro|cinque|sei|sette|otto|nove)"
+_TEEN = r"(?:dieci|undici|dodici|tredici|quattordici|quindici|sedici|diciassette|diciotto|diciannove)"
+_TENS = r"(?:vent|trent|quarant|cinquant|sessant|settant|ottant|novant)[aio]?"
+_NUMERAL = (
+    r"\b(?=\w*(?:due|tre|tré|quattro|cinque|sette|otto|nove|dici|dieci|vent|trent|quarant|cinquant|sessant|settant|"
+    r"ottant|novant|cent|mill|mila|milion))"
+    rf"(?:{_TEEN}|{_TENS}|{_UNIT}|cent[o]?|mille|mila|milion[ei]){{1,8}}\b"
+)
 _NUMBER_WORDS = re.compile(
-    r"\b(?:due|tre|quattro|cinque|sette|otto|nove|dieci|undici|dodici|tredici|quattordici|quindici|sedici|"
-    r"diciassette|diciotto|diciannove|(?:venti|trenta|quaranta|cinquanta|sessanta|settanta|ottanta|novanta)\w*|"
-    r"(?:due|tre|quattro|cinque|sei|sette|otto|nove)?cento|mille|\w*mila|milion[ei]|decin[ae]|dozzina|centinaio|"
-    r"metà|mezzo|mezza|dimezz\w*|gratis|gratuit\w*)\b",
+    rf"{_NUMERAL}|\b(?:vent|trent|quarant|cinquant|sessant|settant|ottant|novant)in[ae]\b|"
+    r"\b(?:decin[ae]|dozzina|centinai[ao]|migliai[ao]|metà|mezzo|mezza|dimezz\w*|gratis|gratuit\w*)\b",
+    re.IGNORECASE,
+)
+# "sei" is both the number and "you are" ("sei gentile"): it is an amount only where an amount can stand, after a
+# preposition or a verb of offering ("potrei arrivare a sei", "faccio sei").
+_SEI_AS_NUMBER = re.compile(
+    r"\b(?:(?:a|ad|di|da|per|con|su|sui|tra|fra|circa|oltre|solo|soltanto|massimo|minimo|appena|quasi|"
+    r"fino a|intorno a|meno di|più di)|(?:fare|faccio|facciamo|dare|do|diamo|offrire|offro|pagare|pago|"
+    r"arrivare|arrivo|scendere|scendo|salire|salgo|andare|vado|mettere|metto))\s+sei\b",
+    re.IGNORECASE,
+)
+# A fraction of the price named in words ("un quarto in meno", "scende di un terzo") is an amount too. "quarto d'ora"
+# and an ordinal far from any talk of price ("il terzo articolo") are not.
+_FRACTION = r"(?:quart[oi]|terz[oi]|quint[oi]|decim[oi]|ottav[oi])"
+_PRICE_TALK = r"(?:meno|sconto|scont\w*|ribass\w*|ridur\w*|abbass\w*|scend\w*|calar\w*|prezzo|prezzi|costo)"
+_FRACTION_OF_PRICE = re.compile(
+    rf"\b{_FRACTION}\b(?!\s+d['’]ora)(?:\W+\w+){{0,3}}?\W+{_PRICE_TALK}\b"
+    rf"|\b{_PRICE_TALK}\b(?:\W+\w+){{0,4}}?\W+(?:(?:un|uno|due|tre|quattro)\W+)?{_FRACTION}\b(?!\s+d['’]ora)",
+    re.IGNORECASE,
+)
+# Courtesy that looks like something the rules refuse, and is ordinary politeness: "grazie mille" (not 1000),
+# "grazie in anticipo" (not an advance payment), "scrivimi pure" in the chat (not a contact elsewhere). They are taken
+# out before the amount, advance-payment and contact checks; "mille", "anticipo" or "scrivimi" anywhere else still count.
+_COURTESY = re.compile(
+    r"\bgra[sz]ie\s+(?:mille|infinite)(?:\s+volte)?\b|\bmille\s+(?:e\s+mille\s+)?(?:volte\s+)?gra[sz]ie\b|"
+    r"\bringrazio\s+(?:mille|infinite)\s+volte\b|\bun\s+milione\s+di\s+gra[sz]ie\b|"
+    r"\b(?:gra[sz]ie|ringrazio|ringraziandoti|ringraziarti|ringraziandovi)[\s,]+(?:(?:di\s+cuore|mille|tanto|molto)\s+)?"
+    r"in\s+anticipo\b|\bin\s+anticipo[\s,]+(?:gra[sz]ie|ti\s+ringrazio)\b|"
+    r"\b(?:scrivimi|scrivermi)\b(?=\s+(?:pure|qui|in\s+chat|nella\s+chat|su\s+vinted|sulla\s+piattaforma|"
+    r"su\s+questa\s+piattaforma|se|quando)\b|\s*[.,!?;:]|\s*$)",
     re.IGNORECASE,
 )
 _CONTACT = re.compile(
@@ -191,6 +239,23 @@ _CONDITION = re.compile(
 _MARKET = re.compile(
     r"vendut|simili|mercato|comparabil|quotazion|prezzo medio|in media|di solito costa|costa di meno",
     re.IGNORECASE,
+)  # a sentence quoting {MEDIAN} must be talking about sales (here "simili" counts)
+# A claim about the market, which only {MEDIAN} supports. "Altri articoli simili che mi piacciono" or "un prezzo
+# complessivo" are not one: "simili" counts only next to a word that says what such items cost or sold for.
+_PRICE_WORDS = r"(?:cost\w*|economic\w*|meno|valg\w*|valor\w*|vendon\w*|vendut\w*|prezzi)"
+_MARKET_CLAIM = re.compile(
+    r"vendut|mercato|comparabil|quotazion|prezzo medio|in media|di solito costa|costa di meno|"
+    rf"simili\b(?:\W+\w+){{0,4}}?\W+{_PRICE_WORDS}\b|\b{_PRICE_WORDS}\b(?:\W+\w+){{0,4}}?\W+simili\b",
+    re.IGNORECASE,
+)
+# A first-contact ``accept`` is a greeting and the buyer's wish, not an answer: nothing in it replies to a message
+# that was never written.
+_REPLY = re.compile(
+    r"^\W*(?:perfetto|ottimo|benissimo|va bene|d'accordo|affare fatto|accetto|certo|volentieri)\b|"
+    r"gra[sz]ie (?:della|per la|per aver)\s+(?:tua\s+)?(?:risposta|offerta|proposta|accettazione|conferma|accettato|risposto)|"
+    r"hai accettato|ha accettato|come concordato|come d'accordo|come detto|"
+    r"mi hai (?:risposto|scritto)|la tua (?:risposta|offerta|proposta)",
+    re.IGNORECASE,
 )
 _ENGLISH = {
     "the", "you", "your", "thanks", "thank", "hello", "please", "would", "could", "offer", "price", "and",
@@ -200,12 +265,16 @@ _ENGLISH_STRONG = {"thanks", "thank", "hello", "please", "would", "dear", "regar
 
 
 def _bad_format(text: str) -> str | None:
+    """The first character a short plain message may not have: markup, symbols and emoji, control characters and
+    every invisible one (zero-width space and joiners, soft hyphen, bidi controls, Unicode tags, fillers), which
+    could hide a word or text the user would copy without seeing it."""
     for ch in text:
         cat = unicodedata.category(ch)
         if (
             ch in "*`#<>|~\\[]_"
-            or cat in ("So", "Sk", "Cs", "Co", "Cn")
+            or cat in ("So", "Sk", "Cs", "Co", "Cn", "Cf")
             or (cat == "Cc" and ch not in "\n\t")
+            or is_invisible(ch)
         ):
             return ch
     return None
@@ -254,7 +323,11 @@ def check(kind: str, raw: str, facts: NegotiationFacts) -> list[Violation]:
     for name in sorted(facts.required(kind)):
         if name not in names:
             add("missing_required_amount", name)
-    bare = _PLACEHOLDER.sub(" ", text)
+    # Every rule below looks at the text without its invisible characters (the draft is refused for them above, but
+    # a word split by one must still be seen for what it is) and, for the amount, advance-payment and contact rules,
+    # without the ordinary courtesy that looks like one of them ("grazie mille", "grazie in anticipo", "scrivimi pure").
+    bare = strip_invisible(_PLACEHOLDER.sub(" ", text))
+    plain = _COURTESY.sub(" ", bare)
     if "{" in bare or "}" in bare:
         add("bad_placeholder")
 
@@ -263,22 +336,26 @@ def check(kind: str, raw: str, facts: NegotiationFacts) -> list[Violation]:
         add("literal_number")
     if m := _MONEY.search(bare):
         add("literal_amount", m.group(0))
-    if m := _NUMBER_WORDS.search(bare):
+    if m := _NUMBER_WORDS.search(plain) or _SEI_AS_NUMBER.search(plain) or _FRACTION_OF_PRICE.search(plain):
         add("spelled_amount", m.group(0))
     if "{MEDIAN}" in text and not any(_MARKET.search(s) for s in re.split(r"[.!?]", text) if "{MEDIAN}" in s):
         add("median_context")
-    if _MARKET.search(bare) and facts.median is None:
+    if _MARKET_CLAIM.search(plain) and facts.median is None:
         add("market_claim_unsupported")
 
     # nothing outside the platform
-    for hit in off_platform_hits(bare):
+    for hit in off_platform_hits(plain):
         add(hit["code"], hit["evidence"])
-    if m := _CONTACT.search(bare):
+    if m := _CONTACT.search(plain):
         add("off_platform_contact", m.group(0))
     if m := _PAYMENT.search(bare):
         add("off_platform_payment", m.group(0))
     if m := _LINK.search(bare):
         add("external_link", m.group(0))
+
+    # the buyer's first message (the asking price is already worth paying) is not an answer to anyone
+    if kind == "accept" and facts.accept_opens and (m := _REPLY.search(bare)):
+        add("reply_as_first_contact", m.group(0))
 
     # honest, courteous, no invented facts
     if pressure := pressure_phrases(bare):

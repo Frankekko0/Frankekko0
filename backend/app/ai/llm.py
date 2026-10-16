@@ -141,14 +141,15 @@ class LLMClient:
             refuse("budget", 3600.0)
             return None
         model = self.model_for(tier)
-        adm = await get_limiter().acquire(model, tier)
-        if not adm.allowed:
-            log.info("ai.deferred", purpose=purpose, reason=adm.reason, retry_after=adm.retry_after)
-            refuse(adm.reason, adm.retry_after)
-            return None
         if not self.breaker.allow():
             log.warning("llm.breaker_open", purpose=purpose)
             refuse("breaker_open", self.breaker.cooldown)
+            return None
+        adm = await get_limiter().acquire(model, tier)
+        if not adm.allowed:
+            log.info("ai.deferred", purpose=purpose, reason=adm.reason, retry_after=adm.retry_after)
+            self.breaker.release()  # the trial slot (if any) is not used
+            refuse(adm.reason, adm.retry_after)
             return None
         try:
             response = await self._client.beta.messages.create(
@@ -182,6 +183,12 @@ class LLMClient:
             self.breaker.failure()
             refuse("connection", 60.0)
             return None
+        except BaseException:
+            # Cancelled (the job's own timeout is shorter than the client's retries) or an unexpected error: the call
+            # ended without a verdict. A half-open trial slot taken by it goes back, or the breaker would refuse
+            # every later call in this process until it restarts.
+            self.breaker.release()
+            raise
         self.breaker.success()
         usage = response.usage
         try:
@@ -221,7 +228,11 @@ class LLMClient:
         tier: Tier = "strong",
         ref: str | None = None,
         raise_on_defer: bool = False,
+        report_unusable: bool = False,
     ) -> dict[str, Any] | None:
+        """``report_unusable``: with ``raise_on_defer``, a refusal or a cut-off answer is raised as ``AiDeferred``
+        ("refused" / "truncated", as Gemini always does) instead of being the same ``None`` as any other bad answer,
+        for callers that must not ask again for a request that keeps failing the same way (the photo analysis)."""
         done = await self._create(
             tier=tier,
             purpose=purpose,
@@ -238,9 +249,13 @@ class LLMClient:
         if response.stop_reason == "refusal":
             category = response.stop_details.category if response.stop_details else None
             log.info("llm.refused", purpose=purpose, category=category)
+            if raise_on_defer and report_unusable:
+                raise AiDeferred("refused", 300.0)
             return None
         if response.stop_reason == "max_tokens":
             log.warning("llm.truncated", purpose=purpose)
+            if raise_on_defer and report_unusable:
+                raise AiDeferred("truncated", 300.0)
             return None
         text = next((b.text for b in response.content if b.type == "text"), None)
         if not text:

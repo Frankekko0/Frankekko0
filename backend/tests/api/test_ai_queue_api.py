@@ -151,3 +151,36 @@ async def test_the_manual_analysis_of_an_unknown_opportunity_is_a_404_and_calls_
     _, fake, _ = model(monkeypatch)
     missing = await auth_client.post(f"{API}/opportunities/{uuid.uuid4()}/ai-analysis")
     assert missing.status_code == 404 and fake.calls == []
+
+
+async def test_the_manual_analysis_is_a_503_when_the_model_gives_no_usable_answer_and_stores_nothing(
+    auth_client: httpx.AsyncClient, make_listing: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    ids = await seed(make_listing)
+    _, fake, _ = model(monkeypatch)
+    fake.answers = [  # the model answered, but not with the JSON asked for
+        SimpleNamespace(
+            stop_reason="end_turn",
+            stop_details=None,
+            model="claude-sonnet-5-5",
+            content=[SimpleNamespace(type="text", text="Non so rispondere in JSON.")],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+    ]
+    before = await row(ids["strong"])
+    unusable = await auth_client.post(f"{API}/opportunities/{ids['strong']}/ai-analysis")
+    assert unusable.status_code == 503 and "risposta utilizzabile" in unusable.json()["error"]["message"]
+    after = await row(ids["strong"])
+    # Not the rules' text in the model's place, and nothing of the verdict touched.
+    assert (after.ai_provider, after.ai_analysis, after.ai_for_analysis_id) == (
+        "rules",
+        before.ai_analysis,
+        None,
+    )
+    assert (after.verdict, after.decision, after.ai_analyzed_at) == (
+        before.verdict,
+        before.decision,
+        before.ai_analyzed_at,
+    )

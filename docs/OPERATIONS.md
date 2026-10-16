@@ -80,3 +80,12 @@ Un job che fallisce ritenta con attesa crescente; ogni analisi è tracciata in `
 - Non inventa prezzi, soglie fiscali o aliquote: ciò che non è misurato è scritto come assunzione o «non verificato».
 - Non cambia da solo i propri parametri: ricalibrazione e sfidanti passano da una regola di promozione con dati tenuti da parte.
 - Non conserva segreti nel repository: tutto da variabili d'ambiente.
+
+## 9. Ruolo ampio del modello (Gemini gratuito)
+
+- **Coda e quota**: `GET /api/v1/ai/usage` → `limits` (richieste rimaste al minuto e al giorno, pausa attiva) e `analyst_queue` (in coda, pronti, rimandati, esauriti, ultimi errori). Un annuncio «esaurito» smette di essere ritentato finché la sua analisi non cambia.
+- **Se la quota finisce**: nessun errore, l'analisi riprende al reset (mezzanotte del Pacifico). Se vedi `cooldown` in `ai.deferred`, Google ha risposto 429 e il modello è in pausa per tutti i processi.
+- **Foto** (`AI_VISION_ALWAYS=true`): recupero di quelle rimaste indietro con `python -m app.tools.vision_backfill --limit 100`; log `vision.retry_later`, `vision.gave_up`, `vision.images_shrunk`.
+- **Agente**: `agent_propose_task` ai minuti 10 e 40, solo con `AGENT_PROPOSE_ENABLED=true`; le proposte (con etichetta «Agent») compaiono in *Autonomy*. Si fermano con il kill switch o la sospensione come il ciclo.
+- **Trattativa**: pulsante «Write with AI» nella scheda dell'affare (serve `NEGOTIATION_AI_ENABLED=true`); non invia nulla.
+- **Migrazione 0023** (colonne `ai_*`): è ripetibile; se una versione precedente era già applicata, `alembic upgrade head` aggiunge le colonne mancanti.

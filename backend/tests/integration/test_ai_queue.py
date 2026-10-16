@@ -962,3 +962,23 @@ async def test_the_pace_never_grants_more_than_the_cap_whatever_the_callers(
     await queue_mod.give_back_pace(key, 2)
     assert (await queue_mod.take_pace("m", 5, 5))[0] == 2
     assert (await queue_mod.take_pace("m", 0, 5))[0] == 0 and (await queue_mod.take_pace("m", 3, 0))[0] == 0
+
+
+async def test_the_pace_counter_always_expires_and_never_goes_below_zero(
+    clean_db: None, env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.core.redis import get_redis
+
+    env.configure()
+    monkeypatch.setattr(queue_mod, "_pace_minute", lambda: 3001)
+    redis = get_redis()
+    granted, key = await queue_mod.take_pace("m", 3, 5)
+    assert granted == 3
+    assert 0 < await redis.ttl(key) <= queue_mod.PACE_TTL  # a counter that never expires would stay for ever
+
+    await queue_mod.give_back_pace(key, 10)  # more than was ever taken
+    assert int(await redis.get(key) or 0) == 0
+    await redis.delete(key)  # the minute is over and the key gone, then a late give-back arrives
+    await queue_mod.give_back_pace(key, 2)
+    assert await redis.exists(key) == 0  # no negative counter without an expiry left behind
+    assert (await queue_mod.take_pace("m", 9, 5))[0] == 5  # and the cap is still the cap

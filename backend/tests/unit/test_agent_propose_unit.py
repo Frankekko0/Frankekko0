@@ -139,6 +139,43 @@ def test_every_tool_schema_of_the_proposing_agent_is_flat_enough_for_gemini() ->
         assert d["description"]
 
 
+def _empty_objects(node: Any, path: str = "") -> list[str]:
+    """Every OBJECT in a schema that declares no properties (Gemini refuses a declaration that has one)."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        if str(node.get("type", "")).lower() == "object" and not node.get("properties"):
+            found.append(path or "<root>")
+        for key, value in node.items():
+            found += _empty_objects(value, f"{path}/{key}")
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            found += _empty_objects(value, f"{path}[{i}]")
+    return found
+
+
+@pytest.mark.parametrize(
+    "registry,without_inputs",
+    [(default_registry, "budget_status"), (proposal_registry, "autonomy_status")],
+    ids=["review", "proposing"],
+)
+def test_no_tool_declaration_sent_to_gemini_has_an_object_without_properties(
+    registry: Any, without_inputs: str
+) -> None:
+    """A tool without inputs (``autonomy_status``, ``budget_status``) is declared without ``parameters`` at all: an
+    OBJECT with empty properties is rejected by the API, the whole tool list goes out on every turn, and a rejected
+    declaration would stop every run (and be retried every half hour) before it proposed anything."""
+    from app.ai.gemini import _declaration
+
+    defs = registry().definitions()
+    no_inputs = {d["name"] for d in defs if not d["input_schema"].get("properties")}
+    assert without_inputs in no_inputs  # the registry really has a tool without inputs
+    for d in defs:
+        declared = _declaration(d)
+        assert declared["name"] == d["name"] and declared["description"]
+        assert _empty_objects(declared.get("parameters")) == [], d["name"]
+        assert ("parameters" not in declared) == (d["name"] in no_inputs), d["name"]
+
+
 def test_every_description_says_nothing_happens_on_vinted() -> None:
     reg = proposal_registry()
     for name in ("propose_purchase", "propose_reprice"):

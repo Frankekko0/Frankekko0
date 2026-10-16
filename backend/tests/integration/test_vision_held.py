@@ -14,7 +14,7 @@ from sqlalchemy import update
 from app.ai import limiter as limiter_mod
 from app.ai import llm as llm_mod
 from app.ai import service
-from app.ai.budget import AiBudget
+from app.ai.budget import AiBudget, BudgetCheck
 from app.ai.limiter import Admission
 from app.ai.llm import AiDeferred, LLMClient
 from app.db.models import Listing, ListingImage
@@ -26,7 +26,14 @@ from app.workers import tasks
 from app.workers.vision_queue import listings_awaiting_vision, vision_done
 from tests.integration.test_ai_budget import FakeAnthropic, text_response
 from tests.integration.test_ai_budget import settings as ai_settings
-from tests.integration.test_vision_always import ctx_of, listing_with_photos, model_with, run, stored_vision
+from tests.integration.test_vision_always import (
+    REFUSED,
+    ctx_of,
+    listing_with_photos,
+    model_with,
+    run,
+    stored_vision,
+)
 from tests.unit.test_vision_parse import ANSWER
 
 
@@ -165,6 +172,26 @@ async def test_a_run_held_by_an_open_breaker_or_the_spend_budget_costs_nothing_e
     out = await run(listing_id)
     assert isinstance(out, VisionDeferred) and out.reason == "breaker_open" and not out.asked
     assert work.measured == [] and len(fake.calls) == 1
+
+
+async def test_a_run_held_by_the_spend_budget_measures_once_and_then_costs_nothing(
+    clean_db: None, make_listing: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any, work: SimpleNamespace
+) -> None:
+    listing_id = await listing_with_photos(make_listing, monkeypatch, tmp_path)
+    fake = FakeAnthropic(text_response(ANSWER))
+    llm = model_with(monkeypatch, fake)
+
+    class Spent:
+        async def check(self, purpose: str, now: Any = None) -> BudgetCheck:
+            return BudgetCheck(False, "tetto giornaliero di spesa AI raggiunto")
+
+    llm._budget = Spent()  # type: ignore[assignment]
+    first = await run(listing_id)
+    assert isinstance(first, VisionDeferred) and first.reason == "budget" and not first.asked
+    for _ in range(3):
+        again = await run(listing_id)
+        assert isinstance(again, VisionDeferred) and again.reason == "budget" and again.store is False
+    assert work.measured == [3] and work.prepared == [] and fake.calls == []
 
 
 async def test_the_real_local_analysis_runs_once_for_a_gallery_held_back_many_times(
@@ -315,3 +342,76 @@ async def test_the_refusal_is_not_remembered_as_an_answer(
     await capture_enqueue(monkeypatch)
     await tasks.vision_task(ctx_of(1)[0], str(listing_id))
     assert (await VisionCacheStore().stats())["entries"] == 0
+
+
+async def test_the_giving_up_is_written_before_the_analysis_that_follows_can_read_the_listing(
+    clean_db: None, make_listing: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any, work: SimpleNamespace
+) -> None:
+    """The measures changed the listing, so ``analyze_listing`` is queued; if that job read the listing before the
+    reason was written it would not see the give-up and could queue the photo check again."""
+    listing_id = await listing_with_photos(make_listing, monkeypatch, tmp_path)
+    use(monkeypatch, Scripted("refused"))
+    seen: list[Any] = []
+
+    async def fake_enqueue(function: str, *args: Any, **kw: Any) -> bool:
+        seen.append((function, (await stored_vision(listing_id)).get("model_gave_up")))
+        return True
+
+    monkeypatch.setattr(tasks, "enqueue", fake_enqueue)
+    await tasks.vision_task(ctx_of(1)[0], str(listing_id))
+    assert seen == [("analyze_listing", "refused")]
+
+
+# ------------------------------------------------------------------ the same on the default provider (Anthropic)
+def answer_stopped(stop_reason: str) -> Any:
+    done = text_response(ANSWER, tokens=(6000, 1500))
+    done.stop_reason = stop_reason
+    return done
+
+
+async def test_the_client_names_a_refusal_or_a_cut_off_answer_only_when_asked_to(clean_db: None) -> None:
+    """Other callers (the negotiation writer, the deal analyst) keep the plain ``None`` they were built for."""
+    schema = {"type": "object", "properties": {}}
+    for stop, reason in (("refusal", "refused"), ("max_tokens", "truncated")):
+        done = answer_stopped(stop)
+        done.stop_details = SimpleNamespace(category="x")
+        llm = LLMClient(ai_settings(), budget=AiBudget(ai_settings()))
+        llm._client = FakeAnthropic(done)  # type: ignore[assignment]
+        args: dict[str, Any] = {"system": "s", "content": [], "schema": schema}
+        assert await llm.structured(**args) is None
+        assert await llm.structured(**args, raise_on_defer=True) is None
+        with pytest.raises(AiDeferred) as e:
+            await llm.structured(**args, raise_on_defer=True, report_unusable=True)
+        assert e.value.reason == reason and e.value.retry_after > 0
+        assert await llm.structured(**args, report_unusable=True) is None  # without raise_on_defer: as ever
+
+
+async def test_an_anthropic_refusal_is_given_up_on_at_once_like_a_gemini_one(
+    clean_db: None, make_listing: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any, work: SimpleNamespace
+) -> None:
+    listing_id = await listing_with_photos(make_listing, monkeypatch, tmp_path)
+    fake = FakeAnthropic(REFUSED)
+    model_with(monkeypatch, fake)
+    await capture_enqueue(monkeypatch)
+    ctx, decr = ctx_of(1)
+
+    await tasks.vision_task(ctx, str(listing_id))  # no Retry: not five requests for a block that comes back
+    assert len(fake.calls) == 1 and decr == []
+    stored = await stored_vision(listing_id)
+    assert stored["analyzer"] == "heuristic" and stored["model_gave_up"] == "refused"
+    assert GAVE_UP_NOTES["refused"] in stored["notes"]
+
+
+async def test_an_anthropic_cut_off_answer_is_asked_once_more_and_then_left(
+    clean_db: None, make_listing: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any, work: SimpleNamespace
+) -> None:
+    listing_id = await listing_with_photos(make_listing, monkeypatch, tmp_path)
+    fake = FakeAnthropic(answer_stopped("max_tokens"))
+    model_with(monkeypatch, fake)
+    await capture_enqueue(monkeypatch)
+
+    with pytest.raises(Retry):
+        await tasks.vision_task(ctx_of(1)[0], str(listing_id))
+    await tasks.vision_task(ctx_of(2)[0], str(listing_id))
+    assert len(fake.calls) == 2
+    assert (await stored_vision(listing_id))["model_gave_up"] == "truncated"

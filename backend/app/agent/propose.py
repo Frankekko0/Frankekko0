@@ -8,6 +8,11 @@ verifier, audit) and ends as a blocked record, a dry run or a task for the user.
 or changed on Vinted, and the model can only lower things: a verdict the verifier does not confirm comes down, a
 price only goes down, to the step the selling plan says is due.
 
+Every proposal is its own short transaction, serialised with the cycle for the same user by a lock (see
+``app.agent.tools._proposal_txn``), and the run holds no transaction while it waits for the model: what it proposed
+is committed, visible to the cycle and counted in the budget before the next turn. The model's second opinion in
+the verifier is the cycle's: a run does not spend the requests kept in reserve on it.
+
 There is no rules fallback: without a model, without request quota or with an answer that never arrives, the run
 simply proposes nothing (the cycle's rules remain the baseline). A run is skipped when nothing changed since the
 last one for the same user (incremental), and it never starts when the provider has no request quota to spare.
@@ -178,8 +183,10 @@ class KeepsReserve:
     spent its share stops (``model_unavailable``) instead of eating the requests kept for photo checks and for the
     user's own clicks. What it proposed up to then stays recorded."""
 
-    def __init__(self, inner: AgentModel, llm: Any | None, settings: Settings) -> None:
-        self.inner, self.llm, self.settings = inner, llm, settings
+    def __init__(
+        self, inner: AgentModel, llm: Any | None, settings: Settings, session: AsyncSession | None = None
+    ) -> None:
+        self.inner, self.llm, self.settings, self.session = inner, llm, settings, session
         self.provider = inner.provider
         self.tier = getattr(inner, "tier", "cheap")
 
@@ -194,7 +201,23 @@ class KeepsReserve:
         if not room:
             log.info("agent.propose_paused", reason=why)
             return None
+        if self.session is not None:
+            # The provider may take up to its timeout and retries: no transaction (and so no lock, no pooled
+            # connection) is held meanwhile. What the run wrote so far is committed here, the proposals already were.
+            await self.session.commit()
         return await self.inner.turn(system=system, messages=messages, tools=tools, ref=ref)
+
+
+async def _close_failed_run(session: AsyncSession, run_id: uuid.UUID, now: datetime) -> None:
+    """Best effort after an unexpected error: roll back the half-done step and mark the committed run as stopped."""
+    try:
+        await session.rollback()
+        row = await session.get(AgentRun, run_id, populate_existing=True)
+        if row is not None:
+            row.status, row.stop_reason, row.finished_at = "stopped", "error", now
+            await session.commit()
+    except Exception:
+        log.exception("agent.propose_close_failed", run_id=str(run_id))
 
 
 async def propose_for_user(
@@ -258,7 +281,7 @@ async def propose_for_user(
         steps=[],
     )
     session.add(run)
-    await session.flush()
+    await session.commit()  # the run is on record from the start; what it proposes is committed as it goes
 
     econ = economics_for(await session.get(UserPreferences, user_id))
     ctx = ToolContext(
@@ -269,21 +292,25 @@ async def propose_for_user(
         user_id=user_id,
         inventory_scope=frozenset(str(p.id) for p, _ in listed),
         proposals_remaining=settings.agent_max_proposals_per_run,
-        llm=llm if llm is not None and getattr(llm, "enabled", False) else None,
         now=now,
         costs=econ.costs,
         min_profit=float(econ.targets.min_profit),
     )
-    outcome: AgentOutcome = await run_agent(
-        system=SYSTEM_PROMPT,
-        task=task_text(len(opps), len(listed), settings.agent_max_proposals_per_run),
-        model=KeepsReserve(model, llm, settings),
-        registry=registry or proposal_registry(),
-        ctx=ctx,
-        allowed_tools=TOOLS_PROPOSE,
-        max_steps=settings.agent_max_steps,
-        max_cost=settings.agent_max_cost_usd,
-    )
+    try:
+        outcome: AgentOutcome = await run_agent(
+            system=SYSTEM_PROMPT,
+            task=task_text(len(opps), len(listed), settings.agent_max_proposals_per_run),
+            model=KeepsReserve(model, llm, settings, session),
+            registry=registry or proposal_registry(),
+            ctx=ctx,
+            allowed_tools=TOOLS_PROPOSE,
+            max_steps=settings.agent_max_steps,
+            max_cost=settings.agent_max_cost_usd,
+        )
+    except Exception:
+        # What the run proposed stays committed; the run itself is closed as stopped, not left "running".
+        await _close_failed_run(session, run.id, now)
+        raise
 
     written = (
         (

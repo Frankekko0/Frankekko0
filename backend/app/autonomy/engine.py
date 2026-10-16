@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.events import log_event
@@ -33,6 +34,9 @@ from app.selling.stages import IN_STOCK
 
 log = get_logger(__name__)
 CANDIDATES = 10
+PROPOSAL_WINDOW = timedelta(
+    days=7
+)  # a dry-run proposal stays on the books this long (as the duplicate check)
 COUNTED = ("dry_run", "pending_user", "done")  # actions that use up budget, messages and slots
 
 
@@ -146,6 +150,58 @@ def switches_of(row: AutonomySettings, now: datetime) -> policy.Switches:
     return policy.Switches(row.enabled, row.killed, row.suspended_at is not None, row.dry_run_until, now)
 
 
+class AutonomyStopped(Exception):
+    """Autonomy cannot go on for this user right now: ``state`` is killed | suspended | disabled, and the message
+    (Italian, shown to the model and the user) says why. Nothing is proposed or written once it is raised."""
+
+    def __init__(self, state: str, message: str) -> None:
+        super().__init__(message)
+        self.state = state
+
+
+async def read_switches(
+    session: AsyncSession, user_id: uuid.UUID, now: datetime
+) -> tuple[AutonomySettings, policy.Switches]:
+    """The user's settings as they are in the database now, not as the session remembers them: the kill switch is
+    pressed from another request, so every long wait (a model's answer, a lock) is followed by this read. Raises
+    ``AutonomyStopped`` when the kill switch is on, autonomy is suspended or it is switched off."""
+    row = await session.get(AutonomySettings, user_id, populate_existing=True)
+    if row is not None and row.killed:
+        raise AutonomyStopped("killed", "interruttore d'emergenza attivo: nessuna proposta")
+    if row is not None and row.suspended_at is not None:
+        raise AutonomyStopped("suspended", "autonomia sospesa per un'anomalia: nessuna proposta")
+    if row is None or not row.enabled:
+        raise AutonomyStopped("disabled", "autonomia non attiva: nessuna proposta")
+    return row, switches_of(row, now)
+
+
+async def lock_user(session: AsyncSession, user_id: uuid.UUID) -> None:
+    """Serialise everything that proposes for one user, the cycle and the agent alike: a Postgres advisory lock held
+    until the session's transaction ends. Whoever comes second waits, then reads what the first one committed (the
+    budget it used, the purchases it offered), so the limits and the 7-day de-duplication cannot be passed by two
+    runs that overlap. The kill switch does not take it: pressing it never waits for anything."""
+    digest = hashlib.sha256(b"autonomy-user:" + user_id.bytes).digest()
+    key = int.from_bytes(digest[:8], "big", signed=True)
+    await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+
+
+async def fresh_opportunity(
+    session: AsyncSession, opportunity_id: uuid.UUID
+) -> tuple[Opportunity, Listing] | None:
+    """The opportunity and its listing as the database has them now (the objects the session already holds are
+    refreshed in place), so a re-analysis or a listing that went away since they were loaded is not overwritten
+    or ignored. ``None`` when the opportunity is gone."""
+    row = (
+        await session.execute(
+            select(Opportunity, Listing)
+            .join(Listing, Listing.id == Opportunity.listing_id)
+            .where(Opportunity.id == opportunity_id)
+            .execution_options(populate_existing=True)
+        )
+    ).first()
+    return None if row is None else (row[0], row[1])
+
+
 # ------------------------------------------------------------------ what has been used
 async def usage_for(session: AsyncSession, user_id: uuid.UUID, now: datetime) -> policy.Usage:
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -211,7 +267,7 @@ async def usage_for(session: AsyncSession, user_id: uuid.UUID, now: datetime) ->
             )
         )
     ).scalar_one()
-    holdings = tuple(
+    stocked = tuple(
         Holding(
             float(p.total_cost),
             (p.brand_name or "").lower() or None,
@@ -221,12 +277,42 @@ async def usage_for(session: AsyncSession, user_id: uuid.UUID, now: datetime) ->
         )
         for p, _ in rows
     )
+    # Purchases already proposed and not yet made count against the concentration and item limits too, whoever
+    # proposed them (the cycle or the agent): a dry run says what would have happened if the user had bought.
+    open_buys = (
+        await session.execute(
+            select(AutonomyAction.status, Opportunity, Listing)
+            .join(Opportunity, Opportunity.id == AutonomyAction.opportunity_id)
+            .join(Listing, Listing.id == Opportunity.listing_id)
+            .where(
+                AutonomyAction.user_id == user_id,
+                AutonomyAction.kind == "buy",
+                or_(
+                    AutonomyAction.status == "pending_user",
+                    and_(
+                        AutonomyAction.status == "dry_run", AutonomyAction.created_at >= now - PROPOSAL_WINDOW
+                    ),
+                ),
+            )
+        )
+    ).all()
+    proposed = tuple(
+        Holding(
+            float(o.total_acquisition_cost),
+            facts_of(o, li, True, True).brand,
+            facts_of(o, li, True, True).category,
+            li.size_normalized,
+            price_band(float(o.listing_price)),
+        )
+        for _, o, li in open_buys
+    )
+    dry_run_buys = sum(1 for st, _, _ in open_buys if st == "dry_run")
     return policy.Usage(
         await spent(day_start),
         await spent(week_start),
-        len(rows) + pending_buys,
+        len(rows) + pending_buys + dry_run_buys,
         messages,
-        holdings,
+        (*stocked, *proposed),
         reprices,
     )
 
@@ -361,10 +447,20 @@ async def propose_buy(
 
     The cycle and the agent both come through here, so a proposal meets the same checks whoever made it. Nothing
     is bought: the result is a blocked record, a dry run, or a task for the user. Returns the record and the usage
-    updated for what it took (the caller passes that on to the next proposal)."""
+    updated for what it took (the caller passes that on to the next proposal).
+
+    The second opinion is the one wait that can take long (a model, up to its timeout and retries). After it the
+    switches are read again, so a kill switch pressed meanwhile stops this proposal before anything is decided or
+    written (``AutonomyStopped``), and the opportunity is read again, so a re-analysis made meanwhile is checked and
+    never overwritten with the copy loaded before the wait."""
+    second_opinion = None
+    if llm is not None:
+        second_opinion = await verifier.second_opinion(llm, opp, li)
+        _, sw = await read_switches(session, user_id, now)
+        await fresh_opportunity(session, opp.id)
     v = verifier.verify(opp, li, now)
     if llm is not None:
-        v.second_opinion = await verifier.second_opinion(llm, opp, li)
+        v.second_opinion = second_opinion
         if v.second_opinion and not v.second_opinion["agrees"]:
             v.issues.append(
                 verifier.Issue(
@@ -461,7 +557,12 @@ async def run_cycle(
     session: AsyncSession, user_id: uuid.UUID, *, now: datetime | None = None, llm: Any | None = None
 ) -> CycleResult:
     now = now or datetime.now(UTC)
-    row = await get_settings_row(session, user_id)
+    # One proposing run per user at a time (the agent's proposals take the same lock): what the other one committed
+    # is read below, after the wait, never what the session saw before it.
+    await lock_user(session, user_id)
+    row = await session.get(AutonomySettings, user_id, populate_existing=True)
+    if row is None:
+        row = await get_settings_row(session, user_id)
     if row.killed:
         return CycleResult("killed")
     if row.suspended_at is not None:
@@ -502,10 +603,14 @@ async def run_cycle(
         if opp.id in already:
             continue
         taken += 1
+        try:
+            act, usage = await propose_buy(
+                session, user_id, opp, li, limits=limits, usage=usage, sw=sw, now=now, llm=llm
+            )
+        except AutonomyStopped as exc:  # the kill switch (or a suspension) came while a model was answering
+            result.state = exc.state
+            break
         result.proposed += 1
-        act, usage = await propose_buy(
-            session, user_id, opp, li, limits=limits, usage=usage, sw=sw, now=now, llm=llm
-        )
         result.actions.append(act.id)
         if act.status == "blocked":
             result.blocked += 1

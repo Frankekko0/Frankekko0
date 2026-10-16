@@ -424,23 +424,32 @@ class FakeLLM:
         return self.answer
 
 
-async def test_the_second_opinion_of_the_model_counts_for_agent_proposals_too(
+async def test_agent_proposals_do_not_spend_a_request_on_the_second_opinion_but_the_verifier_still_applies(
     auth_client: httpx.AsyncClient, make_listing: Any
 ) -> None:
+    """The second opinion is one more provider request per purchase, outside the reserves kept for the photo checks
+    and the user's clicks: the cycle makes it, the agent's proposals do not. The deterministic verifier is unchanged."""
     ids = await seed(make_listing)
     uid = await user_id(auth_client)
+    await tamper(
+        "UPDATE opportunities SET expected_profit = expected_profit + 40 WHERE id = :i", i=ids["buy"]
+    )
     await enable(auth_client)
-    llm = FakeLLM({"agrees": False, "issues": ["rivendita ottimistica"]})
+    llm = FakeLLM({"agrees": False, "issues": ["rivendita ottimistica"]})  # would block, if it were asked
     model = ScriptedModel(
         [
             call("propose_purchase", opportunity_id=ids["strong"], reason="Buono"),
+            call("propose_purchase", opportunity_id=ids["buy"], reason="Sembra un affare"),
             call("finish_proposals", summary="Ok."),
         ]
     )
     assert await run_propose(uid, model, llm=llm) is not None
-    (row,) = await agent_actions(uid)
-    assert row.status == "blocked" and any(i["code"] == "second_opinion" for i in row.verifier["issues"])
-    assert llm.calls and llm.calls[0]["purpose"] == "verifier" and llm.calls[0]["tier"] == "cheap"
+    assert llm.calls == []  # not one request went to the provider for a second opinion
+    rows = {str(a.opportunity_id): a for a in await agent_actions(uid)}
+    strong = rows[ids["strong"]]
+    assert strong.status == "dry_run" and strong.verifier["second_opinion"] is None
+    bad = rows[ids["buy"]]  # the recomputation still catches a wrong number
+    assert bad.status == "blocked" and any(i["code"] == "profit_mismatch" for i in bad.verifier["issues"])
 
 
 # ------------------------------------------------------------------ injection
@@ -1085,3 +1094,31 @@ async def test_the_purchase_plan_refuses_when_the_limits_leave_nothing(
     async with session_scope() as s:  # no cap per item set: nothing is bought
         unset = await reg.call(ctx_for(s, uid, ids), "plan_purchases", {"opportunity_ids": [ids["strong"]]})
     assert not unset.ok and "non si compra" in (unset.error or "")
+
+
+async def test_limits_on_items_and_concentration_hold_across_the_proposals_of_one_run(
+    auth_client: httpx.AsyncClient, make_listing: Any
+) -> None:
+    """Proposals already made (dry run or waiting for the user) count against max_items and the concentration limits
+    when the next proposal of the same run is judged: the agent must not slip past what the cycle would stop."""
+    from tests.integration.test_autonomy_cycle import LATER, enable, user_id
+
+    ids = await seed(make_listing)
+    uid = await user_id(auth_client)
+    await enable(auth_client, max_items=1)  # dry run
+    model = ScriptedModel(
+        [
+            call("propose_purchase", opportunity_id=ids["strong"], reason="primo acquisto"),
+            call("propose_purchase", opportunity_id=ids["buy"], reason="secondo acquisto"),
+            call("finish_proposals", summary="finito"),
+        ]
+    )
+    await run_propose(uid, model)
+    rows = await agent_actions(uid)
+    by_status = sorted(a.status for a in rows)
+    assert by_status.count("dry_run") == 1 and by_status.count("blocked") == 1
+    blocked = next(a for a in rows if a.status == "blocked")
+    assert any("item" in r["code"] or "max" in r["code"] for r in blocked.reasons)
+    async with session_scope() as s:
+        usage = await engine.usage_for(s, uid, LATER)
+    assert usage.owned_items == 1 and len(usage.holdings) == 1  # the dry-run proposal is on the books

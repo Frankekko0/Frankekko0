@@ -348,12 +348,19 @@ async def vision_task(ctx: dict[str, Any], listing_id: str) -> None:
         except VisionDeferred as exc:
             # The model did not read the photos. What was measured is stored (and committed below).
             changed, deferred = exc.changed, exc
+    retry: Retry | None = None
+    if deferred is not None:
+        try:
+            gave_up = await retry_vision(ctx, listing_id, deferred)  # raises Retry unless it gave up
+        except Retry as exc:
+            retry, gave_up = exc, False
+        if gave_up:
+            # A blocked gallery is not asked again as it is: say why, BEFORE the analysis below reads the listing.
+            await mark_model_gave_up(listing_id, deferred.reason)
     if changed:
         await enqueue("analyze_listing", listing_id, True, job_id=f"analyze:{listing_id}")
-    if deferred is not None:
-        gave_up = await retry_vision(ctx, listing_id, deferred)  # raises Retry unless it gave up
-        if gave_up:  # a blocked gallery is not asked again as it is: say why
-            await mark_model_gave_up(listing_id, deferred.reason)
+    if retry is not None:
+        raise retry
 
 
 async def ai_analyze_task(ctx: dict[str, Any], opportunity_id: str) -> str:
@@ -454,7 +461,9 @@ async def agent_propose_task(ctx: dict[str, Any]) -> dict[str, int]:
     """For every user with autonomy on, the agent prepares a few purchase and markdown proposals. It never
     executes: they land as blocked records, dry runs or tasks for the user, through the cycle's own policy. Off
     unless AGENT_PROPOSE_ENABLED; a run needs model quota to spare and is skipped when nothing changed. One
-    transaction per user. Scheduled just before the autonomy cycle, whose rules then fill what the limits leave."""
+    session per user, but no long transaction: every proposal is committed on its own, under the user's lock that the
+    cycle takes too, and nothing is held open while the model answers. Scheduled just before the autonomy cycle,
+    whose rules then fill what the limits leave."""
     from app.agent.propose import propose_for_user
     from app.db.models import AutonomySettings
 

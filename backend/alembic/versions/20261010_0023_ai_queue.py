@@ -23,9 +23,6 @@ Create Date: 2026-10-10
 
 from collections.abc import Sequence
 
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
-
 from alembic import op
 
 revision: str = "0023"
@@ -35,31 +32,26 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("opportunities", sa.Column("ai_for_analysis_id", postgresql.UUID(as_uuid=True)))
-    op.add_column("opportunities", sa.Column("ai_reviewed_flip", sa.SmallInteger()))
-    op.add_column(
-        "opportunities", sa.Column("ai_attempts", sa.SmallInteger(), nullable=False, server_default="0")
-    )
-    op.add_column("opportunities", sa.Column("ai_next_attempt_at", sa.DateTime(timezone=True)))
-    op.add_column("opportunities", sa.Column("ai_last_error", sa.String(48)))
+    # Idempotent on purpose: an earlier draft of this revision (without ``ai_reviewed_flip``) may already have been
+    # applied to a database; adding what is missing is then enough, and the backfill below is harmless to repeat.
+    op.execute("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS ai_for_analysis_id UUID")
+    op.execute("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS ai_reviewed_flip SMALLINT")
+    op.execute("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS ai_attempts SMALLINT NOT NULL DEFAULT 0")
+    op.execute("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS ai_next_attempt_at TIMESTAMPTZ")
+    op.execute("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS ai_last_error VARCHAR(48)")
     # Until now ``ai_provider = 'claude'`` meant "reviewed by the model after the last analysis" (any new
     # analysis put it back to 'rules'), so those rows are reviewed for their current analysis.
     op.execute(
         "UPDATE opportunities SET ai_for_analysis_id = analysis_id, ai_reviewed_flip = flip_score"
-        " WHERE ai_provider IN ('claude', 'gemini') AND analysis_id IS NOT NULL"
+        " WHERE ai_provider IN ('claude', 'gemini') AND analysis_id IS NOT NULL AND ai_reviewed_flip IS NULL"
     )
-    op.create_index(
-        "ix_opportunities_ai_queue",
-        "opportunities",
-        ["flip_score"],
-        postgresql_where=sa.text("is_active AND ai_for_analysis_id IS DISTINCT FROM analysis_id"),
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_opportunities_ai_queue ON opportunities (flip_score)"
+        " WHERE is_active AND ai_for_analysis_id IS DISTINCT FROM analysis_id"
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_opportunities_ai_queue", table_name="opportunities")
-    op.drop_column("opportunities", "ai_last_error")
-    op.drop_column("opportunities", "ai_next_attempt_at")
-    op.drop_column("opportunities", "ai_attempts")
-    op.drop_column("opportunities", "ai_reviewed_flip")
-    op.drop_column("opportunities", "ai_for_analysis_id")
+    op.execute("DROP INDEX IF EXISTS ix_opportunities_ai_queue")
+    for col in ("ai_last_error", "ai_next_attempt_at", "ai_attempts", "ai_reviewed_flip", "ai_for_analysis_id"):
+        op.execute(f"ALTER TABLE opportunities DROP COLUMN IF EXISTS {col}")

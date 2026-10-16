@@ -50,9 +50,13 @@ class AiRateLimiter:
         up the quota. It is a hint, not a reservation (another process may take the slot before the real call):
         work that is only worth doing when a call follows asks first, and the call still goes through ``acquire``."""
         rpm, rpd = self.settings.ai_limits(tier)
-        if rpm <= 0 and rpd <= 0:
-            return Admission(True)
         redis = get_redis()
+        if rpm <= 0 and rpd <= 0:  # no caps of our own, but a provider 429 still puts the model on hold
+            try:
+                cool = await redis.ttl(f"ff:ai:cooldown:{model}")
+            except RedisError:
+                return Admission(True)
+            return Admission(False, float(cool), "cooldown") if cool and cool > 0 else Admission(True)
         try:
             cool = await redis.ttl(f"ff:ai:cooldown:{model}")
             if cool and cool > 0:
@@ -75,9 +79,13 @@ class AiRateLimiter:
 
     async def acquire(self, model: str, tier: str) -> Admission:
         rpm, rpd = self.settings.ai_limits(tier)
-        if rpm <= 0 and rpd <= 0:
-            return Admission(True)
         redis = get_redis()
+        if rpm <= 0 and rpd <= 0:  # no caps of our own, but a provider 429 still puts the model on hold
+            try:
+                cool = await redis.ttl(f"ff:ai:cooldown:{model}")
+            except RedisError:
+                return Admission(True)
+            return Admission(False, float(cool), "cooldown") if cool and cool > 0 else Admission(True)
         try:
             cool = await redis.ttl(f"ff:ai:cooldown:{model}")
             if cool and cool > 0:

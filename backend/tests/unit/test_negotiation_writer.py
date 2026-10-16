@@ -111,13 +111,69 @@ async def test_a_model_without_an_answer_or_deferred_leaves_the_templates_and_sa
         ("rpd", "rate_limited"),
         ("cooldown", "rate_limited"),
         ("rate_limited", "rate_limited"),
+        ("budget", "rate_limited"),
+        ("redis", "rate_limited"),
         ("breaker_open", "unavailable"),
         ("api_error", "unavailable"),
+        ("connection", "unavailable"),
+        ("rejected", "unavailable"),
+        ("truncated", "no_answer"),  # the model answered, nothing could be used
+        ("bad_answer", "no_answer"),
+        ("refused", "no_answer"),
+        ("something_new", "unavailable"),
     ):
         got = await writer.write_messages(
             FakeLLM(raises=AiDeferred(reason, 90.0)), plan, facts_for(plan), TITLE
         )
         assert got.fallback == expected and got.retry_after == 90.0 and got.messages == plan.messages, reason
+        assert got.deferred == reason and got.accepted == 0
+
+
+async def test_the_click_is_given_back_only_when_no_request_reached_the_provider() -> None:
+    plan = plan_for()
+    refunded = {"rpm", "rpd", "cooldown", "rate_limited", "budget", "redis", "breaker_open"}
+    charged = {"truncated", "bad_answer", "refused", "rejected", "api_error", "connection", "something_new"}
+    for reason in sorted(refunded | charged):
+        got = await writer.write_messages(
+            FakeLLM(raises=AiDeferred(reason, 30.0)), plan, facts_for(plan), TITLE
+        )
+        assert got.refund is (reason in refunded), reason
+    # a model that answered (usable or not) and a plain empty answer never refund
+    assert (await write(FakeLLM(dict(GOOD)))).refund is False
+    assert (await write(FakeLLM(None))).refund is False
+    assert (await write(FakeLLM({k: "Ultimo prezzo" for k in GOOD}))).refund is False
+
+
+def test_every_reason_a_model_call_can_be_deferred_for_is_classified_as_sent_or_not_sent() -> None:
+    """A new ``AiDeferred`` reason must be put in one of the two sets, or the click would silently be refunded
+    (or kept) by default: read the reasons from the code that raises them."""
+    import re
+    from pathlib import Path
+
+    root = Path(writer.__file__).resolve().parents[1] / "ai"
+    found: set[str] = set()
+    for name in ("llm.py", "gemini.py", "claude_analyst.py", "limiter.py"):
+        src = (root / name).read_text()
+        found |= set(re.findall(r'(?:refuse|AiDeferred)\(\s*"([a-z_]+)"', src))
+        found |= set(re.findall(r'Admission\(False,.*,\s*"([a-z_]+)"\)', src))
+    assert {"rpm", "rpd", "cooldown", "redis", "budget", "breaker_open", "rate_limited"} <= found
+    assert {"truncated", "bad_answer", "refused", "rejected", "api_error", "connection"} <= found
+    assert not writer.NOT_SENT_REASONS & writer.SENT_REASONS
+    assert found <= writer.NOT_SENT_REASONS | writer.SENT_REASONS, (
+        found - writer.NOT_SENT_REASONS - writer.SENT_REASONS
+    )
+
+
+def test_the_prompt_tells_a_first_contact_accept_from_a_reply_and_the_guard_asks_the_same() -> None:
+    s = writer.SYSTEM
+    assert "contesto" in s and "primo_contatto" in s and "risposta" in s
+    reply = facts_for()
+    opens = facts_for(plan_for(price=21.0))
+    seen = {
+        m["contesto"] for f in (reply, opens) for m in f.prompt_view()["messaggi"] if m["tipo"] == "accept"
+    }
+    assert seen == {"risposta", "primo_contatto"}  # the two values the prompt explains
+    assert "scrivimi pure" in s.lower() and "grazie in anticipo" in s.lower()  # the courtesy the guard allows
 
 
 def test_the_fingerprint_changes_with_the_figures_the_model_the_title_and_ignores_the_tone() -> None:

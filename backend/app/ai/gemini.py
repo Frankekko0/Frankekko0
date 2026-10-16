@@ -28,8 +28,9 @@ _DROP = {"additionalProperties", "$schema", "title", "default", "examples"}
 # Gemini 2.5 thinks before it answers and the thinking tokens count against ``maxOutputTokens``. Reading photos
 # needs little of it and a long gallery must not end as MAX_TOKENS, so the thinking of the photo analysis is
 # capped. Set only for the family known to take the field (older models reject it; 1024 is valid for 2.5
-# Flash, Flash-Lite and Pro).
-THINKING_BUDGET = {"vision": 1024}
+# Flash, Flash-Lite and Pro). The negotiation drafts are five short messages in 2048 tokens: 512 is the smallest
+# budget all three accept (Flash-Lite's minimum; Pro cannot switch thinking off, so not 0) and leaves the answer room.
+THINKING_BUDGET = {"vision": 1024, "negotiation": 512}
 _TAKES_THINKING = re.compile(r"^(models/)?gemini-2\.5")
 
 
@@ -138,14 +139,15 @@ class GeminiClient(LLMClient):
             refuse("budget", 3600.0)
             return None
         model = self.model_for(tier)
-        adm = await get_limiter().acquire(model, tier)
-        if not adm.allowed:
-            log.info("ai.deferred", purpose=purpose, reason=adm.reason, retry_after=adm.retry_after)
-            refuse(adm.reason, adm.retry_after)
-            return None
         if not self.breaker.allow():
             log.warning("llm.breaker_open", purpose=purpose)
             refuse("breaker_open", self.breaker.cooldown)
+            return None
+        adm = await get_limiter().acquire(model, tier)
+        if not adm.allowed:
+            log.info("ai.deferred", purpose=purpose, reason=adm.reason, retry_after=adm.retry_after)
+            self.breaker.release()  # the trial slot (if any) is not used
+            refuse(adm.reason, adm.retry_after)
             return None
         try:
             async with httpx.AsyncClient(timeout=self.settings.ai_timeout_seconds) as http:
@@ -181,6 +183,13 @@ class GeminiClient(LLMClient):
             self.breaker.failure()
             refuse("connection", 60.0)
             return None
+        except AiDeferred:
+            raise  # a refusal above: its verdict on the breaker is already given
+        except BaseException:
+            # Cancelled (the job's own timeout) or an unexpected error: no verdict. A half-open trial slot taken by
+            # this call goes back, or the breaker would refuse every later call until the process restarts.
+            self.breaker.release()
+            raise
         self.breaker.success()
         u = data.get("usageMetadata", {})
         tin, tout = int(u.get("promptTokenCount", 0)), int(u.get("candidatesTokenCount", 0))
@@ -210,6 +219,7 @@ class GeminiClient(LLMClient):
         tier: Tier = "strong",
         ref: str | None = None,
         raise_on_defer: bool = False,
+        report_unusable: bool = False,  # Gemini names a refusal / cut-off answer whenever it raises on defer
     ) -> dict[str, Any] | None:
         generation: dict[str, Any] = {
             "maxOutputTokens": max_tokens,

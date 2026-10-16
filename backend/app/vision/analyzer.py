@@ -584,6 +584,7 @@ class ClaudeVisionAnalyzer(ImageAnalyzer):
                 schema=VISION_SCHEMA,
                 purpose="vision",
                 raise_on_defer=True,
+                report_unusable=True,  # a blocked / cut-off gallery is told apart: it is not asked five times
             )
         except AiDeferred as exc:
             raise VisionDeferred(exc.reason, exc.retry_after, base, store=new) from exc

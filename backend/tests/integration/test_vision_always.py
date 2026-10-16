@@ -61,6 +61,16 @@ REFUSED = SimpleNamespace(
 )
 
 
+# The model answered, but not with the JSON asked for: a bad answer, worth asking again.
+NOT_JSON = SimpleNamespace(
+    stop_reason="end_turn",
+    stop_details=None,
+    model="m",
+    content=[SimpleNamespace(type="text", text="non e' un JSON")],
+    usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+)
+
+
 async def listing_with_photos(make_listing: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> uuid.UUID:
     media = get_settings().model_copy(update={"media_dir": str(tmp_path)})
     monkeypatch.setattr(archive, "get_settings", lambda: media)
@@ -113,11 +123,11 @@ async def stored_vision(listing_id: uuid.UUID) -> dict[str, Any]:
     return dict((listing.identification or {}).get("vision") or {})
 
 
-async def test_a_refused_call_is_not_cached_not_done_and_asked_again(
+async def test_a_bad_answer_is_not_cached_not_done_and_asked_again(
     clean_db: None, make_listing: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
     listing_id = await listing_with_photos(make_listing, monkeypatch, tmp_path)
-    fake = FakeAnthropic(REFUSED, text_response(ANSWER, tokens=(6000, 1500)))
+    fake = FakeAnthropic(NOT_JSON, text_response(ANSWER, tokens=(6000, 1500)))
     model_with(monkeypatch, fake)
 
     first = await run(listing_id)

@@ -94,6 +94,20 @@ async def test_the_opening_offer_leaves_room_below_the_maximum(
     )
 
 
+async def test_a_stored_suggestion_above_the_users_maximum_does_not_make_the_offer_equal_the_maximum(
+    auth_client: httpx.AsyncClient, make_listing: Any
+) -> None:
+    opp = await deal(make_listing, price=14)
+    async with session_scope() as s:  # the suggestion was made with looser economics than this user's
+        await s.execute(update(Opportunity).where(Opportunity.id == opp.id).values(suggested_offer=99))
+    n = await get_plan(auth_client, opp)
+    top = n["max_acceptable"]
+    assert 0 < n["ideal_offer"] < top and n["ideal_offer"] == float(int(top * 0.95))
+    assert assistant.eur(n["ideal_offer"]) in n["messages"]["first_offer"]
+    assert assistant.eur(top) not in n["messages"]["first_offer"]
+    assert assistant.eur(top) in n["messages"]["counter_reply"]
+
+
 async def test_the_get_is_templates_only_never_calls_the_model_and_says_whether_it_could(
     auth_client: httpx.AsyncClient, make_listing: Any, monkeypatch: pytest.MonkeyPatch, ai_on: None
 ) -> None:
@@ -345,8 +359,50 @@ async def test_drafts_are_per_user_a_second_account_does_not_see_the_first_ones_
         await register(second, "second@example.com", "Another-pass-2026!")
         theirs = await get_plan(second, opp)
         assert theirs["ai"]["used"] is False and set(sources(theirs).values()) == {"template"}
+        second_id = await user_id(second)
     me = await user_id(auth_client)
-    assert drafts.state_key(me, opp.id) != drafts.state_key(uuid.uuid4(), opp.id)
-    assert (
-        guard.KINDS
-    )  # the stored draft is keyed by user and opportunity, and is checked against these kinds
+    assert drafts.state_key(me, opp.id) != drafts.state_key(second_id, opp.id)
+    # what is stored: one draft, under the first account's key only, with the model's kinds and nothing else
+    async with session_scope() as s:
+        rows = {
+            r.key: r.value
+            for r in (await s.execute(select(SystemState).where(SystemState.key.like("neg:%")))).scalars()
+        }
+    assert set(rows) == {drafts.state_key(me, opp.id)}
+    stored = rows[drafts.state_key(me, opp.id)]
+    assert set(stored["messages"]) == set(mine["messages"]) <= set(guard.KINDS)
+    assert {m["source"] for m in stored["meta"].values()} == {"model"}
+    assert drafts.state_key(second_id, opp.id) not in rows
+
+
+async def test_a_cut_off_gemini_answer_costs_the_click_and_never_replaces_the_stored_draft(
+    auth_client: httpx.AsyncClient, make_listing: Any, monkeypatch: pytest.MonkeyPatch, ai_on: None
+) -> None:
+    from tests.integration.test_negotiation_provider import gemini_client, serve, stop
+
+    opp = await deal(make_listing)
+    s = get_settings()
+    monkeypatch.setattr(s, "negotiation_ai_cooldown_seconds", 60)
+    use(monkeypatch, FakeLLM(dict(GOOD)))
+    good = await post_draft(auth_client, opp, tone="polite")
+    assert good["ai"]["used"] is True
+    await get_redis().flushdb()  # the cooldown of that first click is over
+
+    requests: list[int] = []
+
+    def cut_off(req: httpx.Request) -> httpx.Response:
+        requests.append(1)
+        return stop('{"first_offer": "Ciao', "MAX_TOKENS")
+
+    serve(monkeypatch, cut_off)
+    use(monkeypatch, gemini_client())  # type: ignore[arg-type]
+    first = await post_draft(auth_client, opp, tone="firm", regenerate=True)
+    assert first["ai"]["fallback"] == "no_answer" and len(requests) == 1
+    assert first["messages"] == good["messages"] and set(sources(first).values()) == {"model"}
+    # the request was sent and used the shared budget: the click is not given back, so spamming the button is stopped
+    for _ in range(3):
+        again = await post_draft(auth_client, opp, tone="firm", regenerate=True)
+        assert again["ai"]["fallback"] == "cooldown" and again["ai"]["retry_after"] > 0
+        assert again["messages"] == good["messages"]
+    assert len(requests) == 1
+    assert (await get_plan(auth_client, opp))["messages"] == good["messages"]
