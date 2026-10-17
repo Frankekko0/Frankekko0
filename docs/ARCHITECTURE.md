@@ -15,7 +15,7 @@ Deploy: Docker Compose (`docker-compose*.yml`), Caddy HTTPS, backup in `deploy/`
 `demand` · `profit` calcolatore+offerte · `scoring` (Flip Score a 8 componenti, confidenza, rischio) · `decision` (verdetti, completezza, veti, classifica, allocazione del capitale) · `opportunities` pipeline/engine/query · `tracking` ciclo di vita e "da verificare" · `alerts` ·
 `analytics` portfolio/calibrazione · `intelligence` stimatori (survival, Monte Carlo, Kelly, VOI, calibrazione, deriva, baseline) · `selling` ciclo di vendita e contabilità · `negotiation` · `autonomy` limiti, politica, verificatore, canali · `business` modalità imprenditore · `ai` analista, ricerca NL, client del modello con **budget** e interruttore · `agent` strumenti, ciclo, guardrail, revisione, fasi S0–S5 · `analysis` plugin per categoria, condizioni, etichette, copertura, testo multilingua, matrice di coerenza, dossier · `workers` arq · `api/v1` REST · `tools` CLI. Frontend: `frontend/src/app/(app)/*`.
 
-## Schema DB (44 tabelle, migrazioni `0001`–`0022`, prossima **0023**)
+## Schema DB (44 tabelle, migrazioni `0001`–`0024`, prossima **0025**)
 Annunci: `listings` `listing_snapshots`(osservazioni tipizzate) `listing_price_history`(vista) `listing_images` `sellers`. Catalogo: `brands` `categories` `products`.
 Analisi: `analyses`(immutabili, 5 blocchi) `opportunities`(= analisi corrente) `opportunity_scores` `market_comparables` `market_statistics` `analysis_jobs`.
 Prezzi: `sold_sales`(prezzo richiesto ≠ reale) `model_price_stats` `external_prices` `external_searches`. Utente: `users` `user_preferences` `notification_settings` `push_subscriptions` `api_keys` `watchlists` `favorites` `user_affinities`.

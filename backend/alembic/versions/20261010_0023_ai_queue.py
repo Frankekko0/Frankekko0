@@ -53,5 +53,11 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS ix_opportunities_ai_queue")
-    for col in ("ai_last_error", "ai_next_attempt_at", "ai_attempts", "ai_reviewed_flip", "ai_for_analysis_id"):
+    for col in (
+        "ai_last_error",
+        "ai_next_attempt_at",
+        "ai_attempts",
+        "ai_reviewed_flip",
+        "ai_for_analysis_id",
+    ):
         op.execute(f"ALTER TABLE opportunities DROP COLUMN IF EXISTS {col}")
