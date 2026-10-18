@@ -58,10 +58,14 @@ def test_another_brand_on_the_label_is_still_a_contradiction(declared: str, labe
 
 
 def test_a_brand_read_by_ocr_alone_is_medium_until_a_second_source_agrees() -> None:
-    ocr = LabelReport([LabelState("brand_label", "present_readable", 2, "Adidas", "probable")], brand_text="Adidas")
+    ocr = LabelReport(
+        [LabelState("brand_label", "present_readable", 2, "Adidas", "probable")], brand_text="Adidas"
+    )
     one = check_brand(matrix_input(brand="Nike", labels=ocr))
     assert one.status == "discrepancy" and one.severity == "medium"
-    both = check_brand(matrix_input(brand="Nike", labels=ocr, vision={"logo": {"value": "Adidas", "certainty": "probable"}}))
+    both = check_brand(
+        matrix_input(brand="Nike", labels=ocr, vision={"logo": {"value": "Adidas", "certainty": "probable"}})
+    )
     assert both.severity == "high"  # label and logo agree on the other brand
 
 
@@ -90,14 +94,19 @@ def test_a_garment_word_or_denim_against_a_cotton_label_is_not_a_material_lie(
 
 def test_a_real_material_contradiction_is_kept_but_capped_while_the_label_is_only_probable() -> None:
     probable = LabelReport(
-        [LabelState("composition", "present_readable", 3, "100% polyester", "probable")], composition={"polyester": 100}
+        [LabelState("composition", "present_readable", 3, "100% polyester", "probable")],
+        composition={"polyester": 100},
     )
     claim = check_material(matrix_input(title="Maglione", desc="Maglione 100% cashmere", labels=probable))
     assert claim.status == "discrepancy" and claim.severity == "medium"
     certain = LabelReport(
-        [LabelState("composition", "present_readable", 3, "100% polyester", "certain")], composition={"polyester": 100}
+        [LabelState("composition", "present_readable", 3, "100% polyester", "certain")],
+        composition={"polyester": 100},
     )
-    assert check_material(matrix_input(title="Maglione", desc="Maglione 100% cashmere", labels=certain)).severity == "high"
+    assert (
+        check_material(matrix_input(title="Maglione", desc="Maglione 100% cashmere", labels=certain)).severity
+        == "high"
+    )
 
 
 def test_a_defect_the_description_admits_against_a_better_declared_condition_is_a_discrepancy() -> None:
@@ -108,12 +117,43 @@ def test_a_defect_the_description_admits_against_a_better_declared_condition_is_
     assert c.impact_eur == 6.0  # 12% of 50 EUR: the step between "very good" and "good"
     severe = check_condition(matrix_input(desc="Ha un buco sulla manica"))
     assert severe.impact_eur == 15.0  # 30%: down to "satisfactory"
-    assert any(x.code == "condition" and x.status == "discrepancy" for x in build_matrix(matrix_input(desc="Ha un buco sulla manica")).checks)
+    assert any(
+        x.code == "condition" and x.status == "discrepancy"
+        for x in build_matrix(matrix_input(desc="Ha un buco sulla manica")).checks
+    )
 
 
 def test_no_discrepancy_when_the_text_admits_nothing_or_the_condition_already_says_so() -> None:
     assert check_condition(matrix_input(desc="Nessun difetto, difetti: nessuno")).status == "not_verifiable"
-    assert check_condition(matrix_input(desc="Piccola macchiolina")).status == "not_verifiable"  # minor: no floor
+    assert (
+        check_condition(matrix_input(desc="Piccola macchiolina")).status == "not_verifiable"
+    )  # minor: no floor
     worn = matrix_input(desc="Ha un buco sulla manica")
     worn.declared_condition = "satisfactory"
     assert check_condition(worn).status == "not_verifiable"
+
+
+def test_a_contradiction_between_the_fields_and_the_text_is_worded_in_italian() -> None:
+    from types import SimpleNamespace
+
+    from app.analysis.dossier import ident_contradictions
+
+    facts = SimpleNamespace(
+        identification={
+            "contradictions": [
+                {
+                    "field": "condition",
+                    "declared": "good",
+                    "found": "new_with_tags",
+                    "where": "titolo",
+                    "severity": "medium",
+                },
+                {"field": "size", "declared": "M", "found": "L", "where": "titolo", "severity": "medium"},
+            ]
+        }
+    )
+    details = [c["detail"] for c in ident_contradictions(facts)]  # type: ignore[arg-type]
+    assert details == [
+        "condizione: il campo dice «Buone condizioni», il titolo «Nuovo con cartellino»",
+        "taglia: il campo dice «M», il titolo «L»",
+    ]

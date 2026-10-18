@@ -36,6 +36,7 @@ def _load(name: str) -> Any:
 
 CASES = _load("cases").CASES
 HOLDOUT = _load("holdout").CASES
+FRESH = _load("fresh").CASES
 B = _load("batteries")
 
 from app.identification.engine import IdentificationEngine, ListingText  # noqa: E402
@@ -80,7 +81,7 @@ def section(fn: Any) -> Any:
     def run() -> Any:
         try:
             return fn()
-        except Exception:  # noqa: BLE001 - a section that cannot run on this checkout is reported, not fatal
+        except Exception:
             return {"error": traceback.format_exc(limit=3).strip().splitlines()[-1]}
 
     return run
@@ -160,6 +161,11 @@ def holdout_cases() -> dict[str, Any]:
 
 
 @section
+def fresh_cases() -> dict[str, Any]:
+    return score_cases(FRESH)
+
+
+@section
 def defects() -> dict[str, Any]:
     from app.analysis.text import analyze_text
 
@@ -222,9 +228,17 @@ def suspicious() -> dict[str, Any]:
 def conditions() -> dict[str, Any]:
     from app.ingestion.normalizer import condition_from_text, normalize_condition
 
-    wrong = [(s, exp, normalize_condition(s).value) for s, exp in B.CONDITION_LABELS if normalize_condition(s).value != exp]
+    wrong = [
+        (s, exp, normalize_condition(s).value)
+        for s, exp in B.CONDITION_LABELS
+        if normalize_condition(s).value != exp
+    ]
     unknown_ok = sum(normalize_condition(s).value == "unknown" for s in B.CONDITION_UNKNOWN)
-    text_wrong = [(s, exp, condition_from_text(s).value) for s, exp in B.CONDITION_TEXT if condition_from_text(s).value != exp]
+    text_wrong = [
+        (s, exp, condition_from_text(s).value)
+        for s, exp in B.CONDITION_TEXT
+        if condition_from_text(s).value != exp
+    ]
     return {
         "labels": len(B.CONDITION_LABELS),
         "labels_ok": len(B.CONDITION_LABELS) - len(wrong),
@@ -279,7 +293,11 @@ def colors_materials() -> dict[str, Any]:
         got = ENGINE.identify(ListingText(title="Capo", description=t)).material.value
         if got != e:
             xw.append((t, e, got))
-    out["materials_in_text"] = {"ok": len(B.MATERIAL_TEXTS) - len(xw), "of": len(B.MATERIAL_TEXTS), "wrong": xw}
+    out["materials_in_text"] = {
+        "ok": len(B.MATERIAL_TEXTS) - len(xw),
+        "of": len(B.MATERIAL_TEXTS),
+        "wrong": xw,
+    }
     return out
 
 
@@ -308,7 +326,9 @@ def paid_price() -> dict[str, Any]:
 @section
 def brand_coverage() -> dict[str, Any]:
     ref = list(dict.fromkeys(B.BRAND_REFERENCE))
-    hit = [b for b in ref if ENGINE.identify(ListingText(title=f"Giacca {b} nera", brand_field=b)).brand.value]
+    hit = [
+        b for b in ref if ENGINE.identify(ListingText(title=f"Giacca {b} nera", brand_field=b)).brand.value
+    ]
     heavy = [b for b in B.COUNTERFEIT_HEAVY if b in hit]
     risk_ok = 0
     for b in B.COUNTERFEIT_HEAVY:
@@ -338,7 +358,9 @@ def consistency() -> dict[str, Any]:
     from app.analysis.labels import LabelReport
     from app.analysis.text import analyze_text
 
-    def mk(title: str = "x", desc: str = "", brand: str | None = None, vision: Any = None, labels: Any = None) -> Any:
+    def mk(
+        title: str = "x", desc: str = "", brand: str | None = None, vision: Any = None, labels: Any = None
+    ) -> Any:
         return ConsistencyInput(
             title=title, description=desc, price=Decimal("50"), declared_brand=brand, declared_size=None,
             declared_material=None, declared_color=None, declared_condition="very_good",
@@ -351,12 +373,14 @@ def consistency() -> dict[str, Any]:
     same_bad = [
         (d, s)
         for d, s in B.BRAND_SAME
-        if check_brand(mk(brand=d, vision={"brand": {"value": s, "certainty": "certain"}})).status == "discrepancy"
+        if check_brand(mk(brand=d, vision={"brand": {"value": s, "certainty": "certain"}})).status
+        == "discrepancy"
     ]
     diff_ok = [
         (d, s)
         for d, s in B.BRAND_DIFFERENT
-        if check_brand(mk(brand=d, vision={"brand": {"value": s, "certainty": "certain"}})).status == "discrepancy"
+        if check_brand(mk(brand=d, vision={"brand": {"value": s, "certainty": "certain"}})).status
+        == "discrepancy"
     ]
     size_bad = [
         (t, d)
@@ -405,6 +429,7 @@ def main() -> None:
     sections = {
         "labelled_cases": labelled_cases,
         "holdout_cases": holdout_cases,
+        "fresh_cases": fresh_cases,
         "defects": defects,
         "defect_severity": defect_severity,
         "suspicious": suspicious,

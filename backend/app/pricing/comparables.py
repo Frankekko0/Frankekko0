@@ -162,13 +162,19 @@ def _condition_score(a: str, b: str) -> float:
     return {1: 0.55, 2: 0.2}.get(abs(ra - rb), 0.0)
 
 
-def _model_part(subject: ItemProfile, cand: ItemProfile, subject_tokens: frozenset[str] | None = None) -> float:
+def _model_part(
+    subject: ItemProfile, cand: ItemProfile, subject_tokens: frozenset[str] | None = None
+) -> float:
     """The model term. A subject whose model the catalog knows is compared on the model (a different
     height of the same shoe is a different model); one it does not know, on the distinctive words of
     the title (neutral when either title has none: nothing is known, nothing is assumed)."""
     w = _W["model"]
     if subject.model is None:
-        mine = subject_tokens if subject_tokens is not None else line_tokens(subject.title, subject.size, subject.brand)
+        mine = (
+            subject_tokens
+            if subject_tokens is not None
+            else line_tokens(subject.title, subject.size, subject.brand)
+        )
         theirs = line_tokens(cand.title, cand.size, cand.brand) if mine else frozenset()
         if not mine or not theirs:
             return w * 0.5

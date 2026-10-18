@@ -29,7 +29,7 @@ from rapidfuzz.distance import JaroWinkler
 
 from app.analysis.defects import extract_defects
 from app.analysis.lots import lot_pieces
-from app.domain.enums import Certainty
+from app.domain.enums import Certainty, Condition
 from app.identification.taxonomy import (
     CATALOG_ID_CATEGORIES,
     CATALOG_SLUG_RULES,
@@ -41,7 +41,6 @@ from app.identification.taxonomy import (
     DISTINCTIVE_MODEL_KEYWORDS,
     DOCUMENT_WORDS,
     FOOTBALL_CONTEXT,
-    TEAM_CONTEXT_WINDOW,
     FOOTBALL_TEAMS,
     GENDER_KEYWORDS,
     GENERIC_CATEGORY_KEYWORDS,
@@ -50,6 +49,7 @@ from app.identification.taxonomy import (
     PRODUCT_CODE_PATTERNS,
     SEASON_PATTERN,
     SUSPICIOUS_PATTERNS,
+    TEAM_CONTEXT_WINDOW,
     VINTAGE_PATTERN,
     WEAK_MODEL_KEYWORDS,
     BrandSpec,
@@ -60,7 +60,9 @@ from app.identification.taxonomy import (
     related_brands,
 )
 from app.ingestion.normalizer import (
+    condition_from_text,
     normalize_color,
+    normalize_condition,
     normalize_material,
     normalize_size,
     size_distance,
@@ -323,10 +325,10 @@ def _clause_around(text: str, start: int, end: int, window: int) -> str:
     La maglia è morbida" has a football word, but not next to the name."""
     left = max(start - window, 0)
     right = min(end + window, len(text))
-    for m in _CLAUSE_END.finditer(text, left, start):
-        left = m.end()
-    if m := _CLAUSE_END.search(text, end, right):
-        right = m.start()
+    for stop in _CLAUSE_END.finditer(text, left, start):
+        left = stop.end()
+    if next_stop := _CLAUSE_END.search(text, end, right):
+        right = next_stop.start()
     return text[left:right]
 
 
@@ -523,11 +525,14 @@ class IdentificationEngine:
         field_match = field_hits[0] if field_hits else None
         title_hits = self._match_brands(title)
         strong_title = [h for h in title_hits if not h[3]]
-        title_match = (strong_title or title_hits or [None])[0]
+        title_match = strong_title[0] if strong_title else (title_hits[0] if title_hits else None)
         desc_hits = self._match_brands(desc, allow_weak=False)
-        title_span = title_match[2] if title_match else None
+        title_span: tuple[int, int] | None = title_match[2] if title_match else None
         if title_match and title_match[1].startswith("polo ") and title_span:
-            title_span = (title_span[0] + 5, title_span[1])  # "polo ralph lauren": "polo" is still the kind of item
+            title_span = (
+                title_span[0] + 5,
+                title_span[1],
+            )  # "polo ralph lauren": "polo" is still the kind of item
         if title_match and title_match[1] in PRODUCT_ALIASES:
             title_span = None  # "Air Jordan 1": the brand's name is also the product's
         title_masked = self._mask(title, title_span)
@@ -753,9 +758,9 @@ class IdentificationEngine:
                     break
             if res.team.known:
                 break
-        if m := SEASON_PATTERN.search(title) or SEASON_PATTERN.search(desc):
-            start = int(m.group(1))
-            end = m.group(2)
+        if season_match := SEASON_PATTERN.search(title) or SEASON_PATTERN.search(desc):
+            start = int(season_match.group(1))
+            end = season_match.group(2)
             end_full = int(end) if len(end) == 4 else int(str(start)[:2] + end)
             if 0 <= end_full - start <= 1:
                 res.season = Attribute(f"{start}/{str(end_full)[-2:]}", Certainty.PROBABLE, "title", 0.8)
@@ -1039,9 +1044,9 @@ class IdentificationEngine:
         report = extract_defects(f"{item.title}\n{item.description or ''}")
         res.defect_terms = report.labels
         res.defect_hits = [h.as_dict() for h in report.hits]
-        if m := CLAIMED_PRICE.search(desc):
+        if price_match := CLAIMED_PRICE.search(desc):
             try:
-                value = float(m.group(1).replace(".", "").replace(",", "."))
+                value = float(price_match.group(1).replace(".", "").replace(",", "."))
             except ValueError:
                 value = 0
             if 10 <= value <= 20000:
@@ -1117,6 +1122,14 @@ class IdentificationEngine:
             rest = self._title_gender(title)
             if rest and rest not in (res.gender.value, "unisex"):
                 add("gender", res.gender.value or "", rest, "titolo")
+        if item.condition:
+            # "Nuovo con cartellino" in the title and "Buone condizioni" in the field: one of the two is wrong.
+            field_condition, title_condition = normalize_condition(item.condition), condition_from_text(title)
+            if (
+                Condition.UNKNOWN not in (field_condition, title_condition)
+                and field_condition != title_condition
+            ):
+                add("condition", field_condition.value, title_condition.value, "titolo")
         if cm := res.flags.get("category_mismatch"):
             add("category", cm["declared"], cm["detected"], "titolo", "low")
 

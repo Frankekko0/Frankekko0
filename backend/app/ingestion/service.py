@@ -50,6 +50,7 @@ from app.marketplace.base import ProviderListing, ProviderSeller
 from app.scoring.seller import SellerProfile, seller_reliability
 from app.tracking.policy import TRACKING_MODES, evidence_for, schedule
 from app.tracking.status import Observation, StatusState, StatusUpdate, apply_observation
+from app.vision.types import ImageAnalysis
 
 log = get_logger(__name__)
 
@@ -95,7 +96,9 @@ class IngestResult:
         return [i for i in self.new_ids if i in self.new_active_ids and i not in self.duplicates_of_active]
 
 
-def identify_listing(engine: IdentificationEngine, pl: ProviderListing) -> IdentificationResult:
+def identify_listing(
+    engine: IdentificationEngine, pl: ProviderListing, vision: ImageAnalysis | None = None
+) -> IdentificationResult:
     return engine.identify(
         ListingText(
             title=pl.title,
@@ -108,8 +111,41 @@ def identify_listing(engine: IdentificationEngine, pl: ProviderListing) -> Ident
             condition=pl.condition,
             color_field=pl.color,
             material_field=pl.material,
-        )
+        ),
+        vision,
     )
+
+
+# What the photos established and a page capture cannot produce: they live in ``identification`` next to the
+# text-derived facts, so a capture that rewrites that column must carry them over (see ``carry_photo_evidence``).
+PHOTO_EVIDENCE_KEYS = ("vision", "photos_reused_by_other_seller")
+
+
+def carry_photo_evidence(
+    identification: dict[str, Any], stored_vision: Any, stored_reused: Any, *, photos_unchanged: bool
+) -> dict[str, Any]:
+    """``identification`` of a re-capture with the photo evidence of the stored one kept.
+
+    The photo analysis (and the facts read from labels, which the caller already folded in) belongs to the photos it
+    was made on: it stays while the gallery is the same and is dropped when the photos changed (the new photos are
+    checked again). The "same photos on another seller's listing" signal is a hash match that was observed, never a
+    guess, and once seen it is kept exactly as ``run_vision`` keeps it."""
+    out = dict(identification)
+    if stored_vision and photos_unchanged:
+        out["vision"] = stored_vision
+    if stored_reused:
+        out["photos_reused_by_other_seller"] = True
+    return out
+
+
+def stored_analysis(raw: Any) -> ImageAnalysis | None:
+    """The stored photo analysis as an object (None when there is none or it no longer fits the schema)."""
+    if not raw or not isinstance(raw, dict):
+        return None
+    try:
+        return ImageAnalysis.model_validate(raw)
+    except ValueError:
+        return None
 
 
 def listing_columns(
@@ -288,10 +324,14 @@ class IngestionService:
                     Listing.photo_count,
                     Listing.seller_id,
                     Listing.currency,
+                    # What the photos established (a page capture cannot produce it): read to be carried over.
+                    Listing.identification["vision"].label("stored_vision"),
+                    Listing.identification["photos_reused_by_other_seller"].label("stored_reused"),
                 ).where(Listing.provider == self.provider, Listing.external_id.in_(list(by_ext)))
             )
         ).all()
         existing = {r.external_id: r for r in existing_rows}
+        stored_photo_keys = await self._stored_photo_keys([r.id for r in existing_rows if r.stored_vision])
         last_seen_rows = await self._last_snapshots([r.id for r in existing_rows])
         heartbeat = timedelta(hours=get_settings().snapshot_heartbeat_hours)
 
@@ -379,15 +419,38 @@ class IngestionService:
                     incoming_rank == stored_rank and self.mode != AcquisitionMode.PROVIDER_SCAN
                 )
                 if richer:
-                    ident = identify_listing(engine, pl)
-                    cols = descriptive_columns(pl, ident, catalog)
-                    if not pl.images:
-                        cols.pop("photo_count")  # this capture has no photos: keep the stored ones
-                    elif (
+                    # The gallery this capture leaves behind: its own when it replaces the stored one, else the stored.
+                    replaces_gallery = bool(pl.images) and (
                         pl.images_authoritative
                         or len(pl.images) >= (ex.photo_count or 0)
                         or incoming_rank > stored_rank
-                    ):
+                    )
+                    photos_unchanged = not replaces_gallery or [
+                        r["image_key"] for r in incoming_rows(ex.id, pl.images, None, now)
+                    ] == stored_photo_keys.get(ex.id, [])
+                    # The photo analysis is part of what is known about the item: a page capture does not erase it
+                    # (the brand, model or size read on a label are folded back in); it is dropped only when the
+                    # photos themselves changed, and the photo check then runs again.
+                    ident = identify_listing(engine, pl)
+                    cols = descriptive_columns(pl, ident, catalog)
+                    if vision := stored_analysis(ex.stored_vision) if photos_unchanged else None:
+                        # Exactly what ``run_vision`` wrote: the identification with the photos folded in, and the
+                        # brand, model and category the text did not give.
+                        seen = identify_listing(engine, pl, vision)
+                        cols["identification"] = seen.as_dict()
+                        cols["identification_confidence"] = seen.confidence
+                        if seen.brand.value and cols["brand_id"] is None:
+                            cols["brand_id"] = catalog.brand_id(seen.brand.value)
+                        if seen.model.value and not cols["model_name"]:
+                            cols["model_name"] = seen.model.value[:120]
+                        if seen.category.value and cols["category_id"] is None:
+                            cols["category_id"] = catalog.category_id(seen.category.value)
+                    cols["identification"] = carry_photo_evidence(
+                        cols["identification"], ex.stored_vision, ex.stored_reused, photos_unchanged=photos_unchanged
+                    )
+                    if not pl.images:
+                        cols.pop("photo_count")  # this capture has no photos: keep the stored ones
+                    elif replaces_gallery:
                         # Only reached by a capture at least as rich as what is stored: the photos
                         # it does not list are retired (kept as history), not deleted.
                         replace_images[ex.id] = (
@@ -536,6 +599,20 @@ class IngestionService:
             image_keys=tuple(last.image_set or ()),
             images_complete=bool(last.image_set_complete),
         )
+
+    async def _stored_photo_keys(self, listing_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[str]]:
+        """The photos each listing shows now (keys in gallery order): what a stored photo analysis was made on."""
+        if not listing_ids:
+            return {}
+        rows = await self.session.execute(
+            select(ListingImage.listing_id, ListingImage.image_key)
+            .where(ListingImage.listing_id.in_(listing_ids), ListingImage.removed_at.is_(None))
+            .order_by(ListingImage.listing_id, ListingImage.position)
+        )
+        out: dict[uuid.UUID, list[str]] = defaultdict(list)
+        for listing_id, key in rows:
+            out[listing_id].append(key)
+        return out
 
     async def _last_snapshots(self, listing_ids: list[uuid.UUID]) -> dict[uuid.UUID, Any]:
         """Newest snapshot per listing, with the newest photo set seen (older rows may predate it)."""

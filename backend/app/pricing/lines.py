@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 from functools import lru_cache
+from typing import TypedDict
 
 from app.identification.taxonomy import (
     COLORS,
@@ -52,7 +53,7 @@ _GENERIC = frozenset(
     leggero leggera leggeri leggere pesante pesanti imbottito imbottita imbottiti imbottite foderato foderata
     invernale invernali estivo estiva estivi estive primaverile autunnale termico termica caldo calda
     lungo lunga lunghi lunghe corto corta corti corte manica maniche
-    """.split()
+    """.split()  # noqa: SIM905 - a word list is easier to read as text
 )
 
 
@@ -95,7 +96,7 @@ _FOOTWEAR_CATEGORIES = frozenset({"sneakers", "footwear"})
 
 @lru_cache(maxsize=131072)
 def audience_of(title: str, gender: str | None) -> str | None:
-    """"kids" or "adult"; ``None`` when nothing says (never guessed: unknown stays unknown).
+    """ "kids" or "adult"; ``None`` when nothing says (never guessed: unknown stays unknown).
 
     A kids' word in the title wins over the gender field (a child's item filed as "men" by a
     careless seller is still a child's item); otherwise the gender field decides.
@@ -109,7 +110,7 @@ def audience_of(title: str, gender: str | None) -> str | None:
 
 @lru_cache(maxsize=131072)
 def variant_of(title: str, category: str | None, parent: str | None) -> str | None:
-    """"low" | "mid" | "high" for footwear whose title states exactly one of them, else ``None``.
+    """ "low" | "mid" | "high" for footwear whose title states exactly one of them, else ``None``.
 
     Only footwear: "high" or "low" in the title of a jacket is just a word. Two different heights
     in one title are ambiguous and read as unknown.
@@ -120,9 +121,12 @@ def variant_of(title: str, category: str | None, parent: str | None) -> str | No
     return next(iter(found)) if len(found) == 1 else None
 
 
-def profile_extras(
-    title: str, gender: str | None, category: str | None, parent: str | None
-) -> dict[str, str | None]:
+class ProfileExtras(TypedDict):
+    audience: str | None
+    variant: str | None
+
+
+def profile_extras(title: str, gender: str | None, category: str | None, parent: str | None) -> ProfileExtras:
     """The ``audience`` and ``variant`` fields of an ``ItemProfile``, derived from what the listing says."""
     return {"audience": audience_of(title, gender), "variant": variant_of(title, category, parent)}
 
@@ -140,10 +144,7 @@ def line_tokens(title: str, size: str | None = None, brand: str | None = None) -
     return frozenset(
         t
         for t in _TOKEN.findall(fold(title))
-        if t not in _STOP
-        and t not in size_numbers
-        and t not in brand_words
-        and (len(t) > 1 or t.isdigit())
+        if t not in _STOP and t not in size_numbers and t not in brand_words and (len(t) > 1 or t.isdigit())
     )
 
 

@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.agent.guardrails import injection_suspected
-from app.analysis.defects import extract_defects
+from app.analysis.defects import MAX_TEXT, extract_defects
 from app.analysis.labels import materials_in, parse_composition
 from app.analysis.lots import lot_pieces
 from app.identification.taxonomy import fold
@@ -57,7 +57,7 @@ _RISK_PHRASES: list[tuple[str, str, re.Pattern[str]]] = [
         "Chiede di essere contattato fuori dalla piattaforma",
         re.compile(
             r"whatsapp|telegram|instagram|scrivimi su|contattami|mandami un messaggio su|contactez.moi sur|"
-            r"schreib mir auf|escribeme por|\b[\w.+-]+@[\w-]+\.\w{2,}\b|(?<!\d)(?:\+?\d[\d ]{8,13}\d)(?!\d)"
+            r"schreib mir auf|escribeme por|(?<![\w.+-])[\w.+-]+@[\w-]+\.\w{2,}\b|(?<!\d)(?:\+?\d[\d ]{8,13}\d)(?!\d)"
         ),
     ),
     (
@@ -212,6 +212,9 @@ _LIST_CUE = re.compile(
 _AMOUNT = r"(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d{1,5}(?:[.,]\d{1,2})?)"
 _MONEY = re.compile(rf"(?:(?:€|eur)\s*{_AMOUNT}|{_AMOUNT}\s*(?:€|eur\b|euros?\b))")
 _BARE_FIGURE = re.compile(rf"^\W{{0,8}}{_AMOUNT}")
+# No fibre is named by 25 letters in a row; a longer run is not a word, and a regex that reads a letter run from every
+# position in it (``parse_composition``) is quadratic on one thousands of letters long.
+_LONG_WORD = re.compile(r"[a-z]{25,}")
 _GARMENT_WORDS = re.compile(r"\bpiumin[oi]\b|\bpile\b")
 # A bare capital letter is a size only in the title ("Felpa blu M"), never next to an apostrophe ("L'ho usata").
 _LETTER_SIZE = re.compile(r"(?<![\w/'’])(XXXL|XXL|XL|XXS|XS|S|M|L)(?![\w/'’])")
@@ -296,7 +299,7 @@ class TextSignals:
 def analyze_text(title: str | None, description: str | None) -> TextSignals:
     """Read a listing's words. Without a description only the title is read and ``available`` is
     false (a catalogue card has none: that is a limit of the source, not an empty description)."""
-    desc = (description or "").strip()
+    desc = (description or "").strip()[:MAX_TEXT]
     raw = f"{title or ''}\n{desc}".strip()
     text = fold(raw).replace("ß", "ss")
     sig = TextSignals(detect_language(raw), available=bool(desc))
@@ -310,7 +313,7 @@ def analyze_text(title: str | None, description: str | None) -> TextSignals:
     sig.color = normalize_color(text)
     # "Piumino" is the garment, not the fill: a puffer jacket with a shell-only label is not a lie about the down.
     sig.materials = materials_in(_GARMENT_WORDS.sub(" ", text))
-    sig.composition = parse_composition(text)
+    sig.composition = parse_composition(_LONG_WORD.sub(" ", text))
     for key, rx in _MEASURES:
         if m := rx.search(text):
             sig.measures_cm[key] = float(m.group(1))

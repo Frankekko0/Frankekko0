@@ -384,7 +384,9 @@ def _declared_defects_vs_condition(i: ConsistencyInput, label: str) -> Check | N
     if declared not in CONDITION_ORDER or CONDITION_ORDER[declared] >= CONDITION_ORDER[Condition(floor)]:
         return None
     worst = max(i.text.defect_hits, key=lambda h: ("minor", "moderate", "severe").index(h["severity"]))
-    share = IMPACT["declared_defect_severe" if i.text.defect_severity == "severe" else "declared_defect_moderate"]
+    share = IMPACT[
+        "declared_defect_severe" if i.text.defect_severity == "severe" else "declared_defect_moderate"
+    ]
     detail = (
         f"Condizione dichiarata «{CONDITION_LABELS_IT[declared]}», ma la descrizione ammette «{worst['phrase']}» "
         "(dichiarazione del venditore, non verificata sulle foto)."

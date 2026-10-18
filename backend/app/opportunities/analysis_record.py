@@ -109,9 +109,26 @@ def _digest(payload: Any) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def photo_evidence_input(identification: Any) -> dict[str, Any] | None:
+    """The photo analysis the decision reads, as a small signature (None when the photos were never analysed).
+
+    It is part of the inputs so that the loss of a stored photo analysis (or its replacement) shows up as an input
+    change, never as an unexplained difference in the results of the same inputs."""
+    ident = identification or {}
+    vision = ident.get("vision") or {}
+    reused = bool(ident.get("photos_reused_by_other_seller"))
+    if not vision and not reused:
+        return None
+    return {
+        "analyzer": vision.get("analyzer"),
+        "photos_key": vision.get("photos_key"),
+        "reused_photos": reused,
+    }
+
+
 def listing_inputs(listing: Any) -> dict[str, Any]:
     """What the analysis reads from the listing, small enough to compare and to store."""
-    return {
+    inputs: dict[str, Any] = {
         "price": listing.price,
         "currency": listing.currency,
         "status": listing.status,
@@ -129,6 +146,11 @@ def listing_inputs(listing: Any) -> dict[str, Any]:
         "seller_id": str(listing.seller_id) if listing.seller_id else None,
         "is_repost": listing.duplicate_of_id is not None,
     }
+    # Only present once the photos were analysed (or seen on another seller's listing): the inputs, and so the
+    # hash, of every listing without photo evidence stay as they were.
+    if (photo_evidence := photo_evidence_input(listing.identification)) is not None:
+        inputs["photo_evidence"] = photo_evidence
+    return inputs
 
 
 def inputs_hash(inputs: dict[str, Any]) -> str:
@@ -154,6 +176,8 @@ def classify_trigger(
         return "price_change"
     if cur["photos"] != prev_inputs.get("photos"):
         return "photos"
+    if prev_inputs.get("photo_evidence") and not cur.get("photo_evidence"):
+        return "photos"  # a stored photo analysis vanished: the photos are checked again
     if cur["status"] != prev_inputs.get("status"):
         return "status_change"
     if cur != prev_inputs:

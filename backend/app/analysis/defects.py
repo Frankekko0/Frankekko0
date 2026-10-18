@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
+from itertools import islice
 from typing import Any
 
 from app.identification.taxonomy import fold
@@ -460,9 +462,18 @@ def _has_cue(words: list[str], *, near: bool) -> bool:
     return False
 
 
+# A negation, a softener or a denial acts within a few words: only this many characters around a match are read, so
+# the work per match is constant and a listing made of 5,000 "buco buco buco" cannot make the reading quadratic.
+_REACH = 240
+# Characters of a text read at all (a description is at most a few thousand; the rest is not a listing).
+MAX_TEXT = 20_000
+# Matches of one rule read in one sentence (the same word a hundred times says nothing more than twice).
+_MAX_MATCHES = 25
+
+
 def _negated(sentence: str, start: int, end: int) -> bool:
     """Is the defect at ``sentence[start:end]`` inside a negation of its sentence?"""
-    before = sentence[:start]
+    before = sentence[max(0, start - _REACH) : start]
     last = None
     for m in _BREAKER_RX.finditer(before):
         last = m
@@ -473,7 +484,7 @@ def _negated(sentence: str, start: int, end: int) -> bool:
     if _has_cue(own, near=True):
         return True
     # The comma list goes on only while this segment is a bare item ("senza macchie, buchi o strappi").
-    rest = _words(sentence[end:].split(",")[0])
+    rest = _words(sentence[end : end + _REACH].split(",")[0])
     item = own + rest
     if len(item) > 3 or any(w in _CLAUSE_WORDS for w in item):
         return False
@@ -489,11 +500,13 @@ def _negated(sentence: str, start: int, end: int) -> bool:
 def _denied_after(sentence: str, end: int, following: str | None) -> bool:
     """A denial after the word: in the same sentence ("buchi non ce ne sono") or at the start of the next one
     when the word closes its sentence ("Difetti: nessuno")."""
-    tail = sentence[end:].split(",")[0]
+    tail = sentence[end : end + _REACH].split(",")[0]
     words = _words(tail)
     if words:
-        return len(words) <= 5 and bool(_POST_DENIAL.match(tail)) and (
-            len(words) <= 3 or tail.strip().startswith("non ")
+        return (
+            len(words) <= 5
+            and bool(_POST_DENIAL.match(tail))
+            and (len(words) <= 3 or tail.strip().startswith("non "))
         )
     if following is None:
         return False
@@ -503,8 +516,8 @@ def _denied_after(sentence: str, end: int, following: str | None) -> bool:
 
 def _severity(base: str, sentence: str, start: int, end: int) -> str:
     """One step down for a softener next to the defect, one up for an intensifier."""
-    pre = re.split(r",|\b(?:e|and|et|und|y|con|with|ma|but)\b", sentence[:start])[-1]
-    post = sentence[end:].split(",")[0]
+    pre = re.split(r",|\b(?:e|and|et|und|y|con|with|ma|but)\b", sentence[max(0, start - _REACH) : start])[-1]
+    post = sentence[end : end + _REACH].split(",")[0]
     near = " ".join(_words(pre)[-3:] + _words(post)[:2])
     rank = _RANK[base]
     if _SOFT.search(near):
@@ -519,32 +532,40 @@ _DENIABLE = frozenset({"generic", "wear", "stain", "hole", "tear", "pilling", "f
 
 def extract_defects(text: str | None) -> DefectReport:
     """The defects ``text`` declares, with negations, severities and the phrase each was read from."""
-    report = DefectReport()
     if not text:
-        return report
-    folded = fold(_HASHTAG.sub(" ", text)).replace("ß", "ss")
+        return DefectReport()
+    folded = fold(_HASHTAG.sub(" ", text[:MAX_TEXT])).replace("ß", "ss")
+    hits, denied = _read(folded)
+    return DefectReport(list(hits), list(denied))
+
+
+@lru_cache(maxsize=2048)
+def _read(folded: str) -> tuple[tuple[DefectHit, ...], tuple[str, ...]]:
+    """The reading of one folded text. The same listing is read by the identification, by the text analysis and by
+    the price within one analysis (and again at the next one): the result is immutable, so it is kept."""
+    denied: list[str] = []
     hits: dict[tuple[str, str], DefectHit] = {}
     sentences = _sentences(folded)
     for idx, sentence in enumerate(sentences):
         following = sentences[idx + 1] if idx + 1 < len(sentences) else None
         for term, kind, base, rx in _RULES:
-            for m in rx.finditer(sentence):
-                if kind == "generic" and _CONDITIONAL.search(sentence[: m.start()] + " "):
+            for m in islice(rx.finditer(sentence), _MAX_MATCHES):
+                if kind == "generic" and _CONDITIONAL.search(
+                    sentence[max(0, m.start() - _REACH) : m.start()] + " "
+                ):
                     continue
                 if _negated(sentence, m.start(), m.end()) or _denied_after(sentence, m.end(), following):
                     if kind in _DENIABLE:
-                        report.denied.append(" ".join(sentence[max(0, m.start() - 16) : m.end()].split()))
+                        denied.append(" ".join(sentence[max(0, m.start() - 16) : m.end()].split()))
                     continue
                 severity = _severity(base, sentence, m.start(), m.end())
                 old = hits.get((kind, term))
                 if old is None or _RANK[severity] > _RANK[old.severity]:
                     phrase = " ".join(sentence[max(0, m.start() - 12) : m.end() + 14].split())
                     hits[(kind, term)] = DefectHit(term, kind, severity, phrase)
-    report.hits = list(hits.values())
     if any(p in folded for p in _NO_DEFECT_PHRASES):
-        report.denied.append("dichiarazione di assenza di difetti")
-    report.denied = list(dict.fromkeys(report.denied))
-    return report
+        denied.append("dichiarazione di assenza di difetti")
+    return tuple(hits.values()), tuple(dict.fromkeys(denied))
 
 
 def floor_for_severity(severity: str | None) -> str | None:

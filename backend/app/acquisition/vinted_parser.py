@@ -605,7 +605,7 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
     id_rx = cfg.patterns["item_id"]
     m = id_rx.search(url) or (id_rx.search(c.canonical or "") if c.canonical else None)
     item = ParsedItem(vinted_id=m.group(1) if m else None, url=url.split("?")[0].split("#")[0])
-    product = (_products(c.jsonld) or [None])[0]
+    product = next(iter(_products(c.jsonld)), None)
     offer: dict[str, Any] = {}
     if product:
         offers = product.get("offers")
@@ -717,8 +717,8 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
             ):
                 item.buyer_protection_fee = fee
                 break
-        if item.buyer_protection_fee is None and (fee := emb("service_fee")):
-            item.buyer_protection_fee = parse_price(fee)
+        if item.buyer_protection_fee is None and (service_fee := emb("service_fee")):
+            item.buyer_protection_fee = parse_price(service_fee)
     if (ship := emb("shipping")) is not None:
         item.shipping_fee = parse_price(ship)
 

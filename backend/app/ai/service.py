@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -185,6 +186,11 @@ async def run_ai_analysis(opportunity_id: uuid.UUID, settings: Settings | None =
     return analysis
 
 
+def _as_json(value: Any) -> str:
+    """A stable text form of a stored JSON value (what the database round-trips), for equality."""
+    return json.dumps(value, sort_keys=True, default=str)
+
+
 async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
     """Analyze listing photos and refresh identification. Returns True if anything changed.
 
@@ -274,6 +280,7 @@ async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
     new_ident["vision"] = vision.model_dump(mode="json")
     if ident_before.get("photos_reused_by_other_seller") or prov.reused_photos:
         new_ident["photos_reused_by_other_seller"] = True
+    columns_before = (listing.brand_id, listing.model_name, listing.category_id)
     listing.identification = new_ident
     listing.identification_confidence = result.confidence
     if result.brand.value and listing.brand_id is None:
@@ -282,11 +289,12 @@ async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
         listing.model_name = result.model.value[:120]
     if result.category.value and listing.category_id is None:
         listing.category_id = catalog.category_id(result.category.value)
-    changed = (
-        vision.analyzer != "heuristic"
-        or ident_before.get("confidence") != result.confidence
-        or old_vision.get("photo_checks") != new_ident["vision"].get("photo_checks")
-        or old_vision.get("provenance") != new_ident["vision"].get("provenance")
+    # Changed = the stored facts are not what they were. A run that only read the cache back (same photos, same
+    # model answer) changes nothing, and must not queue an analysis that would compute the same thing.
+    changed = _as_json(new_ident) != _as_json(ident_before) or columns_before != (
+        listing.brand_id,
+        listing.model_name,
+        listing.category_id,
     )
     log.info(
         "vision.analyzed",

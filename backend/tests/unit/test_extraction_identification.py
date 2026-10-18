@@ -49,8 +49,15 @@ def test_ambient_words_are_not_a_team_a_model_or_a_football_shirt(desc: str) -> 
     r = ident("Giacca nera", desc, brand_field="Zara", category_field=JACKETS)
     assert r.team.value is None and r.model.value is None
     assert r.category.value == "jackets"
-    puffer = ident("Piumino nero", desc, brand_field="Moncler", category_field="Uomo > Vestiti > Cappotti e giacche > Piumini")
-    assert puffer.team.value is None and puffer.model.value is None and puffer.category.value == "puffer-jackets"
+    puffer = ident(
+        "Piumino nero",
+        desc,
+        brand_field="Moncler",
+        category_field="Uomo > Vestiti > Cappotti e giacche > Piumini",
+    )
+    assert (
+        puffer.team.value is None and puffer.model.value is None and puffer.category.value == "puffer-jackets"
+    )
 
 
 @pytest.mark.parametrize(
@@ -120,7 +127,9 @@ def test_group_entries_of_the_path_decide_nothing() -> None:
 
 
 def test_catalogue_ids_decide_the_category_in_any_language() -> None:
-    r = ident("Maglia blu", category_codes=("5-men", "2050-clothing", "76-tops-and-t-shirts", "5492-polo-shirts"))
+    r = ident(
+        "Maglia blu", category_codes=("5-men", "2050-clothing", "76-tops-and-t-shirts", "5492-polo-shirts")
+    )
     assert r.category.value == "polo-shirts" and r.category.certainty == Certainty.CERTAIN
     # A group slug (several kinds) names none, whatever the language of the words.
     assert ident("Zara", category_codes=("1-coats-and-jackets",)).category.certainty != Certainty.CERTAIN
@@ -146,7 +155,17 @@ def test_the_catalogue_knows_the_brands_of_the_italian_resale() -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["Canada Goose", "Palm Angels", "Bape", "Miu Miu", "Yeezy", "Balmain", "Cartier", "Tiffany & Co", "Moose Knuckles"],
+    [
+        "Canada Goose",
+        "Palm Angels",
+        "Bape",
+        "Miu Miu",
+        "Yeezy",
+        "Balmain",
+        "Cartier",
+        "Tiffany & Co",
+        "Moose Knuckles",
+    ],
 )
 def test_the_brands_copied_most_that_a_fresh_list_found_missing_are_known_with_a_prior(name: str) -> None:
     """A list of 194 names written after the catalogue (not the one it was built from) missed these: a Canada Goose
@@ -193,16 +212,27 @@ def test_wording_that_only_sounds_like_a_replica_is_not(phrase: str) -> None:
 
 
 def test_an_authentic_item_with_a_receipt_is_not_vetoed_by_its_own_reassurance() -> None:
-    r = ident("Giubbotto Stone Island", "Originale, non è un fake, allego copia dello scontrino", brand_field="Stone Island")
+    r = ident(
+        "Giubbotto Stone Island",
+        "Originale, non è un fake, allego copia dello scontrino",
+        brand_field="Stone Island",
+    )
     assert r.suspicious_terms == [] and r.authenticity.value != "suspicious"
 
 
 def test_tipo_x_never_sets_the_brand_of_the_item() -> None:
-    for title in ("Felpa tipo Nike", "Giubbotto stile Stone Island", "Polo ispirata a Ralph Lauren", "Polo like Ralph Lauren"):
+    for title in (
+        "Felpa tipo Nike",
+        "Giubbotto stile Stone Island",
+        "Polo ispirata a Ralph Lauren",
+        "Polo like Ralph Lauren",
+    ):
         r = ident(title)
         assert r.brand.value is None and r.brand_guess.value is None and r.suspicious_terms, title
     # ...but a comparison next to the item's own brand is only a comparison.
-    ok = ident("Felpa Champion blu", "Simile a Nike come stile, ma è Champion originale", brand_field="Champion")
+    ok = ident(
+        "Felpa Champion blu", "Simile a Nike come stile, ma è Champion originale", brand_field="Champion"
+    )
     assert ok.brand.value == "champion" and ok.suspicious_terms == []
 
 
@@ -227,7 +257,10 @@ def test_a_guess_is_never_the_brand_the_comparables_are_filtered_on(title: str, 
 
 
 def test_a_brand_the_description_states_is_the_brand_a_stray_mention_is_not() -> None:
-    assert ident("Giacca invernale nera", "Marca Moncler, acquistata a Milano nel 2021.").brand.value == "moncler"
+    assert (
+        ident("Giacca invernale nera", "Marca Moncler, acquistata a Milano nel 2021.").brand.value
+        == "moncler"
+    )
     assert ident("Maglione uomo", "Ralph Lauren originale, 100% lana").brand.value == "ralph-lauren"
     mention = ident("Pantaloni neri", "Da abbinare a una camicia Lacoste")
     assert mention.brand.value is None
@@ -251,7 +284,13 @@ def test_the_field_and_the_title_naming_two_brands_is_a_contradiction_not_a_fact
 
 
 def test_every_attribute_says_where_it_comes_from() -> None:
-    r = ident("Piumino Nuptse nero", "Taglia M", brand_field=None, category_field="Uomo > Cappotti e giacche > Piumini", size_field="M")
+    r = ident(
+        "Piumino Nuptse nero",
+        "Taglia M",
+        brand_field=None,
+        category_field="Uomo > Cappotti e giacche > Piumini",
+        size_field="M",
+    )
     assert r.category.provenance == "declared" and r.size.provenance == "declared"
     assert r.brand.provenance == "inferred" and r.brand.source == "model_keyword"
     assert r.as_dict()["brand"]["provenance"] == "inferred"
@@ -268,15 +307,40 @@ def test_a_bare_number_is_a_guess_at_the_scale_until_the_item_is_known() -> None
 
 
 def test_a_size_field_against_a_size_in_the_title_is_a_contradiction_and_lowers_the_confidence() -> None:
-    clean = ident("Felpa Nike taglia M", brand_field="Nike", size_field="M", category_field="Uomo > Maglioni e felpe > Felpe")
-    clash = ident("Felpa Nike taglia L", brand_field="Nike", size_field="M", category_field="Uomo > Maglioni e felpe > Felpe")
+    clean = ident(
+        "Felpa Nike taglia M",
+        brand_field="Nike",
+        size_field="M",
+        category_field="Uomo > Maglioni e felpe > Felpe",
+    )
+    clash = ident(
+        "Felpa Nike taglia L",
+        brand_field="Nike",
+        size_field="M",
+        category_field="Uomo > Maglioni e felpe > Felpe",
+    )
     assert clean.contradictions == []
     assert [c["field"] for c in clash.contradictions] == ["size"] and clash.confidence < clean.confidence
 
 
-@pytest.mark.parametrize("title", ["Maglia Man Utd 2008 Rooney", "T-shirt Spider-Man Marvel", "Felpa Batman bambino"])
+@pytest.mark.parametrize(
+    "title", ["Maglia Man Utd 2008 Rooney", "T-shirt Spider-Man Marvel", "Felpa Batman bambino"]
+)
 def test_man_inside_a_name_is_not_the_audience(title: str) -> None:
     assert ident(title).gender.value != "men"
+
+
+def test_a_condition_in_the_title_against_the_condition_field_is_a_contradiction() -> None:
+    clash = ident("Giubbotto Nuovo con cartellino", brand_field="Zara", condition="Buone condizioni")
+    assert [(c["field"], c["declared"], c["found"]) for c in clash.contradictions] == [
+        ("condition", "good", "new_with_tags")
+    ]
+    agree = ident("Giubbotto Nuovo con cartellino", brand_field="Zara", condition="Nuovo con cartellino")
+    assert agree.contradictions == []
+    # A field the label vocabulary does not know, or a title that says nothing, contradicts nothing.
+    assert ident("Giubbotto Zara", condition="Buone condizioni").contradictions == []
+    assert ident("Giubbotto Nuovo con cartellino", condition="Pessime").contradictions == []
+    assert clash.confidence < agree.confidence
 
 
 def test_the_gender_comes_from_the_marketplace_path() -> None:
@@ -318,7 +382,9 @@ def test_materials_as_the_marketplace_prints_them(raw: str, expected: str) -> No
 
 
 @pytest.mark.parametrize(("text", "expected"), B.MATERIAL_TEXTS)
-def test_the_main_material_of_a_text_is_the_biggest_share_and_never_an_imitation(text: str, expected: str) -> None:
+def test_the_main_material_of_a_text_is_the_biggest_share_and_never_an_imitation(
+    text: str, expected: str
+) -> None:
     assert normalize_material(text) == expected
 
 

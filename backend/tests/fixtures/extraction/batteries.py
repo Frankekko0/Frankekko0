@@ -78,6 +78,15 @@ DEFECT_NEG = [
     "Zip funziona perfettamente",
     "No rips, no tears, no fading",
     "Pas de trous ni de taches",
+    # added in the continuation session: the denial after the word, and the possibility that is not an admission
+    "Difetti: nessuno",
+    "Difetti: assenti",
+    "Macchie: no. Buchi: no.",
+    "Stains: none. Holes: none.",
+    "Défauts: aucun",
+    "Buchi non ce ne sono",
+    "Controllate le foto per eventuali difetti",
+    "Se ci sono difetti li vedete nelle foto",
 ]
 
 # ----------------------------------------------------------------------------------------- replicas
@@ -389,7 +398,12 @@ BRAND_SAME = [
     ("Napapijri", "NAPAPIJRI GEOGRAPHIC"),
 ]  # fmt: skip
 # A real contradiction: another brand on the label.
-BRAND_DIFFERENT = [("Nike", "Adidas"), ("Stone Island", "Zara"), ("Moncler", "Peuterey"), ("Levi's", "Wrangler")]
+BRAND_DIFFERENT = [
+    ("Nike", "Adidas"),
+    ("Stone Island", "Zara"),
+    ("Moncler", "Peuterey"),
+    ("Levi's", "Wrangler"),
+]
 # (title, description): a stray capital letter is not a size.
 SIZE_TEXT_NOISE = [
     ("Felpa Nike M", "L'ho usata poche volte, ottime condizioni."),

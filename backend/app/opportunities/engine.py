@@ -503,7 +503,9 @@ def run_analysis(
             demand_level=demand.level.value,
             condition_downgraded=by_photos != subject.profile.condition,
             declared_defect_severity=defects.worst,
-            declared_defects=tuple(h.phrase for h in defects.hits[:4]),
+            # The kinds of defect ("buchi", "macchie"), never the seller's own words: the warning built from them
+            # reaches the agent's tool output, and listing text is untrusted data.
+            declared_defects=tuple(defects.labels[:4]),
             lot_pieces=subject.lot_pieces,
             unknown_costs=unknown_costs,
             risk_labels=tuple(f.label for f in risk.factors if f.severity in ("medium", "high")),

@@ -55,8 +55,8 @@ def resolve_brand(text: str | None, taxonomy: Taxonomy = DEFAULT_TAXONOMY) -> Br
             continue
         if rx.search(s):
             return brand
-    if (slug := LABEL_SHORT_FORMS.get(s)) and (brand := taxonomy.brand_by_slug.get(slug)):
-        return brand
+    if (slug := LABEL_SHORT_FORMS.get(s)) and (short := taxonomy.brand_by_slug.get(slug)):
+        return short
     return None
 
 

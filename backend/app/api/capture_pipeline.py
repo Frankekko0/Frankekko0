@@ -191,6 +191,10 @@ _INPUTS = (
     Listing.shipping_fee,
     Listing.buyer_protection_fee,
     Listing.duplicate_of_id,
+    # The photo evidence the decision reads (see ``analysis_record.photo_evidence_input``).
+    Listing.identification["vision"]["analyzer"].astext,
+    Listing.identification["vision"]["photos_key"].astext,
+    Listing.identification["photos_reused_by_other_seller"].astext,
 )
 _N_INPUTS = len(_INPUTS)
 

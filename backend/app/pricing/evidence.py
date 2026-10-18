@@ -530,7 +530,9 @@ def build_provenance(
             "n": market.n_used,
             "by_source": by_source,
             "negotiation_discount": round(discount, 4) if discount else None,
-            "negotiation_discount_assumed": bool(discount and evidence is not None and evidence.discount_assumed),
+            "negotiation_discount_assumed": bool(
+                discount and evidence is not None and evidence.discount_assumed
+            ),
             "calibrated": bool(calibrated and has_value),
             "prior": {
                 "used": market.used_prior,

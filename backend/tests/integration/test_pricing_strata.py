@@ -27,14 +27,20 @@ AM95 = "Nike Air Max 95 scarpe sneakers uomo 42"
 AM95_PRICES = [100, 105, 98, 110, 102, 106, 99, 104, 108, 101, 103, 107]
 
 
+_sellers = iter(range(10_000))
+
+
 def shoe(make: Callable[..., ProviderListing], title: str, price: float, **kw) -> ProviderListing:
+    # one seller per listing: the same title from the same seller would be read as a repost (a duplicate)
+    kw.setdefault("seller_id", f"seller-{next(_sellers)}")
     return make(title=title, price=price, brand="Nike", category="Sneakers", size="EU 42", **kw)
 
 
 async def seed_crowded_family(session, make: Callable[..., ProviderListing]) -> None:
     """260 recent sold Air Force 1 (6-45 days) and 12 older sold Air Max 95 (70-103 days) of the same brand/category."""
     rows = [
-        shoe(make, AF1, 50 + i % 9, status="sold", published_days_ago=6 + i % 40, sold_after_days=3) for i in range(260)
+        shoe(make, AF1, 50 + i % 9, status="sold", published_days_ago=6 + i % 40, sold_after_days=3)
+        for i in range(260)
     ]
     rows += [
         shoe(make, AM95, p, status="sold", published_days_ago=70 + i * 3, sold_after_days=4)
@@ -44,7 +50,9 @@ async def seed_crowded_family(session, make: Callable[..., ProviderListing]) -> 
     await session.commit()
 
 
-async def test_g1_a_rare_model_is_not_hidden_by_the_recent_listings_of_a_popular_one(session, make_listing) -> None:
+async def test_g1_a_rare_model_is_not_hidden_by_the_recent_listings_of_a_popular_one(
+    session, make_listing
+) -> None:
     await seed_crowded_family(session, make_listing)
     deal = shoe(make_listing, AM95, 55, published_days_ago=0.05)
     res = await IngestionService(session, "test").ingest([deal], now=NOW)
@@ -98,7 +106,9 @@ async def segment_median(session) -> D:
 
 async def test_removed_listings_never_enter_the_segment_prices(session, make_listing) -> None:
     rows = [
-        shoe(make_listing, "Nike giacca uomo M", p, status="sold", published_days_ago=10 + i, sold_after_days=3)
+        shoe(
+            make_listing, "Nike giacca uomo M", p, status="sold", published_days_ago=10 + i, sold_after_days=3
+        )
         for i, p in enumerate([28, 29, 30, 30, 31, 32])
     ]
     await IngestionService(session, "test").ingest(rows, now=NOW)
@@ -149,3 +159,36 @@ async def test_every_stored_comparable_says_why_it_is_or_is_not_in_the_price(ses
     assert why_other["tier"] == "family" and "altra linea o modello" in why_other["match"]
     assert exclusion_label("other_line") and "riferimento" in exclusion_label("other_line")
     assert exclusion_label("other_category") and exclusion_label(None) is None
+
+
+# ---------------------------------------------------------------------------------------- PX-10
+async def test_vinted_sold_prices_carry_a_flagged_haircut_until_the_discount_is_measured(
+    session, make_listing
+) -> None:
+    """A Vinted 'sold' price is the last ask seen, not what the buyer paid: until the discount is measured on the
+    user's own purchases an assumed one (configurable, flagged) is applied, so the ceiling is not drawn on asks."""
+    rows = [
+        shoe(make_listing, AF1, 60 + i % 3, status="sold", published_days_ago=10 + i, sold_after_days=3)
+        for i in range(8)
+    ]
+    await IngestionService(session, "test").ingest(rows, now=NOW)
+    await session.commit()
+    deal = shoe(make_listing, AF1, 30, published_days_ago=0.05)
+    res = await IngestionService(session, "test").ingest([deal], now=NOW)
+    await session.commit()
+
+    async def fmv(haircut: float):
+        pipeline = AnalysisPipeline(session)
+        pipeline.settings = pipeline.settings.model_copy(update={"vinted_sold_haircut": haircut})
+        outcome = await pipeline.analyze_listing(res.new_ids[0], now=NOW)
+        _, gate, discount = await pipeline.evidence_state()
+        catalog = await load_catalog(session)
+        subject = profile_from_row(await session.get(Listing, res.new_ids[0]), catalog)
+        evidence = (await pipeline.price_evidence([subject], catalog, gate, discount))[0]
+        return float(outcome.result.market.fair_market_value), evidence
+
+    plain, ev0 = await fmv(0.0)
+    cut, ev5 = await fmv(0.05)
+    assert ev0.negotiation_discount is None and not ev0.discount_assumed
+    assert ev5.negotiation_discount == 0.05 and ev5.discount_assumed
+    assert abs(cut / plain - 0.95) < 0.012

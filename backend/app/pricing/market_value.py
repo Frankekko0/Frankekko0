@@ -61,6 +61,12 @@ TREND_DROP = 0.85
 TREND_RECENT_DAYS = 30
 TREND_MIN_SIDE = 3
 TREND_MIN_Z = 2.0
+# A slow, steady slide (a few % a month) is invisible to the recent-vs-older test above yet puts the median a month or
+# two behind: with enough sales over enough time, a significant downward slope brings the median to today.
+DRIFT_MIN_SOLD = 8
+DRIFT_MIN_SPAN_DAYS = 30.0
+DRIFT_MIN_T = 2.5
+DRIFT_MAX_CUT = 0.25
 # A brand-and-category estimate (nothing distinctive about the item) is never more than "indicative".
 FAMILY_CONFIDENCE_CAP = 35
 MIXED_CONFIDENCE_CAP = 45
@@ -230,6 +236,42 @@ def _trend(sold: list[ScoredComparable], median: float, now: datetime) -> tuple[
     return None, None
 
 
+def _drift(sold: list[ScoredComparable], now: datetime) -> float | None:
+    """A factor below 1 that brings the median of the sold prices to today when they fall steadily with the age of
+    the sale (log-price against age, ordinary least squares, significant slope), else ``None``. Only downward: a
+    rising market stays unfollowed (a prudent estimate, as for a sudden rise)."""
+    n = len(sold)
+    if n < DRIFT_MIN_SOLD:
+        return None
+    ages = [_age_days(c, now) for c in sold]
+    if max(ages) - min(ages) < DRIFT_MIN_SPAN_DAYS:
+        return None
+    ys = [math.log(c.adjusted_price) for c in sold]
+    ma, my = sum(ages) / n, sum(ys) / n
+    sxx = sum((a - ma) ** 2 for a in ages)
+    if sxx <= 0:
+        return None
+    slope = (
+        sum((a - ma) * (y - my) for a, y in zip(ages, ys, strict=True)) / sxx
+    )  # > 0: older sales were dearer
+    if slope <= 0:
+        return None
+    resid = sum((y - my - slope * (a - ma)) ** 2 for a, y in zip(ages, ys, strict=True))
+    se = math.sqrt(max(resid, 1e-12) / (n - 2) / sxx)
+    if slope / se < DRIFT_MIN_T:
+        return None
+    # The weighted median sits at the weighted median age of the sales.
+    order = sorted(range(n), key=lambda i: ages[i])
+    half = sum(c.weight for c in sold) / 2
+    acc, centre = 0.0, ages[order[-1]]
+    for i in order:
+        acc += sold[i].weight
+        if acc >= half:
+            centre = ages[i]
+            break
+    return max(1 - DRIFT_MAX_CUT, math.exp(-slope * centre))
+
+
 def estimate_market_value(
     comparables: list[ScoredComparable],
     subject_condition: str,
@@ -261,7 +303,6 @@ def estimate_market_value(
         primary, rest = list(comparables), []
     reference = _reference(rest, family=kind == TIER_FAMILY)
     family_level = kind == TIER_FAMILY
-    n_primary = len(primary)
 
     def stats_of(group: list[ScoredComparable]) -> DistributionStats | None:
         return describe([WeightedValue(c.adjusted_price, c.weight) for c in group]) if group else None
@@ -297,15 +338,20 @@ def estimate_market_value(
     # Fresh asks below the sales: the market moved down, whatever the age of the sales (items listed before the
     # drop keep selling at the old price for weeks). The asks, discounted as usual, are then the newer evidence.
     asks_level: float | None = None
-    if sold_stats and active_stats and len(active_in) >= TREND_MIN_SIDE:
-        # The typical ask below the sales and three quarters of the asks below them (a few bargains among
-        # ordinary asks are not a falling market).
-        if active_stats.median < sold_stats.median * ASKS_BELOW_RATIO and active_stats.p75 < sold_stats.median:
-            asks_level = active_stats.median * DEFAULT_ASK_TO_SALE
-            notes.append(
-                "I prezzi richiesti recenti sono più bassi delle vendite: mercato in calo, stima allineata agli annunci "
-                "attuali."
-            )
+    # The typical ask below the sales and three quarters of the asks below them (a few bargains among ordinary asks
+    # are not a falling market).
+    if (
+        sold_stats
+        and active_stats
+        and len(active_in) >= TREND_MIN_SIDE
+        and active_stats.median < sold_stats.median * ASKS_BELOW_RATIO
+        and active_stats.p75 < sold_stats.median
+    ):
+        asks_level = active_stats.median * DEFAULT_ASK_TO_SALE
+        notes.append(
+            "I prezzi richiesti recenti sono più bassi delle vendite: mercato in calo, stima allineata agli annunci "
+            "attuali."
+        )
 
     # Enough real sales: asking prices are shown for reference but do not set the price (they
     # overstate it; measured on past sales) - unless the market is falling (above).
@@ -327,7 +373,11 @@ def estimate_market_value(
         notes.append("Non ci sono abbastanza dati per stimare con affidabilità il prezzo di mercato.")
         reason: str | None = None
         if kind in (TIER_MODEL, TIER_LINE):
-            what = f"dello stesso modello ({subject.model})" if kind == TIER_MODEL and subject else "della stessa linea"
+            what = (
+                f"dello stesso modello ({subject.model})"
+                if kind == TIER_MODEL and subject
+                else "della stessa linea"
+            )
             reason = (
                 f"Nessun confronto {what}: 0 comparabili utilizzabili"
                 if n_used == 0
@@ -337,7 +387,11 @@ def estimate_market_value(
             if reference:
                 notes.append(
                     f"Altre linee dello stesso brand: {reference['n']} annunci"
-                    + (f", mediana venduti €{reference['median_sold']:.0f}" if reference["median_sold"] else "")
+                    + (
+                        f", mediana venduti €{reference['median_sold']:.0f}"
+                        if reference["median_sold"]
+                        else ""
+                    )
                     + ". Riferimento non usato come stima."
                 )
         elif kind == TIER_FAMILY and subject is not None and not subject.category:
@@ -357,7 +411,11 @@ def estimate_market_value(
             if reference:
                 notes.append(
                     f"Altre categorie dello stesso brand: {reference['n']} annunci"
-                    + (f", mediana venduti €{reference['median_sold']:.0f}" if reference["median_sold"] else "")
+                    + (
+                        f", mediana venduti €{reference['median_sold']:.0f}"
+                        if reference["median_sold"]
+                        else ""
+                    )
                     + ". Riferimento non usato come stima."
                 )
         elif prior and prior.sample_size >= 5 and prior.has_sales:
@@ -406,6 +464,10 @@ def estimate_market_value(
         notes.append("Prezzi in calo: stima allineata ai prezzi più recenti.")
     elif trend == "rising":
         notes.append("Prezzi in aumento: stima prudente, non allineata ai rialzi recenti.")
+    elif (drift := _drift(sold_in, now)) is not None and drift < 0.99:
+        median, p25, p75, p90, max_r = (v * drift for v in (median, p25, p75, p90, max_r))
+        trend = "easing"
+        notes.append("Prezzi in lento calo: stima riportata ai prezzi di oggi.")
 
     # The segment prior never moves the median. Only the same model's own sold history widens the
     # interval of a thin estimate (it can say the spread is bigger than a few comparables show).
@@ -454,7 +516,9 @@ def estimate_market_value(
         "recency": recency_f,
         "age": age_f,
     }
-    confidence = 100 * (0.35 * sample_f + 0.20 * sold_f + 0.20 * sim_f + 0.15 * disp_f + 0.10 * recency_f) * age_f
+    confidence = (
+        100 * (0.35 * sample_f + 0.20 * sold_f + 0.20 * sim_f + 0.15 * disp_f + 0.10 * recency_f) * age_f
+    )
     if family_level:
         confidence = min(confidence, FAMILY_CONFIDENCE_CAP)
         notes.append(

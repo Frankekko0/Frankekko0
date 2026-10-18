@@ -26,6 +26,7 @@ from app.analysis.consistency import ConsistencyInput, Matrix, build_matrix
 from app.analysis.coverage import PhotoCoverage, is_analysed, photo_coverage
 from app.analysis.labels import LabelReport, build_label_report
 from app.analysis.text import TextSignals, analyze_text
+from app.domain.enums import CONDITION_LABELS_IT, Condition
 
 DOSSIER_VERSION = 1
 PASS_NAMES = {
@@ -553,7 +554,11 @@ def _signals(
 
     def own(attr: str) -> tuple[str, float | None, str]:
         a = ident.get(attr) or {}
-        return (a.get("provenance") or "inferred", a.get("confidence"), SOURCE_LABEL.get(a.get("source"), "testo"))
+        return (
+            a.get("provenance") or "inferred",
+            a.get("confidence"),
+            SOURCE_LABEL.get(a.get("source"), "testo"),
+        )
 
     if f.declared_brand:
         prov, conf, where = own("brand")
@@ -613,6 +618,11 @@ def ident_contradictions(f: DossierFacts) -> list[dict[str, Any]]:
     the identification and are listed next to the contradictions of the matrix, with no estimated impact."""
     out = []
     for c in (f.identification or {}).get("contradictions") or []:
+        field_name = IDENT_FIELD_LABELS.get(c["field"], c["field"])
+        declared, found = (
+            _contradiction_value(c["field"], c["declared"]),
+            _contradiction_value(c["field"], c["found"]),
+        )
         out.append(
             {
                 "code": f"ident_{c['field']}",
@@ -620,12 +630,31 @@ def ident_contradictions(f: DossierFacts) -> list[dict[str, Any]]:
                 "status": "discrepancy",
                 "status_label": "discrepanza",
                 "severity": c.get("severity", "medium"),
-                "detail": f"{c['field']}: il campo dice «{c['declared']}», il {c['where']} «{c['found']}»",
+                "detail": f"{field_name}: il campo dice «{declared}», il {c['where']} «{found}»",
                 "impact_eur": None,
-                "evidence": [c["declared"], c["found"]],
+                "evidence": [declared, found],
             }
         )
     return out
+
+
+# The names of the fields in the sentence the user reads (the code's own names stay in "code").
+IDENT_FIELD_LABELS = {
+    "brand": "marca",
+    "size": "taglia",
+    "color": "colore",
+    "gender": "genere",
+    "category": "categoria",
+    "condition": "condizione",
+    "model": "modello",
+}
+
+
+def _contradiction_value(field_name: str, value: str) -> str:
+    """A condition is shown by the name the marketplace gives it ("Nuovo con cartellino"), not by its code."""
+    if field_name == "condition" and value in Condition._value2member_map_:
+        return CONDITION_LABELS_IT[Condition(value)]
+    return value
 
 
 def top_reasons(f: DossierFacts, matrix: Matrix, gem: dict[str, Any]) -> list[dict[str, str]]:

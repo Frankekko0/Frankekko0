@@ -17,6 +17,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 
 
 @dataclass(frozen=True)
@@ -146,7 +147,7 @@ def cluster_prices(
         return ClusterResult([], [], outliers, False)
     order = sorted(pos, key=lambda i: values[i])
     clusters: list[list[int]] = [[order[0]]]
-    for prev, cur in zip(order, order[1:], strict=False):
+    for prev, cur in pairwise(order):
         if math.log(values[cur]) - math.log(values[prev]) > gap:
             clusters.append([])
         clusters[-1].append(cur)

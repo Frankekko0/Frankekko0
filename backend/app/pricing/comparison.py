@@ -12,15 +12,15 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from app.ingestion.normalizer import size_distance
 from app.domain.enums import CONDITION_ORDER, Condition
+from app.ingestion.normalizer import size_distance
 from app.pricing.comparables import TIER_FAMILY, TIER_LINE, TIER_MODEL, ItemProfile, ScoredComparable, tier_of
 from app.pricing.market_value import (
+    ACTIVE_FRESH_DAYS,
     REASON_ASKING,
     REASON_OTHER_LEVEL,
     REASON_OUTLIER,
     REASON_STALE_ASK,
-    ACTIVE_FRESH_DAYS,
     MarketEstimate,
 )
 
@@ -104,7 +104,7 @@ EXCLUSION_LABELS: dict[str, str] = {
 
 
 def exclusion_label(reason: str | None) -> str | None:
-    return EXCLUSION_LABELS.get(reason or "", None) if reason else None
+    return EXCLUSION_LABELS.get(reason or "") if reason else None
 
 
 def explain_comparable(subject: ItemProfile, comp: ItemProfile) -> dict[str, Any]:

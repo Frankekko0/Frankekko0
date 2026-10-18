@@ -89,6 +89,8 @@ def test_a_condition_phrase_in_the_description_is_still_read() -> None:
         # a phrase after a negation says nothing
         ("Non usurato, tenuta bene", Condition.UNKNOWN),
         ("Scarpe non da sistemare, ottime condizioni", Condition.VERY_GOOD),
+        # "no scambi" is not a negation of the condition that follows it
+        ("Taglia unica, no scambi, ottime condizioni", Condition.VERY_GOOD),
     ],
 )
 def test_two_phrases_in_the_description_are_read_with_care(text: str, expected: Condition) -> None:

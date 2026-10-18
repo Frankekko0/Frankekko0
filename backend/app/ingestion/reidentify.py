@@ -142,7 +142,7 @@ async def reidentify(
 async def _main(apply: bool, analyze: bool, limit: int | None) -> None:
     async with session_scope() as session:
         report = await reidentify(session, apply=apply, limit=limit)
-        print(json.dumps({"apply": apply, **report.as_dict()}, indent=1))  # noqa: T201 - a command-line report
+        print(json.dumps({"apply": apply, **report.as_dict()}, indent=1))
         if apply and analyze and report.changed_ids:
             from app.opportunities.pipeline import AnalysisPipeline
 
@@ -154,7 +154,9 @@ async def _main(apply: bool, analyze: bool, limit: int | None) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--apply", action="store_true", help="write the changes (default: dry run)")
     parser.add_argument("--analyze", action="store_true", help="re-run the analysis of the changed listings")
     parser.add_argument("--limit", type=int, default=None, help="stop after this many listings")
