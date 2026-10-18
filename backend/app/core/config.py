@@ -131,6 +131,9 @@ class Settings(BaseSettings):
     default_shipping_in: Decimal = Decimal("3.49")
     default_min_profit: Decimal = Decimal("10")
     default_min_roi: Decimal = Decimal("0.40")
+    # Vinted shows the last ask of a sold listing, not what the buyer paid (offers are common). Until the discount is
+    # measured on the user's own purchases, sold prices are cut by this share, flagged "assumed" wherever shown.
+    vinted_sold_haircut: float = Field(default=0.05, ge=0, le=0.30)
     default_currency: str = "EUR"
 
     # --- AI ------------------------------------------------------------------------------

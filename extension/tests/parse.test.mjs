@@ -431,3 +431,33 @@ test("the real heart's label says its state even without the pressed attribute",
   assert.ok(C.patterns.favourite_off.test(label));
   assert.ok(!C.patterns.favourite_on.test(label));
 });
+
+// ------------------------------------------------------------------ the category path and the condition label (COND-001, CAT-005)
+test("real pages: the category path and its catalogue ids are sent, the condition label as printed", async () => {
+  const active = readReal(realPage("item_active_plugins.html"), `${REAL["item_active_plugins.html"].url}?referrer=catalog`);
+  assert.equal(active.category_path[0], "Uomo");
+  assert.deepEqual(active.category_codes, ["5-men", "2050-clothing", "257-jeans", "1819-straight-fit-jeans"]);
+  const payload = await P.itemPayload(active, C);
+  assert.deepEqual(payload.category_codes, active.category_codes);
+  // "Ottime" is what vinted.it prints: the extension reads it as very_good and sends the label itself, which the
+  // server reads with the same shared configuration (backend/tests/unit/test_extraction_condition.py).
+  assert.equal(active.condition, "very_good");
+  assert.equal(payload.condition, "Ottime");
+  const sold = readReal(realPage("item_sold_plugins.html"), SOLD_URL);
+  assert.deepEqual(sold.category_codes, ["5-men", "2050-clothing", "76-tops-and-t-shirts", "5492-polo-shirts"]);
+  assert.equal((await P.itemPayload(sold, C)).condition, "Nuovo senza cartellino");
+});
+
+test("catalogue links reduce to ids and slugs, once each, never anything else", () => {
+  assert.deepEqual(
+    P.categoryCodes([
+      "/catalog/5492-polo-shirts?referrer=item-crumbs",
+      "/catalog/5492-polo-shirts/brand/4273-polo-ralph-lauren?referrer=item-crumbs",
+      "https://www.vinted.fr/catalog/257-jeans",
+      "/member/123",
+      "javascript:alert(1)",
+      "",
+    ]),
+    ["5492-polo-shirts", "257-jeans"],
+  );
+});

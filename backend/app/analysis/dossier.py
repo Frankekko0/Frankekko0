@@ -99,6 +99,20 @@ def _step(
     }
 
 
+SOURCE_LABEL = {
+    "provider_field": "campo dell'annuncio",
+    "title": "titolo",
+    "description": "descrizione",
+    "text": "testo dell'annuncio",
+    "model_keyword": "nome del modello",
+    "fuzzy": "titolo (scritto male)",
+    "image": "foto",
+    "image_label": "etichetta nelle foto",
+    "category": "categoria",
+    "model": "modello",
+}
+
+
 def _sig(
     name: str, value: Any, provenance: str, source: str, confidence: float | None = None
 ) -> dict[str, Any]:
@@ -495,7 +509,7 @@ def build_dossier(f: DossierFacts, previous: dict[str, Any] | None = None) -> di
         "not_analysable": not_analysable,
         "missing_photos": list(cov.checklist),
         "signals": signals,
-        "contradictions": [c.as_dict() for c in matrix.discrepancies],
+        "contradictions": [c.as_dict() for c in matrix.discrepancies] + ident_contradictions(f),
         "condition": condition.as_dict(),
         "labels": labels.as_dict(),
         "text": {
@@ -506,6 +520,9 @@ def build_dossier(f: DossierFacts, previous: dict[str, Any] | None = None) -> di
                 "language",
                 "available",
                 "declared_defects",
+                "defect_hits",
+                "defect_severity",
+                "lot_pieces",
                 "risk_phrases",
                 "motivated_seller",
                 "open_to_offers",
@@ -530,11 +547,28 @@ def _signals(
     gem: dict[str, Any],
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
+    # Provenance is the attribute's own (identification.Attribute): "declared" only for a field the seller filled in,
+    # "inferred" for what we read out of the title, a description or a model name, "observed" for the photos.
+    ident = f.identification or {}
+
+    def own(attr: str) -> tuple[str, float | None, str]:
+        a = ident.get(attr) or {}
+        return (a.get("provenance") or "inferred", a.get("confidence"), SOURCE_LABEL.get(a.get("source"), "testo"))
+
     if f.declared_brand:
-        out.append(_sig("brand", f.declared_brand, "declared", "titolo/campo marca"))
+        prov, conf, where = own("brand")
+        out.append(_sig("brand", f.declared_brand, prov, where, conf))
+    elif (guess := ident.get("brand_guess") or {}).get("value"):
+        out.append(
+            _sig("brand_guess", guess.get("name") or guess["value"], "inferred",
+                 SOURCE_LABEL.get(guess.get("source"), "testo"), guess.get("confidence"))
+        )  # fmt: skip
     if f.declared_size:
-        out.append(_sig("size", f.declared_size, "declared", "campo taglia"))
+        prov, conf, where = own("size")
+        out.append(_sig("size", f.declared_size, prov, where, conf))
     out.append(_sig("condition", f.declared_condition, "declared", "campo condizione"))
+    for h in text.defect_hits:
+        out.append(_sig(f"declared_defect:{h['kind']}", h["phrase"], "declared", "descrizione del venditore"))
     if labels.size_text:
         out.append(_sig("size_label", labels.size_text, "observed", "etichetta della taglia"))
     if labels.composition:
@@ -570,6 +604,27 @@ def _signals(
         out.append(_sig("possibly_undervalued", True, "inferred", "; ".join(gem["reasons"]), 0.4))
     for c in matrix.discrepancies:
         out.append(_sig(f"contradiction:{c.code}", c.detail, "inferred", "matrice di coerenza"))
+    return out
+
+
+def ident_contradictions(f: DossierFacts) -> list[dict[str, Any]]:
+    """Where the listing's own fields and its text disagree (found by the identification, before any photo): the
+    brand field against the title, the size field against "taglia" in the title, ... They lower the confidence of
+    the identification and are listed next to the contradictions of the matrix, with no estimated impact."""
+    out = []
+    for c in (f.identification or {}).get("contradictions") or []:
+        out.append(
+            {
+                "code": f"ident_{c['field']}",
+                "label": "Campi e testo dell'annuncio",
+                "status": "discrepancy",
+                "status_label": "discrepanza",
+                "severity": c.get("severity", "medium"),
+                "detail": f"{c['field']}: il campo dice «{c['declared']}», il {c['where']} «{c['found']}»",
+                "impact_eur": None,
+                "evidence": [c["declared"], c["found"]],
+            }
+        )
     return out
 
 

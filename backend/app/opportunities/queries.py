@@ -33,8 +33,11 @@ from app.db.models import (
     UserAffinity,
 )
 from app.domain.enums import FavoriteState
+from app.ingestion.catalog import load_catalog
 from app.opportunities import insights as ins
 from app.opportunities.engine import EconomicTargets
+from app.opportunities.pipeline import profile_from_row
+from app.pricing.comparison import exclusion_label, explain_comparable
 from app.profit.calculator import AcquisitionCost, CostProfile, SaleRevenue, max_buy_price, profit_for
 from app.profit.offers import build_offer_plan
 from app.schemas.common import BrandRef, CategoryRef
@@ -495,6 +498,8 @@ class OpportunityQueries:
                 .order_by(MarketComparable.included.desc(), MarketComparable.similarity.desc())
             )
         ).all()
+        catalog = await load_catalog(self.session)
+        subject_profile = profile_from_row(listing, catalog)
         comparables = [
             ComparableOut(
                 listing_id=cl.id,
@@ -513,6 +518,8 @@ class OpportunityQueries:
                 listing_date=cl.published_at,
                 sold_at=cl.sold_at,
                 image_url=img,
+                exclusion_label=exclusion_label(mc.exclusion_reason),
+                **explain_comparable(subject_profile, profile_from_row(cl, catalog)),
             )
             for mc, cl, img in comp_rows
         ]
@@ -702,8 +709,12 @@ class OpportunityQueries:
     def _smart_buy(self, o: Opportunity, listing: Listing) -> SmartBuyOut:
         t: EconomicTargets = self.econ.targets
         costs = self.econ.costs
-        max_buy = max_buy_price(o.expected_sale_price, costs, t.min_profit, t.min_roi, listing.shipping_fee)
-        good_buy = max_buy_price(o.quick_sale_price, costs, t.min_profit, t.min_roi, listing.shipping_fee)
+        # The ceiling follows the buyer protection the listing really shows, as the analysis does.
+        bp = {"listing_buyer_protection": listing.buyer_protection_fee, "listing_price": listing.price}
+        max_buy = max_buy_price(
+            o.expected_sale_price, costs, t.min_profit, t.min_roi, listing.shipping_fee, **bp
+        )
+        good_buy = max_buy_price(o.quick_sale_price, costs, t.min_profit, t.min_roi, listing.shipping_fee, **bp)
         plan = build_offer_plan(
             o.listing_price,
             max_buy,

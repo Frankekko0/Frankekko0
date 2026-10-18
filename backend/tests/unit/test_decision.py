@@ -265,7 +265,10 @@ def test_photo_evidence_reads_old_and_new_analyses() -> None:
 )
 def test_misspelled_brand_is_found_and_flagged(title: str, brand: str) -> None:
     r = IdentificationEngine().identify(ListingText(title=title))
-    assert r.brand.value == brand
+    # A misspelling is a guess (PROV-009): shown and flagged as a possible find, never the brand the comparables
+    # are filtered on.
+    assert r.brand.value is None
+    assert r.brand_guess.value == brand and r.brand_guess.provenance == "inferred"
     assert r.flags["misspelled_brand"]["brand"]
 
 

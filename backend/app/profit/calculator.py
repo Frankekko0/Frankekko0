@@ -198,29 +198,46 @@ def max_buy_price(
     listing_shipping: Decimal | None = None,
     restoration: Decimal = ZERO,
     contingency_pct: Decimal = ZERO,
+    listing_buyer_protection: Decimal | None = None,
+    listing_price: Decimal | None = None,
 ) -> Decimal | None:
     """Highest purchase price that still meets BOTH min profit and min ROI at ``sale_price``.
 
     TAC(p) = p * (1 + bp_pct) + F,  F = bp_fixed + shipping + other_acquisition + restoration
     profit >= min_profit  <=>  TAC <= NSR - min_profit
     ROI >= min_roi        <=>  TAC <= NSR / (1 + min_roi)
+
+    When the listing shows its own buyer protection (``listing_buyer_protection``, at the asking price
+    ``listing_price``), the difference to the formula at that price is kept as a constant extra at every
+    price: the ceiling then agrees with what the listing really charges, not with the default formula.
     """
     if sale_price is None:
         return None
+    extra = ZERO
+    if listing_buyer_protection is not None and listing_price is not None:
+        extra = money(listing_buyer_protection) - money(
+            profile.buyer_protection_fixed + profile.buyer_protection_pct * listing_price
+        )
     nsr = sale_revenue(sale_price, profile, contingency_pct).net
     tac_max = min(nsr - min_profit, nsr / (D(1) + min_roi))
-    fixed = money(profile.acquisition_fixed(listing_shipping)) + money(restoration)
+    fixed = money(profile.acquisition_fixed(listing_shipping)) + money(restoration) + extra
     p = (tac_max - fixed) / (D(1) + profile.buyer_protection_pct)
     if p <= 0:
         return None
     candidate = floor_money(p)
     # Guard against cent rounding of the buyer-protection fee pushing us over the limits.
     while candidate > 0:
+        bp = (
+            money(profile.buyer_protection_fixed + profile.buyer_protection_pct * candidate) + extra
+            if extra
+            else None
+        )
         r = profit_for(
             candidate,
             sale_price,
             profile,
             listing_shipping,
+            bp,
             restoration=restoration,
             contingency_pct=contingency_pct,
         )

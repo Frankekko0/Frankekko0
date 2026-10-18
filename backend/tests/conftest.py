@@ -32,6 +32,9 @@ os.environ.update(
         "SEED_DEMO_USER": "false",
         "AI_API_KEY": "",
         "JWT_SECRET": "test-secret-test-secret-test-secret-123",
+        # The assumed haircut on Vinted sold prices (default 5%) is switched off here so that the market fixtures
+        # keep their round numbers; the tests of the haircut itself set it explicitly.
+        "VINTED_SOLD_HAIRCUT": "0",
     }
 )
 

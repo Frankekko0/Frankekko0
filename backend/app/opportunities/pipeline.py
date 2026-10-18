@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import case, delete, func, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -37,9 +37,10 @@ from app.db.models import (
 )
 from app.domain.enums import AcquisitionMode, CaptureLevel, ListingStatus, Verdict
 from app.external.keys import model_key
+from app.identification.priors import counterfeit_prior
 from app.identification.taxonomy import fold
 from app.ingestion.catalog import Catalog, load_catalog
-from app.ingestion.normalizer import title_tokens
+from app.ingestion.normalizer import market_from_url, title_tokens
 from app.opportunities.analysis_record import (
     SCHEMA_VERSION,
     build_blocks,
@@ -58,6 +59,7 @@ from app.opportunities.engine import (
     run_analysis,
 )
 from app.pricing.comparables import ItemProfile
+from app.pricing.lines import line_tokens, profile_extras, same_line
 from app.pricing.evidence import (
     GATE_KEY,
     NEGOTIATION_KEY,
@@ -75,6 +77,13 @@ from app.scoring.seller import SellerProfile
 log = get_logger(__name__)
 CANDIDATE_LIMIT = 400
 REMOVED_LIMIT = 60
+# Model-first strata: the recent rows of a family are cut by recency, so a rare model would vanish behind a
+# popular one (260 recent Air Force 1 hide 12 Air Max 95). The subject's own model/line is therefore also
+# fetched by itself, beyond that cut: this many sold / on sale per model, per line.
+MODEL_SOLD_LIMIT = 80
+MODEL_ACTIVE_LIMIT = 60
+LINE_SOLD_LIMIT = 60
+LINE_ACTIVE_LIMIT = 40
 COMPARABLE_COLUMNS = (
     "listing_id",
     "comparable_listing_id",
@@ -109,19 +118,58 @@ def segment_key(brand_id: int | None, category_id: int | None, model: str | None
 
 @dataclass
 class CandidatePool:
-    """Comparable candidates shared by the subjects of one brand/category family."""
+    """Comparable candidates shared by the subjects of one brand/category family.
+
+    ``sold`` / ``active`` hold the recent rows of the family first, then (``AnalysisPipeline.add_strata``)
+    the rows of the models and lines the subjects ask for, beyond the recency cut. ``for_subject`` returns the
+    recent quota plus the subject's own model/line rows.
+    """
 
     sold: list[ItemProfile]
     active: list[ItemProfile]
     # Removed listings: never priced, used for the sold share and time online (as not sold).
     removed: list[ItemProfile] = field(default_factory=list)
+    # Models / lines whose strata were already looked up (found or not): each is fetched once per pool.
+    models_loaded: set[str] = field(default_factory=set)
+    lines_loaded: set[frozenset[str]] = field(default_factory=set)
 
-    def for_subject(self, subject_id: uuid.UUID | None) -> list[ItemProfile]:
+    def for_subject(
+        self,
+        subject_id: uuid.UUID | None,
+        model: str | None = None,
+        line: frozenset[str] | None = None,
+    ) -> list[ItemProfile]:
         half = CANDIDATE_LIMIT // 2
-        sold = [c for c in self.sold if c.id != subject_id][:half]
-        active = [c for c in self.active if c.id != subject_id][:half]
+
+        def pick(rows: list[ItemProfile], extra: int) -> list[ItemProfile]:
+            rows = [c for c in rows if c.id != subject_id]
+            out = rows[:half]
+            if (model or line) and len(rows) > half:
+                out += [c for c in rows[half:] if _is_own_line(c, model, line)][:extra]
+            return out
+
+        sold = pick(self.sold, MODEL_SOLD_LIMIT if model else LINE_SOLD_LIMIT)
+        active = pick(self.active, MODEL_ACTIVE_LIMIT if model else LINE_ACTIVE_LIMIT)
         removed = [c for c in self.removed if c.id != subject_id][:REMOVED_LIMIT]
         return [*sold, *active, *removed]
+
+
+def _line_key(subject: ItemProfile) -> frozenset[str] | None:
+    """The distinctive words of a subject without a catalog model (None when it has a model or none)."""
+    if subject.model:
+        return None
+    return line_tokens(subject.title, subject.size, subject.brand) or None
+
+
+def _longest_words(line: frozenset[str], n: int = 2) -> list[str]:
+    """The words of a line key that narrow a title search best: the longest (alphanumeric, no wildcards)."""
+    return sorted(line, key=lambda w: (-len(w), w))[:n]
+
+
+def _is_own_line(c: ItemProfile, model: str | None, line: frozenset[str] | None) -> bool:
+    if model and c.model == model:
+        return True
+    return bool(not model and line and same_line(line, line_tokens(c.title, c.size, c.brand)))
 
 
 @dataclass
@@ -154,13 +202,14 @@ def item_key(title: str) -> str:
 
 def profile_from_row(row: Any, catalog: Catalog) -> ItemProfile:
     category_slug = catalog.category_slug(row.category_id)
+    parent_slug = catalog.parent_slug(category_slug)
     return ItemProfile(
         id=row.id,
         title=row.title,
         price=row.price,
         brand=catalog.brand_slug(row.brand_id),
         category=category_slug,
-        parent_category=catalog.parent_slug(category_slug),
+        parent_category=parent_slug,
         model=row.model_name,
         condition=row.condition,
         size=row.size_normalized,
@@ -177,6 +226,8 @@ def profile_from_row(row: Any, catalog: Catalog) -> ItemProfile:
         url=row.url,
         favourite_count=row.favourite_count,
         tracked=getattr(row, "tracked_at", None) is not None,
+        market=market_from_url(row.url),
+        **profile_extras(row.title, row.gender, category_slug, parent_slug),
     )
 
 
@@ -277,10 +328,11 @@ class AnalysisPipeline:
         """Comparable candidates for one subject (see ``candidate_pool``)."""
         if brand_id is None:
             return await self._unbranded_candidates(subject, catalog, now)
-        pool = await self.candidate_pool(
-            brand_id, catalog.sibling_category_ids(subject.category), catalog, now
-        )
-        return pool.for_subject(subject.id)
+        category_ids = catalog.sibling_category_ids(subject.category)
+        pool = await self.candidate_pool(brand_id, category_ids, catalog, now)
+        line = _line_key(subject)
+        await self.add_strata(pool, brand_id, category_ids, catalog, now, {subject.model}, {line})
+        return pool.for_subject(subject.id, subject.model, line)
 
     def _candidate_columns(self) -> tuple[Any, ...]:
         return (
@@ -340,25 +392,100 @@ class AnalysisPipeline:
         removed = (await self.session.execute(removed_stmt)).all()
         return sold, active, removed
 
+    def _family_base(self, brand_id: int, category_ids: list[int] | None) -> Any:
+        base = select(*self._candidate_columns()).where(
+            Listing.duplicate_of_id.is_(None), Listing.brand_id == brand_id
+        )
+        if category_ids:
+            base = base.where(Listing.category_id.in_(category_ids))
+        return base
+
     async def candidate_pool(
         self, brand_id: int, category_ids: list[int] | None, catalog: Catalog, now: datetime
     ) -> CandidatePool:
         """Candidates shared by every subject of the same brand and category family.
 
         One extra row per half lets each subject drop itself and still keep the full quota, so
-        the result is identical to a per-subject query.
+        the result is identical to a per-subject query. Without a category there is no family: the
+        recent rows of the whole brand are not comparables of anything (an item whose category is
+        unknown is compared only through its own model or line, see ``add_strata``).
         """
-        base = select(*self._candidate_columns()).where(
-            Listing.duplicate_of_id.is_(None), Listing.brand_id == brand_id
+        if not category_ids:
+            return CandidatePool([], [], [])
+        sold, active, removed = await self._fetch_split(
+            self._family_base(brand_id, category_ids), now, CANDIDATE_LIMIT // 2 + 1
         )
-        if category_ids:
-            base = base.where(Listing.category_id.in_(category_ids))
-        sold, active, removed = await self._fetch_split(base, now, CANDIDATE_LIMIT // 2 + 1)
         return CandidatePool(
             [profile_from_row(r, catalog) for r in sold],
             [profile_from_row(r, catalog) for r in active],
             [profile_from_row(r, catalog) for r in removed],
         )
+
+    async def add_strata(
+        self,
+        pool: CandidatePool,
+        brand_id: int,
+        category_ids: list[int] | None,
+        catalog: Catalog,
+        now: datetime,
+        models: Iterable[str | None],
+        lines: Iterable[frozenset[str] | None],
+    ) -> None:
+        """Fetch the rows of the given models and lines beyond the recency cut and append them to the pool.
+
+        Only SQL on our own database (no request to the marketplace). A model is fetched once per pool, so a
+        pool shared across requests (``CapturePipeline``) pays for each model a single time; a model with no
+        rows is remembered too. Per model, the most recent ``MODEL_SOLD_LIMIT`` sold and
+        ``MODEL_ACTIVE_LIMIT`` on sale rows (a window function, so many models cost two queries); per line,
+        the rows whose title contains the line's longest words, narrowed afterwards in memory.
+        """
+        new_models = sorted({m for m in models if m and m not in pool.models_loaded})
+        new_lines = [ln for ln in {ln for ln in lines if ln and ln not in pool.lines_loaded} if ln]
+        if not new_models and not new_lines:
+            return
+        pool.models_loaded.update(new_models)
+        pool.lines_loaded.update(new_lines)
+        base = self._family_base(brand_id, category_ids)
+        since = now - timedelta(days=self.settings.comparables_window_days)
+        sold_time = func.coalesce(Listing.sold_at, Listing.status_changed_at, Listing.last_seen_at)
+        sold_rows: list[Any] = []
+        active_rows: list[Any] = []
+        if new_models:
+            for status, time_col, limit, into in (
+                (ListingStatus.SOLD.value, sold_time, MODEL_SOLD_LIMIT, sold_rows),
+                (ListingStatus.ACTIVE.value, Listing.listed_at, MODEL_ACTIVE_LIMIT, active_rows),
+            ):
+                rank = (
+                    func.row_number()
+                    .over(partition_by=Listing.model_name, order_by=(time_col.desc(), Listing.id))
+                    .label("model_rank")
+                )
+                inner = (
+                    base.where(Listing.status == status, time_col >= since, Listing.model_name.in_(new_models))
+                    .add_columns(rank)
+                    .subquery()
+                )
+                into += (await self.session.execute(select(inner).where(inner.c.model_rank <= limit))).all()
+        if new_lines:
+            words = [w for w in (_longest_words(ln) for ln in new_lines) if w]
+            if words:
+                match = or_(*[Listing.title.ilike(f"%{w}%") for ws in words for w in ws])
+                for status, time_col, limit, into in (
+                    (ListingStatus.SOLD.value, sold_time, LINE_SOLD_LIMIT, sold_rows),
+                    (ListingStatus.ACTIVE.value, Listing.listed_at, LINE_ACTIVE_LIMIT, active_rows),
+                ):
+                    stmt = (
+                        base.where(Listing.status == status, time_col >= since, match)
+                        .order_by(time_col.desc(), Listing.id)
+                        .limit(min(CANDIDATE_LIMIT, limit * len(words)))
+                    )
+                    into += (await self.session.execute(stmt)).all()
+        for rows, target in ((sold_rows, pool.sold), (active_rows, pool.active)):
+            have = {c.id for c in target}
+            for r in rows:
+                if r.id not in have:
+                    have.add(r.id)
+                    target.append(profile_from_row(r, catalog))
 
     async def _unbranded_candidates(
         self, subject: ItemProfile, catalog: Catalog, now: datetime
@@ -405,7 +532,12 @@ class AnalysisPipeline:
             by_key = {r.segment_key: r for r in rows}
         out: list[SegmentPrior | None] = []
         for keys in wanted:
-            st = next((by_key[k] for k in keys if k in by_key), None)
+            # The model's own segment only when it has enough listings to say something (the first existing key
+            # used to win whatever its size, so the answer depended on which segments happened to exist).
+            st = next(
+                (by_key[k] for k in keys if k in by_key and (k == keys[-1] or by_key[k].sample_size >= 5)),
+                None,
+            )
             out.append(
                 SegmentPrior(
                     median_price=float(st.median_price),
@@ -416,6 +548,7 @@ class AnalysisPipeline:
                     sell_through_rate=float(st.sell_through_rate),
                     avg_days_to_sale=float(st.avg_days_to_sale) if st.avg_days_to_sale else None,
                     level="model" if st.model_name else "brand_category",
+                    sold_count=st.sold_count,
                 )
                 if st is not None
                 else None
@@ -482,6 +615,10 @@ class AnalysisPipeline:
         for ref in refs:
             refs_by.setdefault((ref.brand_slug, fold(ref.model_name or "")), []).append(ref)
         # Subjects of the same model and category share the same evidence (read-only).
+        # Until the negotiation discount is measured on the user's own purchases, the configured haircut stands in
+        # for it (flagged as assumed): a Vinted "sold" price is the last ask seen, not what the buyer paid.
+        assumed = discount is None and self.settings.vinted_sold_haircut > 0
+        effective = self.settings.vinted_sold_haircut if assumed else discount
         out: list[PriceEvidence] = []
         shared: dict[tuple[Any, ...], PriceEvidence] = {}
         for s in subjects:
@@ -492,10 +629,11 @@ class AnalysisPipeline:
                     s,
                     own_by.get(key, []),
                     refs_by.get(key, []),
-                    negotiation_discount=discount,
+                    negotiation_discount=effective,
                     gate=gate,
                     parent_of=catalog.parent_slug,
                 )
+                shared[cache_key].discount_assumed = assumed
             out.append(shared[cache_key])
         return out
 
@@ -657,7 +795,7 @@ class AnalysisPipeline:
             listing_age_hours=max(0.0, (now - published).total_seconds() / 3600) if published else None,
             shipping_fee=listing.shipping_fee,
             brand_name=brand.name if brand else None,
-            brand_counterfeit_risk=brand.counterfeit_risk if brand else 0.1,
+            brand_counterfeit_risk=counterfeit_prior(brand.counterfeit_risk if brand else None, ident),
             category_baseline_days=category.baseline_days if category else 14,
             identification=ident,
             identification_confidence=listing.identification_confidence or 0,
@@ -728,7 +866,22 @@ class AnalysisPipeline:
         calibration, gate, discount = await self.evidence_state()
         evidence = await self.price_evidence([s.profile for s in subjects], catalog, gate, discount)
 
+        # One pool per brand/category family, plus the strata of the models and lines the batch asks for.
         pools: dict[tuple[int, tuple[int, ...]], CandidatePool] = {}
+        wanted: dict[tuple[int, tuple[int, ...]], tuple[set[str], set[frozenset[str]]]] = {}
+        for listing, subject in zip(listings, subjects, strict=True):
+            if listing.brand_id is None:
+                continue
+            cat_ids = catalog.sibling_category_ids(subject.profile.category) or []
+            models, lines = wanted.setdefault((listing.brand_id, tuple(sorted(cat_ids))), (set(), set()))
+            if subject.profile.model:
+                models.add(subject.profile.model)
+            elif (line := _line_key(subject.profile)) is not None:
+                lines.add(line)
+        for key, (models, lines) in wanted.items():
+            pool = await self.candidate_pool(key[0], list(key[1]), catalog, now)
+            await self.add_strata(pool, key[0], list(key[1]), catalog, now, models, lines)
+            pools[key] = pool
         cost, targets = default_cost_profile(self.settings), default_targets(self.settings)
         results: list[tuple[Listing, AnalysisResult]] = []
         for listing, subject, prior, ev in zip(listings, subjects, priors, evidence, strict=True):
@@ -736,10 +889,9 @@ class AnalysisPipeline:
                 cands = await self._unbranded_candidates(subject.profile, catalog, now)
             else:
                 cat_ids = catalog.sibling_category_ids(subject.profile.category) or []
-                key = (listing.brand_id, tuple(sorted(cat_ids)))
-                if key not in pools:
-                    pools[key] = await self.candidate_pool(listing.brand_id, cat_ids, catalog, now)
-                cands = pools[key].for_subject(listing.id)
+                cands = pools[(listing.brand_id, tuple(sorted(cat_ids)))].for_subject(
+                    listing.id, subject.profile.model, _line_key(subject.profile)
+                )
             results.append(
                 (
                     listing,

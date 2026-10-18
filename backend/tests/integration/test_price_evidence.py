@@ -506,6 +506,7 @@ async def test_analysis_provenance_end_to_end(session, make_listing) -> None:
         "n",
         "by_source",
         "negotiation_discount",
+        "negotiation_discount_assumed",
         "calibrated",
         "prior",
         "label",

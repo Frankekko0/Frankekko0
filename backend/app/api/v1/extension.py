@@ -32,6 +32,7 @@ from app.core.security import hash_api_key, new_api_key
 from app.db.models import ApiKey, Listing, Opportunity, SystemState
 from app.domain.enums import AcquisitionMode, CaptureLevel
 from app.ingestion.catalog import load_catalog
+from app.ingestion.normalizer import market_currency, market_from_url
 from app.market.model_stats import lookup_stats
 from app.media.archive import photo_state, photos_wanted, register_upload
 from app.schemas.extension import (
@@ -205,7 +206,12 @@ async def _after_capture(vision_ids: list[str]) -> None:
 
 
 def _vinted_only(items: list[Any]) -> list[Any]:
-    return [i for i in items if listing_identity(str(i.url))[0] == "vinted"]
+    """Vinted cards in euro: a card from a market with another currency (vinted.pl, vinted.co.uk...) is skipped."""
+    return [
+        i
+        for i in items
+        if listing_identity(str(i.url))[0] == "vinted" and market_currency(market_from_url(str(i.url))) == "EUR"
+    ]
 
 
 @router.post(

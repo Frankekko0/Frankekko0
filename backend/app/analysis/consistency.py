@@ -15,9 +15,12 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+from rapidfuzz import fuzz
+
 from app.analysis.condition import ConditionReport
 from app.analysis.labels import LabelReport, materials_in
 from app.analysis.text import TextSignals, analyze_text
+from app.identification.brands import same_brand, squash
 from app.identification.taxonomy import fold
 from app.ingestion.normalizer import normalize_color, normalize_size, size_distance
 
@@ -31,6 +34,7 @@ IMPACT = {
     "material_value_driver": Decimal("0.25"),
     "material_other": Decimal("0.08"),
     "brand_contradicted": Decimal("0.50"),
+    "brand_unconfirmed": Decimal("0.25"),
     "title_description_size": Decimal("0.08"),
     "title_description_color": Decimal("0.05"),
     "color": Decimal("0.05"),
@@ -57,6 +61,8 @@ TOPS_CHEST_FLAT = {
     "XXL": (61, 65),
 }
 CLAIM_FIELDS = ("tags", "box", "receipt")
+# Fabrics that are one family for the label: a "100% cotton" label does not contradict "denim".
+MATERIAL_FAMILY = {"denim": "cotton"}
 
 
 @dataclass
@@ -224,16 +230,42 @@ def check_brand(i: ConsistencyInput) -> Check:
             f"Nessuna marca dichiarata ma da {s} si legge «{t}»: possibile occasione nascosta, da verificare.",
             None, [f"{s}: {t}"],
         )  # fmt: skip
-    declared = fold(i.declared_brand)
-    bad = [(s, t) for s, t in seen if fold(t) not in declared and declared not in fold(t)]
+    # Both sides are reduced to the brand they name: "LEVIS" and "Levi Strauss & Co." are Levi's, "H & M" is H&M.
+    bad: list[tuple[str, str, bool | None]] = []
+    for s, t in seen:
+        same = same_brand(i.declared_brand, t)
+        if same is True:
+            continue
+        if same is None and _close(i.declared_brand, t):
+            continue  # neither names a catalogue brand but they read alike (a brand we do not know, spelt oddly)
+        bad.append((s, t, same))
     if not bad:
         return _ok("brand", label, "marca coerente con " + ", ".join(s for s, _ in seen))
-    s, t = bad[0]
+    s, t, same = bad[0]
+    # What the label says is read by OCR or a model, which make mistakes: a brand contradiction is "high" only
+    # when two sources agree on it or the reading is certain; one probable reading is "medium" until confirmed.
+    firm = same is False and (len(bad) >= 2 or _certainty(i, s) == "certain")
+    note = "" if same is False else " (marca letta non riconosciuta nel catalogo)"
     return Check(
-        "brand", label, "discrepancy", "high",
-        f"Dichiarato «{i.declared_brand}», ma da {s} si legge «{t}».",
-        _eur(i.price, IMPACT["brand_contradicted"]), [f"{s}: {t}"],
+        "brand", label, "discrepancy", "high" if firm else "medium",
+        f"Dichiarato «{i.declared_brand}», ma da {s} si legge «{t}»{note}.",
+        _eur(i.price, IMPACT["brand_contradicted"] if firm else IMPACT["brand_unconfirmed"]),
+        [f"{s}: {t}"],
     )  # fmt: skip
+
+
+def _close(a: str, b: str) -> bool:
+    x, y = squash(a).replace(" ", ""), squash(b).replace(" ", "")
+    return bool(x and y) and (x in y or y in x or fuzz.ratio(x, y) >= 85)
+
+
+def _certainty(i: ConsistencyInput, source: str) -> str | None:
+    """How sure the reading of ``etichetta`` / ``logo`` / ``foto`` is: the model's own word, 'probable' for OCR."""
+    if source == "etichetta":
+        return next((s.certainty for s in i.labels.states if s.type == "brand_label" and s.certainty), None)
+    key = "logo" if source == "logo" else "brand"
+    f = (i.vision or {}).get(key)
+    return f.get("certainty") if isinstance(f, dict) else None
 
 
 def check_size(i: ConsistencyInput) -> Check:
@@ -277,7 +309,10 @@ def check_size(i: ConsistencyInput) -> Check:
 
 def check_material(i: ConsistencyInput) -> Check:
     label = "Materiale: dichiarato ed etichetta"
-    declared = set(materials_in(i.declared_material or "")) | set(i.text.materials) | set(i.text.composition)
+    declared = {
+        MATERIAL_FAMILY.get(m, m)
+        for m in (*materials_in(i.declared_material or ""), *i.text.materials, *i.text.composition)
+    }
     if not i.labels.composition:
         why = (
             "composizione non leggibile sull'etichetta"
@@ -287,20 +322,24 @@ def check_material(i: ConsistencyInput) -> Check:
         return _no("material", label, why)
     if not declared:
         return _ok("material", label, "nessun materiale dichiarato da confrontare")
-    on_label = set(i.labels.composition)
+    on_label = {MATERIAL_FAMILY.get(m, m) for m in i.labels.composition}
     claimed_missing = declared - on_label
     value_missing = claimed_missing & VALUE_MATERIALS
     # A claim of 100% X with other fibres on the label is also a contradiction.
     declared_pure = [
-        m for m, pct in i.text.composition.items() if pct == 100 and i.labels.composition.get(m, 0) < 100
+        m
+        for m, pct in i.text.composition.items()
+        if pct == 100 and i.labels.composition.get(m, 0) < 100 and MATERIAL_FAMILY.get(m, m) not in on_label
     ]
     if not claimed_missing and not declared_pure:
         return _ok("material", label, "composizione coerente con l'etichetta")
     shown = ", ".join(f"{p}% {m}" for m, p in i.labels.composition.items())
     parts = [f"dichiarato {', '.join(sorted(declared))}", f"etichetta {shown}"]
     big = bool(value_missing) or bool(declared_pure)
+    # The composition on the label is read by OCR or a model: "high" only when that reading is certain.
+    certain = next((s.certainty for s in i.labels.states if s.type == "composition"), None) == "certain"
     return Check(
-        "material", label, "discrepancy", "high" if big else "medium", "; ".join(parts),
+        "material", label, "discrepancy", "high" if big and certain else "medium", "; ".join(parts),
         _eur(i.price, IMPACT["material_value_driver"] if big else IMPACT["material_other"]), parts,
     )  # fmt: skip
 

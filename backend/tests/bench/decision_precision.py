@@ -87,6 +87,14 @@ from app.pricing.market_value import SegmentPrior  # noqa: E402
 from app.profit.calculator import CostProfile, profit_for  # noqa: E402
 from app.scoring.seller import SellerProfile  # noqa: E402
 
+try:  # the extraction of audience / variant exists only in the code after the pricing fixes
+    from app.pricing.lines import profile_extras as _profile_extras  # noqa: E402
+except ImportError:  # the baseline checkout
+
+    def _profile_extras(title: str, gender: str | None, category: str | None, parent: str | None) -> dict[str, Any]:
+        return {}
+
+
 LABEL = "BENCHMARK SINTETICO (mercato simulato, non dati reali)"
 NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 DAYS = 330  # simulated history
@@ -257,6 +265,7 @@ def build_world(rng: random.Random, bargain: float) -> list[tuple[ItemProfile, T
                         sold_at=sold_at,
                         last_seen_at=seen,
                         removed_at=removed_at,
+                        **_profile_extras(title, gender, ln_.category, ln_.parent),
                     ),
                     Truth(f"{ln_.label}|{ln_.audience}", ln_.group, true, ln_.model),
                 )
@@ -295,20 +304,30 @@ def pool_asof(subject: ItemProfile, t: datetime, family: list[ItemProfile]) -> t
         reverse=True,
     )
     rem = sorted([x for x in fam if x.status == "removed" and x.removed_at >= since], key=lambda x: x.removed_at, reverse=True)  # type: ignore[operator,arg-type,return-value]
-    # model-first strata of the code under test (absent in the baseline: 0)
+    # model-first / line strata of the code under test (absent in the baseline: 0)
     m_sold, m_act = getattr(P, "MODEL_SOLD_LIMIT", 0), getattr(P, "MODEL_ACTIVE_LIMIT", 0)
+    l_sold, l_act = getattr(P, "LINE_SOLD_LIMIT", 0), getattr(P, "LINE_ACTIVE_LIMIT", 0)
+    line = getattr(P, "_line_key", lambda _s: None)(subject)
     ms: list[ItemProfile] = []
     ma: list[ItemProfile] = []
     if (m_sold or m_act) and subject.model:
         ms = [x for x in sold if x.model == subject.model][:m_sold]
         ma = [x for x in act if x.model == subject.model][:m_act]
+    elif (l_sold or l_act) and line:
+        ms = [x for x in sold if P._is_own_line(x, None, line)][:l_sold]
+        ma = [x for x in act if P._is_own_line(x, None, line)][:l_act]
     pool = P.CandidatePool(
         _dedupe([*sold[: limit + 1], *ms]),
         _dedupe([*act[: limit + 1], *ma]),
         rem[: P.REMOVED_LIMIT + 1],
     )
     params = inspect.signature(pool.for_subject).parameters
-    cands = pool.for_subject(subject.id, subject.model) if "model" in params else pool.for_subject(subject.id)
+    if "line" in params:
+        cands = pool.for_subject(subject.id, subject.model, line)
+    elif "model" in params:
+        cands = pool.for_subject(subject.id, subject.model)
+    else:
+        cands = pool.for_subject(subject.id)
     return cands, fam
 
 
@@ -343,6 +362,7 @@ def prior_asof(subject: ItemProfile, fam: list[ItemProfile], t: datetime) -> Seg
         def q(v: list[float], f: float) -> float:
             return sorted(v)[min(len(v) - 1, int(f * (len(v) - 1) + 0.5))]
 
+        extra = {"sold_count": len(sold)} if "sold_count" in SegmentPrior.__dataclass_fields__ else {}
         return SegmentPrior(
             median_price=statistics.median(base) * k,
             p25_price=q(base, 0.25) * k,
@@ -350,6 +370,7 @@ def prior_asof(subject: ItemProfile, fam: list[ItemProfile], t: datetime) -> Seg
             sample_size=len(rs),
             sell_through_rate=len(sold) / len(rs),
             level=level,
+            **extra,
         )
 
     if subject.model:
@@ -379,7 +400,16 @@ def subject_ctx(p: ItemProfile, vision: dict[str, Any] | None) -> SubjectContext
 
 
 # ------------------------------------------------------------------------------- the run
-def run_seed(seed: int, per_group: int, bargain: float, vision: bool) -> list[dict[str, Any]]:
+def default_haircut() -> float | None:
+    """The assumed haircut on Vinted sold prices of the code under test (None in the baseline: it has none)."""
+    from app.core.config import get_settings
+
+    return getattr(get_settings(), "vinted_sold_haircut", None)
+
+
+def run_seed(
+    seed: int, per_group: int, bargain: float, vision: bool, haircut: float | None = None
+) -> list[dict[str, Any]]:
     rng = random.Random(seed)
     world = build_world(rng, bargain)
     truth_of = {x.id: t for x, t in world}
@@ -417,7 +447,7 @@ def run_seed(seed: int, per_group: int, bargain: float, vision: bool) -> list[di
             costs,
             targets,
             prior=prior_asof(subj, fam, at),
-            evidence=PriceEvidence(),
+            evidence=PriceEvidence(negotiation_discount=haircut or None),
         )
         realised = round(t.true * (1 - NEG / 2), 2)
         truth_profit = float(profit_for(subj.price, D(str(realised)), costs, D("3.49")).net_profit)
@@ -441,6 +471,12 @@ def run_seed(seed: int, per_group: int, bargain: float, vision: bool) -> list[di
                 "n_same_model": sum(1 for c in used if subj.model and c.item.model == subj.model),
                 "n_same_line": n_same_line,
                 "model_known": subj.model is not None,
+                "condition": subj.condition,
+                "size": subj.size,
+                "days_before_end": round((NOW - x.published_at).total_seconds() / 86400, 1),  # type: ignore[operator]
+                "tier": r.market.tier,
+                "mixed": r.market.mixed,
+                "trend": r.market.trend,
                 "conf": r.confidence.score,
                 "mkt_conf": r.market.confidence,
                 "quality": r.data_quality,
@@ -532,18 +568,31 @@ def main() -> None:
     ap.add_argument("--per-group", type=int, default=120, help="subjects per group per seed")
     ap.add_argument("--bargain", type=float, default=0.12)
     ap.add_argument("--no-vision", action="store_true", help="no photo analysis (STRONG BUY unreachable)")
+    ap.add_argument(
+        "--haircut",
+        default="auto",
+        help="share cut from Vinted sold prices (the last ask seen is not what was paid): 'auto' = the code's "
+        "default (none in the baseline), or a number such as 0 / 0.05 / 0.10",
+    )
     ap.add_argument("--out", help="write the JSON report here")
     ap.add_argument("--rows", action="store_true", help="include every row in the JSON")
     args = ap.parse_args()
     seeds = [int(s) for s in args.seeds.split(",")]
+    haircut = default_haircut() if args.haircut == "auto" else float(args.haircut)
     t0 = time.time()
     rows: list[dict[str, Any]] = []
     for s in seeds:
-        rows += run_seed(s, args.per_group, args.bargain, not args.no_vision)
+        rows += run_seed(s, args.per_group, args.bargain, not args.no_vision, haircut)
     res: dict[str, Any] = {
         "label": LABEL,
         "synthetic": True,
-        "args": {"seeds": seeds, "per_group": args.per_group, "bargain": args.bargain, "vision": not args.no_vision},
+        "args": {
+            "seeds": seeds,
+            "per_group": args.per_group,
+            "bargain": args.bargain,
+            "vision": not args.no_vision,
+            "haircut": haircut,
+        },
         "code": git_info(),
         "constants": {
             "CANDIDATE_LIMIT": P.CANDIDATE_LIMIT,

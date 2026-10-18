@@ -15,9 +15,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, StringConstraints, field_validator
 
 from app.domain.enums import CaptureLevel, ListingStatus
 
@@ -50,6 +50,8 @@ class ProviderListing(BaseModel):
     brand: str | None = None
     category: str | None = None
     subcategory: str | None = None
+    # The marketplace's category entries as catalogue ids and slugs ("5492-polo-shirts"): language-free.
+    category_codes: list[str] = Field(default_factory=list)
     size: str | None = None
     condition: str | None = None
     color: str | None = None
@@ -146,6 +148,10 @@ class ManualListingInput(BaseModel):
     view_count: int | None = Field(default=None, ge=0)
     material: str | None = Field(default=None, max_length=120)
     category_path: str | None = Field(default=None, max_length=200)
+    # Catalogue links of the category path as "id-slug" ("5492-polo-shirts"): the same on every domain.
+    category_codes: list[Annotated[str, StringConstraints(pattern=r"^\d{1,6}-[a-z0-9][a-z0-9-]{0,80}$")]] = Field(
+        default_factory=list, max_length=12
+    )
     published_at: datetime | None = None
     published_at_kind: Literal["exact", "relative", "reported"] | None = None
     status: Literal["active", "reserved", "sold", "removed"] = "active"

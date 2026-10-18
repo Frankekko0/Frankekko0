@@ -28,7 +28,8 @@ from typing import Any
 from app.acquisition.embedded import find_item, find_plugins, gallery, pick, profile_photo_urls
 from app.core.config import get_settings
 from app.domain.enums import CaptureLevel, ListingStatus
-from app.identification.taxonomy import fold
+from app.identification.taxonomy import catalog_code, fold
+from app.ingestion.normalizer import market_country, market_from_url
 from app.marketplace.base import ProviderImage, ProviderListing, ProviderSeller
 
 DEFAULT_CONFIG = Path(__file__).with_name("vinted_parser.json")
@@ -120,6 +121,7 @@ DEFAULT_ITEM_DOM: dict[str, Any] = {
     "status_testids": ["item-status"],
     "summary_testids": ["item-page-summary-plugin"],
     "exclude_testid_prefixes": ["product-item-id-"],
+    "breadcrumb_testids": ["breadcrumb"],
     "zone_tags": ["aside"],
     "zone_id_prefixes": ["sidebar", "S:"],
     "badge_max_length": 40,
@@ -240,6 +242,7 @@ class _Frame:
     zone_start: int | None = None
     capture: str | None = None
     buf: list[str] | None = None
+    href: str | None = None
 
 
 class _Collector(HTMLParser):
@@ -282,6 +285,8 @@ class _Collector(HTMLParser):
         self.favourites: str | None = None
         self.total_price: str | None = None
         self.status_texts: list[str] = []
+        # The item's category path as (name, link) pairs, from its breadcrumb links.
+        self.crumbs: list[tuple[str, str]] = []
         self._stack: list[str] = []
         self._frames: list[_Frame] = []
         self._capturing: list[_Frame] = []
@@ -296,6 +301,7 @@ class _Collector(HTMLParser):
         self._status_ids = frozenset(dom["status_testids"])
         self._summary_ids = frozenset(dom["summary_testids"])
         self._exclude_prefixes = tuple(dom["exclude_testid_prefixes"])
+        self._crumb_ids = frozenset(dom["breadcrumb_testids"])
         self._zone_tags = frozenset(dom["zone_tags"])
         self._zone_ids = tuple(dom["zone_id_prefixes"])
         self._badge_max = int(dom["badge_max_length"])
@@ -338,6 +344,8 @@ class _Collector(HTMLParser):
             self.total_price = text
         elif frame.capture == "status" and text and len(text) <= self._badge_max:
             self.status_texts.append(text)
+        elif frame.capture == "crumb" and text and len(self.crumbs) < 8:
+            self.crumbs.append((text[:80], frame.href or ""))
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         a = {k: (v or "") for k, v in attrs}
@@ -352,6 +360,8 @@ class _Collector(HTMLParser):
             frame.zone_start = len(self.texts)
         if testid and not excluded:
             self._item_element(testid, a, frame)
+        if tag == "a" and testid in self._crumb_ids and "/catalog/" in a.get("href", ""):
+            frame.capture, frame.buf, frame.href = "crumb", [], a["href"]
         if tag == "script":
             self._script_kind = "jsonld" if "ld+json" in a.get("type", "") else "script"
             self._buf = []
@@ -470,6 +480,8 @@ class ParsedItem:
     color: str | None = None
     material: str | None = None
     category_path: list[str] = field(default_factory=list)
+    # The same path as catalogue ids and slugs ("5492-polo-shirts"), language-free.
+    category_codes: list[str] = field(default_factory=list)
     favourite_count: int | None = None
     view_count: int | None = None
     published_at: datetime | None = None
@@ -518,10 +530,12 @@ class ParsedItem:
             currency=self.currency,
             brand=self.brand,
             category=" > ".join(self.category_path) if self.category_path else None,
+            category_codes=self.category_codes,
             size=self.size,
             condition=self.condition_label or self.condition,
             color=self.color,
             material=self.material,
+            country=market_country(market_from_url(self.url)),
             images=[ProviderImage(url=u) for u in self.images[:20]],
             seller=seller,
             published_at=self.published_at,
@@ -550,6 +564,17 @@ def _protection_fee(total: Decimal, price: Decimal) -> Decimal | None:
         if Decimal("0") < diff <= price * Decimal("0.2") + Decimal("5")
         else None
     )
+
+
+def category_codes(hrefs: list[str]) -> list[str]:
+    """``["/catalog/5-men?referrer=...", "/catalog/5492-polo-shirts/brand/4273-polo-ralph-lauren"]`` ->
+    ``["5-men", "5492-polo-shirts"]``: the category part of each link, once each, in path order."""
+    out: list[str] = []
+    for href in hrefs:
+        parsed = catalog_code(href)
+        if parsed and f"{parsed[0]}-{parsed[1]}" not in out:
+            out.append(f"{parsed[0]}-{parsed[1]}")
+    return out[:12]
 
 
 def _first(meta: dict[str, list[str]], key: str) -> str | None:
@@ -649,7 +674,8 @@ def parse_item_html(html: str, url: str, now: datetime | None = None) -> ParsedI
     item.material = pairs.get("material") or (product or {}).get("material")
     if item.material is None and (mat := emb("material")):
         item.material = _unescape_json_string(mat)
-    item.category_path = _breadcrumbs(c.jsonld)
+    item.category_path = _breadcrumbs(c.jsonld) or [name for name, _ in c.crumbs][:6]
+    item.category_codes = category_codes([href for _, href in c.crumbs])
 
     # Demand signals.
     # Favourites: the item object, else the item's favourites section, else the label pair

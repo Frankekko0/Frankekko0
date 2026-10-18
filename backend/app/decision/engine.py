@@ -103,6 +103,13 @@ class DecisionConfig:
     brand_at_risk: float = 0.3
     high_risk: int = 75
     high_seller_risk: int = 70  # a scam-risk seller: no purchase whatever the margin
+    # BUY needs real evidence of the item's own price, not only a margin that looks good: at least this many
+    # comparables of the same model/line, this many of them concluded sales, and this market confidence.
+    # Below it the best verdict is NEGOTIATE (offer lower), never BUY: a handful of comparables, or of
+    # asking prices nobody paid, can be far from what the item sells for (median error 10% at n=3, 5% at n>=8).
+    buy_min_comparables: int = 5
+    buy_min_sold_comparables: int = 3
+    buy_min_market_confidence: int = 50
 
 
 DEFAULT_CONFIG = DecisionConfig()
@@ -157,6 +164,20 @@ class DecisionInput:
     profit_mean: float | None = None
     profit_p10: float | None = None
     seller_risk_score: int = 0
+    # What the market price rests on (None: not known, as for older callers - the evidence floor is then not
+    # checked): the tier of the comparables ("model" | "line" | "family" = brand and category only), how many of
+    # them are concluded sales, whether they sit on more than one price level, and the direction of the trend.
+    comparable_tier: str | None = None
+    sold_comparables: int | None = None
+    market_mixed: bool = False
+    market_trend: str | None = None
+    # The seller's profile was read (a search card has none: unverified, which is not the same as risky).
+    seller_known: bool = True
+    # What the seller's own text admits ("declared"): the worst severity (minor | moderate | severe | None), a few
+    # phrases for the warning, and how many pieces the text says are sold together (None: one item).
+    declared_defect_severity: str | None = None
+    declared_defects: tuple[str, ...] = ()
+    lot_pieces: int | None = None
 
 
 @dataclass(frozen=True)
@@ -300,7 +321,22 @@ def strong_buy_requirements(inp: DecisionInput, cfg: DecisionConfig = DEFAULT_CO
             and inp.profit_mean > 0,
         ),
         Requirement("available", "Annuncio disponibile", inp.status == "active"),
+        Requirement(
+            "no_declared_defects",
+            "Nessun difetto dichiarato nel testo (oltre a segni lievi)",
+            inp.declared_defect_severity not in ("moderate", "severe"),
+        ),
+        Requirement("single_item", "Articolo singolo (non un lotto)", not inp.lot_pieces),
     ]
+
+
+def _enough_evidence(inp: DecisionInput, cfg: DecisionConfig = DEFAULT_CONFIG) -> bool:
+    """The price of the item's own model/line rests on enough comparables, sales and confidence to buy on."""
+    return (
+        inp.comparables_used >= cfg.buy_min_comparables
+        and (inp.sold_comparables or 0) >= cfg.buy_min_sold_comparables
+        and inp.market_confidence >= cfg.buy_min_market_confidence
+    )
 
 
 def _meets_targets(inp: DecisionInput) -> bool:
@@ -409,6 +445,35 @@ def decide(inp: DecisionInput, cfg: DecisionConfig = DEFAULT_CONFIG) -> Decision
             inp.risk_score >= cfg.high_risk,
         ),
         (
+            "no_same_model_comparables",
+            "Nessun confronto dello stesso modello o linea: il prezzo di mercato è solo a livello di "
+            "brand e categoria, non basta per comprare",
+            DecisionVerdict.WATCHLIST,
+            inp.comparable_tier == "family",
+        ),
+        (
+            "unstable_market",
+            "Prezzi di mercato su livelli diversi o in calo: non basta per comprare",
+            DecisionVerdict.WATCHLIST,
+            inp.market_mixed or inp.market_trend == "falling",
+        ),
+        (
+            "thin_evidence",
+            f"Confronti troppo pochi per comprare: servono almeno {cfg.buy_min_comparables} annunci dello "
+            f"stesso modello, {cfg.buy_min_sold_comparables} venduti, e confidenza di mercato "
+            f"{cfg.buy_min_market_confidence} (qui {inp.comparables_used} annunci, "
+            f"{inp.sold_comparables if inp.sold_comparables is not None else 0} venduti, "
+            f"confidenza {inp.market_confidence})",
+            DecisionVerdict.NEGOTIATE,
+            inp.comparable_tier in ("model", "line") and not _enough_evidence(inp, cfg),
+        ),
+        (
+            "seller_unverified",
+            "Venditore non verificato: apri l'annuncio per leggere profilo e recensioni prima di decidere",
+            DecisionVerdict.WATCHLIST,
+            not inp.seller_known,
+        ),
+        (
             "authenticity_unproven",
             "Marca spesso contraffatta senza prove sufficienti di autenticità: chiedi la foto dell'etichetta",
             DecisionVerdict.WATCHLIST,
@@ -457,6 +522,16 @@ def decide(inp: DecisionInput, cfg: DecisionConfig = DEFAULT_CONFIG) -> Decision
     if inp.condition_downgraded:
         warnings.append(
             "Dalle foto le condizioni risultano peggiori di quelle dichiarate: prezzi stimati sulle foto"
+        )
+    if inp.declared_defect_severity in ("moderate", "severe"):
+        warnings.append(
+            "Il venditore dichiara difetti ("
+            + "; ".join(inp.declared_defects[:3])
+            + "): prezzi stimati con condizioni peggiori e ripristino da quantificare"
+        )
+    if inp.lot_pieces:
+        warnings.append(
+            f"Il testo parla di {inp.lot_pieces} pezzi venduti insieme: il prezzo non è confrontabile con articoli singoli"
         )
     if inp.data_quality == "limited":
         warnings.append(f"Stima indicativa: basata su {inp.comparables_used} comparabili")

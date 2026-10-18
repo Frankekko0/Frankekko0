@@ -18,7 +18,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.agent.guardrails import injection_suspected
+from app.analysis.defects import extract_defects
 from app.analysis.labels import materials_in, parse_composition
+from app.analysis.lots import lot_pieces
 from app.identification.taxonomy import fold
 from app.ingestion.normalizer import normalize_color, normalize_size
 
@@ -44,34 +46,11 @@ _STOPWORDS = {
     "es": ("el", "los", "las", "y", "con", "muy", "para", "es", "una", "un", "sin", "usado"),
 }
 
-_DEFECTS = (
-    "macchia", "macchie", "buco", "buchi", "strappo", "difetto", "difetti", "pilling", "bolle", "bollicine",
-    "usura", "usurato", "scolorit", "sbiadit", "filo tirato", "fili tirati", "scucit", "rotto", "alone", "aloni",
-    "stain", "hole", "torn", "tear", "defect", "flaw", "faded", "fading", "worn out", "snag", "scuff",
-    "scratch", "damaged", "tache", "trou", "dechir", "defaut", "bouloch", "delave", "decolor", "usure",
-    "abime", "accroc", "fleck", "loch", "riss", "mangel", "defekt", "knotchen", "verblass", "abgenutzt",
-    "beschadigt", "kratzer", "mancha", "agujero", "defecto", "bolitas", "desgaste", "descolorid", "danado",
-)  # fmt: skip
 _NO_DEFECT = (
     "senza difetti", "nessun difetto", "privo di difetti", "nessuna macchia", "perfette condizioni",
     "no defects", "without defects", "no flaws", "no stains", "no holes", "sans defaut", "aucun defaut",
     "sans tache", "keine mangel", "ohne mangel", "keine flecken", "sin defectos", "sin manchas",
 )  # fmt: skip
-_NEGATIONS = (
-    "senza",
-    "nessun",
-    "nessuna",
-    "privo",
-    "no ",
-    "sans",
-    "aucun",
-    "ohne",
-    "kein",
-    "sin ",
-    "without",
-    "non ",
-)
-
 _RISK_PHRASES: list[tuple[str, str, re.Pattern[str]]] = [
     (
         "off_platform_contact",
@@ -220,14 +199,25 @@ _TAGS = (
     "tag attaccato",
     "etichetta attaccata",
 )
-_PAID = re.compile(
-    r"(?:pagato|acquistato a|comprato a|paid|bought for|purchased for|retail|prezzo originale|original price|"
-    r"paye|achete|prix d origine|gekauft fur|bezahlt|neupreis|pague|compre)\D{0,12}(\d{1,5}(?:[.,]\d{1,2})?)"
+# The price the seller says was paid: a currency next to the figure, found right after a "bought/paid" cue
+# ("Acquistata nel 2022 a 150 euro"), or a plain figure right after a "list price" cue ("retail 300").
+_PAID_CUE = re.compile(
+    r"\b(?:pagat[oaie]|acquistat[oaie]|comprat[oaie]|costav[ao]|costat[oaie]|paid|bought(?: for)?|"
+    r"purchased(?: for)?|paye|achete|achetee|gekauft|bezahlt|pague|compre)\b"
 )
-_LOT = re.compile(r"\b(lotto|stock|set di|bundle|lot of|lot de|posten|conjunto)\b")
-_PIECES = re.compile(r"\b(\d{1,2})\s*(?:pezzi|pz|pcs|pieces|pieces|stuck|piezas)\b")
-_LETTER_SIZE = re.compile(r"(?<![\w/])(XXXL|XXL|XL|XXS|XS|S|M|L)(?![\w/])")
-_SIZE_WORD = re.compile(r"\b(?:taglia|size|taille|grosse|groesse|talla)\s*[:=]?\s*([a-z0-9./]{1,6})\b")
+_LIST_CUE = re.compile(
+    r"\b(?:retail|prezzo (?:di )?(?:listino|originale|negozio)|original price|rrp|neupreis|prix d origine|"
+    r"prix neuf|precio original)\b"
+)
+_AMOUNT = r"(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d{1,5}(?:[.,]\d{1,2})?)"
+_MONEY = re.compile(rf"(?:(?:€|eur)\s*{_AMOUNT}|{_AMOUNT}\s*(?:€|eur\b|euros?\b))")
+_BARE_FIGURE = re.compile(rf"^\W{{0,8}}{_AMOUNT}")
+_GARMENT_WORDS = re.compile(r"\bpiumin[oi]\b|\bpile\b")
+# A bare capital letter is a size only in the title ("Felpa blu M"), never next to an apostrophe ("L'ho usata").
+_LETTER_SIZE = re.compile(r"(?<![\w/'’])(XXXL|XXL|XL|XXS|XS|S|M|L)(?![\w/'’])")
+_SIZE_WORD = re.compile(
+    r"\b(?:taglia|tg|tgl|size|sz|taille|grosse|groesse|talla)\.?\s*[:=]?\s*([a-z0-9./]{1,6})\b(?!['’])"
+)
 
 _MEASURES: list[tuple[str, re.Pattern[str]]] = [
     ("chest_flat", re.compile(r"(?:pit to pit|ascella(?: ad ascella)?|larghezza|width|largeur|breite|ancho)\D{0,6}(\d{2,3})")),
@@ -251,18 +241,24 @@ def _any(text: str, needles: tuple[str, ...]) -> str | None:
     return next((n for n in needles if n in text), None)
 
 
-def _declared_defects(text: str) -> list[str]:
-    found: list[str] = []
-    for term in _DEFECTS:
-        for m in re.finditer(re.escape(term), text):
-            # Only the words of the same clause can negate it ("no stains, a hole" has a hole).
-            before = re.split(r"[.,;:!?\n]", text[max(0, m.start() - 24) : m.start()])[-1]
-            if any(n in before for n in _NEGATIONS):
-                continue
-            if term not in found:
-                found.append(term)
-            break
-    return found
+def _number(raw: str) -> float | None:
+    """A price figure as written: "1.200" is twelve hundred, "12,5" twelve and a half."""
+    if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", raw):
+        raw = raw.replace(".", "")
+    try:
+        return float(raw.replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _paid_price(text: str) -> float | None:
+    for m in _PAID_CUE.finditer(text):
+        if hit := _MONEY.search(text[m.end() : m.end() + 60]):
+            return _number(hit.group(1) or hit.group(2))
+    for m in _LIST_CUE.finditer(text):
+        if hit := _BARE_FIGURE.match(text[m.end() : m.end() + 14]):
+            return _number(hit.group(1))
+    return None
 
 
 @dataclass
@@ -275,6 +271,9 @@ class TextSignals:
     composition: dict[str, int] = field(default_factory=dict)
     measures_cm: dict[str, float] = field(default_factory=dict)
     declared_defects: list[str] = field(default_factory=list)
+    # Each declared defect with its kind, severity and the phrase it was read from (provenance "declared").
+    defect_hits: list[dict[str, Any]] = field(default_factory=list)
+    defect_severity: str | None = None
     declares_no_defects: bool = False
     sale_reason: str | None = None
     motivated_seller: bool = False
@@ -306,16 +305,20 @@ def analyze_text(title: str | None, description: str | None) -> TextSignals:
     sig.injection_suspected = injection_suspected(raw)
     if m := _SIZE_WORD.search(text):
         sig.size = normalize_size(m.group(1).upper())
-    elif m := _LETTER_SIZE.search(raw):  # "Felpa blu M": a bare capital size in the title or text
+    elif m := _LETTER_SIZE.search(title or ""):  # "Felpa blu M": a bare capital size, in the title only
         sig.size = normalize_size(m.group(1))
     sig.color = normalize_color(text)
-    sig.materials = materials_in(text)
+    # "Piumino" is the garment, not the fill: a puffer jacket with a shell-only label is not a lie about the down.
+    sig.materials = materials_in(_GARMENT_WORDS.sub(" ", text))
     sig.composition = parse_composition(text)
     for key, rx in _MEASURES:
         if m := rx.search(text):
             sig.measures_cm[key] = float(m.group(1))
-    sig.declares_no_defects = _any(text, _NO_DEFECT) is not None
-    sig.declared_defects = _declared_defects(text)
+    report = extract_defects(raw)
+    sig.declares_no_defects = _any(text, _NO_DEFECT) is not None or report.declares_none
+    sig.declared_defects = report.terms
+    sig.defect_hits = [h.as_dict() for h in report.hits]
+    sig.defect_severity = report.worst
     for reason, words in _REASONS.items():
         if _any(text, words):
             sig.sale_reason = reason
@@ -329,19 +332,12 @@ def analyze_text(title: str | None, description: str | None) -> TextSignals:
         sig.pets_home = False
     elif _any(text, _PETS):
         sig.pets_home = True
-    if m := _PAID.search(text):
-        try:
-            sig.original_price = float(m.group(1).replace(",", "."))
-        except ValueError:
-            sig.original_price = None
+    sig.original_price = _paid_price(text)
     sig.mentions_receipt = _any(text, _RECEIPT) is not None
     sig.mentions_box = _any(text, _BOX) is not None
     sig.mentions_tags = _any(text, _TAGS) is not None
     sig.open_to_offers = _any(text, _NEGOTIABLE) is not None
     sig.vague_phrases = [v for v in _VAGUE if v in text]
     sig.risk_phrases = off_platform_hits(text)
-    if _LOT.search(text):
-        sig.lot_pieces = int(m.group(1)) if (m := _PIECES.search(text)) else 2
-    elif m := _PIECES.search(text):
-        sig.lot_pieces = int(m.group(1)) if int(m.group(1)) > 1 else None
+    sig.lot_pieces = lot_pieces(text)
     return sig

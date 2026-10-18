@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 
 from app.domain.enums import Condition
 from app.identification.taxonomy import fold
-from app.ingestion.normalizer import normalize_condition, normalize_size
+from app.ingestion.normalizer import condition_from_text, normalize_size
 
 # ---------------------------------------------------------------------------- prices
 _CURRENCY = {
@@ -309,7 +309,7 @@ def detect_condition(text: str | None) -> str | None:
     t = fold(text or "")
     if not t:
         return None
-    precise = normalize_condition(t)
+    precise = condition_from_text(t)
     if precise != Condition.UNKNOWN:
         return precise.value
     for pattern, value in _PRECISE:

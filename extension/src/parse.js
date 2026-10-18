@@ -268,6 +268,7 @@
     status_testids: ["item-status"],
     summary_testids: ["item-page-summary-plugin"],
     exclude_testid_prefixes: ["product-item-id-"],
+    breadcrumb_testids: ["breadcrumb"],
     zone_tags: ["aside"],
     zone_id_prefixes: ["sidebar", "S:"],
     badge_max_length: 40,
@@ -564,6 +565,8 @@
       favourites: null,
       totalPrice: null,
       statusTexts: [],
+      breadcrumbs: [],
+      breadcrumbHrefs: [],
     };
   }
 
@@ -586,6 +589,7 @@
     const totalIds = new Set(dom.total_price_testids);
     const statusIds = new Set(dom.status_testids);
     const summaryIds = new Set(dom.summary_testids);
+    const crumbIds = new Set(dom.breadcrumb_testids);
     const zoneTags = new Set(dom.zone_tags);
     const badgeMax = Number(dom.badge_max_length);
     const src = String(html || "");
@@ -630,6 +634,10 @@
       if (frame.capture === "favourites" && out.favourites === null && /\d/.test(text)) out.favourites = text;
       else if (frame.capture === "total_price" && out.totalPrice === null && text) out.totalPrice = text;
       else if (frame.capture === "status" && text && charCount(text) <= badgeMax) out.statusTexts.push(text);
+      else if (frame.capture === "crumb" && text && out.breadcrumbs.length < 8) {
+        out.breadcrumbs.push([...text].slice(0, 80).join(""));
+        out.breadcrumbHrefs.push(frame.href || "");
+      }
     };
     const closeTag = (tag) => {
       if (SKIP.has(tag)) skip = Math.max(0, skip - 1);
@@ -686,7 +694,8 @@
         (frames.length > 0 && frames[frames.length - 1].excluded) ||
         CHROME.has(tag) ||
         (Boolean(testid) && dom.exclude_testid_prefixes.some((p) => testid.startsWith(p)));
-      const frame = { tag, excluded, zoneStart: null, capture: null, buf: null };
+      const frame = { tag, excluded, zoneStart: null, capture: null, buf: null, href: null };
+      if (tag === "a" && crumbIds.has(testid) && (a.href || "").includes("/catalog/")) [frame.capture, frame.buf, frame.href] = ["crumb", [], a.href];
       if (zoneTags.has(tag) || dom.zone_id_prefixes.some((p) => (a.id || "").startsWith(p))) frame.zoneStart = out.texts.length;
       if (testid && !excluded) itemElement(testid, a, frame);
       if (tag === "meta") {
@@ -756,6 +765,20 @@
     return [];
   }
 
+  /**
+   * The category part of each breadcrumb link as "id-slug", once each, in path order:
+   * "/catalog/5492-polo-shirts/brand/4273-polo-ralph-lauren?referrer=..." -> "5492-polo-shirts". The id and the
+   * English slug are the same on every Vinted domain, so the server needs no translation of the page's words.
+   */
+  function categoryCodes(hrefs) {
+    const out = [];
+    for (const href of hrefs) {
+      const m = /(?:^|\/catalog\/)(\d{1,6})-([a-z0-9][a-z0-9-]{0,80})(?=$|[/?#])/.exec(String(href).toLowerCase());
+      if (m && !out.includes(`${m[1]}-${m[2]}`)) out.push(`${m[1]}-${m[2]}`);
+    }
+    return out.slice(0, 12);
+  }
+
   /** "Brand" followed by "Ralph Lauren" in reading order -> { brand: "Ralph Lauren" }. */
   function labelPairs(texts, C, pairs) {
     const found = {};
@@ -801,6 +824,7 @@
       color: null,
       material: null,
       category_path: [],
+      category_codes: [],
       favourite_count: null,
       view_count: null,
       published_at: null,
@@ -892,6 +916,7 @@
     }
     item.category_path = breadcrumbs(c.jsonld);
     if (!item.category_path.length && c.breadcrumbs) item.category_path = c.breadcrumbs.slice(0, 6);
+    item.category_codes = categoryCodes(c.breadcrumbHrefs || []);
 
     const digits = (s) => String(s || "").replace(/\D/g, "");
     // Favourites: the item object, else the item's favourites section, else the label pair
@@ -1203,6 +1228,8 @@
     if (condition) out.condition = condition;
     const category = clean(Array.isArray(fields.category_path) ? fields.category_path.join(" > ") : fields.category_path, 200);
     if (category) out.category_path = category;
+    const codes = (Array.isArray(fields.category_codes) ? fields.category_codes : []).filter((c) => typeof c === "string" && /^\d{1,6}-[a-z0-9][a-z0-9-]{0,80}$/.test(c));
+    if (codes.length) out.category_codes = [...new Set(codes)].slice(0, 12);
     const description = cleanMultiline(fields.description, 5000);
     if (description) out.description = description;
     out.image_urls = [...new Set((fields.image_urls || fields.images || []).filter((u) => isHttpUrl(u) && u.length <= 2000))].slice(0, 20);
@@ -1280,6 +1307,7 @@
     sellerKey,
     decodeEntities,
     collectHtml,
+    categoryCodes,
     payloadTexts,
     findItem,
     profilePhotoUrls,

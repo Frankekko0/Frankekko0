@@ -115,6 +115,7 @@
       pairs: [],
       statusTexts: [],
       breadcrumbs: [],
+      breadcrumbHrefs: [],
     };
     document.querySelectorAll(S.jsonld).forEach((s) => c.jsonld.push(s.textContent || ""));
     if (useScripts) {
@@ -173,7 +174,10 @@
     if (reviews) c.sellerReviews = text(reviews);
     document.querySelectorAll(S.breadcrumbs).forEach((a) => {
       const t = text(a);
-      if (t) c.breadcrumbs.push(t);
+      if (!t) return;
+      c.breadcrumbs.push(t);
+      // The link of the entry (the catalogue id and slug): the same on every domain, whatever the page's language.
+      c.breadcrumbHrefs.push(a.tagName === "A" ? a.getAttribute("href") || "" : "");
     });
     return c;
   }

@@ -279,6 +279,7 @@ PROVENANCE = {
         "n",
         "by_source",
         "negotiation_discount",
+        "negotiation_discount_assumed",
         "calibrated",
         "prior",
         "label",

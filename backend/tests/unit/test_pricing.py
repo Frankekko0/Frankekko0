@@ -154,14 +154,27 @@ def test_segment_prior_alone_never_becomes_an_estimate() -> None:
     assert any("Riferimento di segmento" in n and "€40" in n for n in est.notes)
 
 
-def test_segment_prior_supports_thin_but_real_evidence() -> None:
+def test_segment_prior_never_moves_the_median_of_a_thin_estimate() -> None:
+    """The prior used to be blended into the median (50% at n=3): a brand-wide figure could lift a 30 EUR line to 35+.
+    It is a reference now: the estimate is the direct comparables'."""
     prior = SegmentPrior(median_price=40, p25_price=34, p75_price=46, sample_size=50, sell_through_rate=0.5)
-    est = estimate_market_value(
-        select_comparables(SUBJECT, market([30, 31, 29], []), NOW), "very_good", NOW, prior
-    )
-    assert est.fair_market_value is not None and est.used_prior
-    # Blended between the 3 direct comparables (~30) and the segment (40).
-    assert Decimal("30") < est.fair_market_value < Decimal("40")
+    est = estimate_market_value(select_comparables(SUBJECT, market([30, 31, 29], []), NOW), "very_good", NOW, prior)
+    assert est.fair_market_value == Decimal("30.00")
+    assert not est.used_prior
+
+
+def test_segment_prior_of_the_same_model_only_widens_the_interval() -> None:
+    thin = select_comparables(SUBJECT, market([30, 31, 29], []), NOW)
+    own = SegmentPrior(30, 14, 44, 50, sell_through_rate=0.5, level="model", sold_count=30)
+    wide = estimate_market_value(thin, "very_good", NOW, own)
+    plain = estimate_market_value(select_comparables(SUBJECT, market([30, 31, 29], []), NOW), "very_good", NOW)
+    assert wide.used_prior and wide.fair_market_value == plain.fair_market_value == Decimal("30.00")
+    assert wide.quick_sale_price < plain.quick_sale_price  # the conservative price is lower, never the median
+    # a prior with no concluded sale behind it is not even a reference
+    asks_only = SegmentPrior(40, 25, 55, 50, level="model", sold_count=0)
+    assert not estimate_market_value(
+        select_comparables(SUBJECT, market([30, 31, 29], []), NOW), "very_good", NOW, asks_only
+    ).used_prior
 
 
 @pytest.mark.parametrize("dispersed", [False, True])

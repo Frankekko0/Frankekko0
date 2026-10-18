@@ -1,7 +1,7 @@
 /* Generated from backend/app/acquisition/vinted_parser.json by tools/sync-parser-config.mjs.
  * Do not edit: change the JSON (the server and the extension share it) and run the tool. */
 globalThis.FF_PARSER_CONFIG = {
-  "version": "2026.10.7-4",
+  "version": "2026.10.8-2",
   "about": "Single source of Vinted selectors, labels and patterns, shared by the FlipFinder server (Python) and the browser extension (JavaScript). Regexes use only syntax common to both languages (numbered groups, no named groups). Edit here when Vinted changes its pages; the extension downloads it from the server.",
   "domains": [
     "vinted.it",
@@ -365,15 +365,15 @@ globalThis.FF_PARSER_CONFIG = {
   "conditions": [
     [
       "new_with_tags",
-      "(con cartellino|with tags|avec étiquettes?|avec etiquettes?|mit etikett|con etiquetas?|met labels?|z metk|com etiquetas?|med etiket)"
+      "(con cartellino|with tags|avec étiquettes?|avec etiquettes?|mit etikett|con etiquetas?|met labels?|z metk|com etiquetas?|med etiket|met (?:prijs)?kaartje)"
     ],
     [
       "new_without_tags",
-      "(senza cartellino|without tags|sans étiquettes?|sans etiquettes?|ohne etikett|sin etiquetas?|zonder labels?|bez metek|sem etiquetas?|uten etikett|utan etikett)"
+      "(senza cartellino|without tags|sans étiquettes?|sans etiquettes?|ohne etikett|sin etiquetas?|zonder labels?|bez metek|bez metk|sem etiquetas?|uten etikett|utan etikett|zonder (?:prijs)?kaartje)"
     ],
     [
       "very_good",
-      "(ottim|very good|très bon|tres bon|sehr gut|muy bueno|zeer goed|bardzo dobr|muito bom|meget god|mycket bra)"
+      "(ottim|very good|très bon|tres bon|sehr gut|muy bueno|zeer goed|heel goed|bardzo dobr|muito bom|meget god|mycket bra)"
     ],
     [
       "good",
@@ -381,7 +381,7 @@ globalThis.FF_PARSER_CONFIG = {
     ],
     [
       "satisfactory",
-      "(discret|satisfactory|satisfaisant|zufriedenstellend|satisfactorio|redelijk|zadowalaj|satisfatório|tilfredsstillende|okej)"
+      "(discret|soddisfacent|satisfactory|satisfaisant|zufriedenstellend|satisfactorio|redelijk|zadowalaj|satisfatório|tilfredsstillende|okej)"
     ]
   ],
   "currencies": [
@@ -423,7 +423,7 @@ globalThis.FF_PARSER_CONFIG = {
     "jsonld": "script[type=\"application/ld+json\"]",
     "attribute_rows": "[data-testid*=\"item-attributes\"], [data-testid*=\"item-details\"], [itemprop=\"brand\"], [itemprop=\"color\"], [itemprop=\"size\"]",
     "description": "[itemprop=\"description\"], [data-testid*=\"item-description\"]",
-    "breadcrumbs": "[data-testid*=\"breadcrumb\"] a, nav[aria-label*=\"readcrumb\"] a, [itemtype*=\"BreadcrumbList\"] [itemprop=\"name\"]",
+    "breadcrumbs": "a[data-testid*=\"breadcrumb\"], [data-testid*=\"breadcrumb\"] a, nav[aria-label*=\"readcrumb\"] a, [itemtype*=\"BreadcrumbList\"] [itemprop=\"name\"]",
     "gallery_images": "img",
     "status_badges": "[data-testid*=\"status\"], [data-testid*=\"closed\"], [data-testid*=\"reserved\"], [class*=\"item-status\"]",
     "seller_rating": "[data-testid*=\"rating\"] [aria-label], [data-testid*=\"rating\"], [class*=\"Rating\"] [aria-label]",
@@ -570,6 +570,9 @@ globalThis.FF_PARSER_CONFIG = {
     ],
     "exclude_testid_prefixes": [
       "product-item-id-"
+    ],
+    "breadcrumb_testids": [
+      "breadcrumb"
     ],
     "zone_tags": [
       "aside"

@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+from app.identification.brands import same_brand, squash
 from app.identification.taxonomy import fold
 
 # Phrases that carry no information on their own (Italian, plus common EN/FR/ES equivalents).
@@ -269,7 +270,15 @@ def title_photo_consistency(inp: SignalInput) -> Signal:
     seen_brand = _vision_value(vision, "brand") or _vision_value(vision, "logo")
     if seen_brand and inp.brand_name:
         brand = fold(inp.brand_name)
-        if seen_brand not in brand and brand not in seen_brand and (inp.brand_slug or "") not in seen_brand:
+        # Both sides are brands of the catalogue when they can be ("LEVIS" is Levi's): compared as brands, not as
+        # strings. A reading that names no known brand falls back to a loose string match.
+        same = same_brand(inp.brand_name, seen_brand)
+        if same is False or (
+            same is None
+            and squash(seen_brand) not in squash(brand)
+            and squash(brand) not in squash(seen_brand)
+            and (inp.brand_slug or "") not in seen_brand
+        ):
             mismatches.append(f"Nelle foto si legge “{seen_brand}”, l'annuncio dice “{inp.brand_name}”")
     seen_category = _vision_value(vision, "category")
     if seen_category and inp.category and fold(inp.category).split("-")[0] not in seen_category:

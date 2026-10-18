@@ -1,7 +1,10 @@
 """Outlier cleaning of the price evidence (``is_outlier`` on ``sold_sales`` and ``external_prices``).
 
-Same robust rule as the comparables (``app.pricing.stats.detect_outliers``: log-space Tukey IQR
-fences + median absolute deviation, a ratio filter for small groups), applied per model:
+Same robust rule as the comparables (``app.pricing.stats.cluster_prices``: price levels first, then the
+log-space Tukey IQR fences + median absolute deviation inside the level, a ratio filter for small groups),
+applied per model. Only isolated or implausible prices are flagged: a second price level with several
+members (the newest sales after a price drop, another line among rows that carry no model) is a market of
+its own and stays, where plain outlier removal over the whole group deleted exactly the best-matching minority.
 
 * concluded sales: per brand + model across every source (rows without a model per brand +
   category), prices brought to the "very good" condition first so a new item among used ones is
@@ -27,7 +30,7 @@ from app.db.models import ExternalPrice, SoldSale
 from app.identification.taxonomy import fold
 from app.pricing.comparables import CONDITION_MULTIPLIER
 from app.pricing.evidence import evidence_condition
-from app.pricing.stats import detect_outliers
+from app.pricing.stats import cluster_prices
 
 MIN_GROUP = 3
 
@@ -42,8 +45,8 @@ def outlier_ids(rows: Iterable[tuple[int, Hashable, float, str | None]]) -> set[
     for items in groups.values():
         if len(items) < MIN_GROUP:
             continue
-        res = detect_outliers([p for _, p in items])
-        out.update(items[i][0] for i in res.removed)
+        res = cluster_prices([p for _, p in items])
+        out.update(items[i][0] for i in res.outliers)
     return out
 
 

@@ -12,10 +12,13 @@ import math
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
+from functools import cached_property
 from typing import Any
 
 from app.ai.deal_analyst import DealAnalysis, DealContext, RuleBasedDealAnalyst, ScenarioSummary
+from app.analysis.defects import DefectReport, extract_defects
 from app.analysis.dossier import DossierFacts, build_dossier
+from app.analysis.lots import lot_pieces
 from app.analysis.text import analyze_text
 from app.analytics.calibration import Calibration
 from app.authenticity.assess import AuthInput, assess, photo_evidence
@@ -25,11 +28,20 @@ from app.decision.engine import Decision, DecisionInput, decide
 from app.demand.analysis import DemandResult, VelocityResult, analyze_demand, analyze_velocity
 from app.demand.time_online import time_online
 from app.domain.enums import Condition, DealTier, RecommendedAction
+from app.identification.taxonomy import fold
 from app.intelligence import assess as intel
 from app.intelligence import premortem as pm
 from app.intelligence.seller_risk import seller_risk_score
 from app.opportunities import insights as ins
-from app.pricing.comparables import ItemProfile, ScoredComparable, select_comparables
+from app.pricing.comparables import (
+    TIER_FAMILY,
+    TIER_LINE,
+    TIER_MODEL,
+    ItemProfile,
+    ScoredComparable,
+    select_comparables,
+    subject_kind,
+)
 from app.pricing.comparison import market_comparison
 from app.pricing.evidence import (
     NEW_CAP_NOTE,
@@ -53,7 +65,7 @@ from app.profit.calculator import (
     profit_scenarios,
     sale_revenue,
 )
-from app.profit.evaluation import evaluate_deal
+from app.profit.evaluation import Restoration, evaluate_deal
 from app.profit.offers import OfferPlan, build_offer_plan
 from app.scoring.confidence import ConfidenceInput, ConfidenceResult, compute_confidence
 from app.scoring.explain import DEMAND_LABELS, ExplanationContext, build_explanation
@@ -65,6 +77,8 @@ from app.scoring.signals import Signal, SignalInput, build_signals, description_
 PRICING_COMPARABLES = 60
 # On-sale listings kept next to enough sold ones: reference only (see ``estimate_market_value``).
 REFERENCE_ASKS = 20
+# Comparables of other lines carried along as a labelled reference (never part of the price).
+REFERENCE_OTHER = 30
 SAME_ITEM_ANOMALY = "Lo stesso articolo in più copie o in più taglie dallo stesso venditore"
 # Below this many direct comparables the estimate is labelled "indicative".
 LIMITED_BELOW = 8
@@ -105,9 +119,19 @@ class SubjectContext:
     def suspicious_terms(self) -> list[str]:
         return list(self.identification.get("suspicious_terms") or [])
 
+    @cached_property
+    def declared_defects(self) -> DefectReport:
+        """What the seller's own words admit is wrong (``source`` "declared"), read from the title and the
+        description as they are now: a listing stored before the extractor existed gets it without re-ingesting."""
+        return extract_defects(f"{self.profile.title}\n{self.description}")
+
     @property
     def defect_terms(self) -> list[str]:
-        return list(self.identification.get("defect_terms") or [])
+        return self.declared_defects.labels
+
+    @property
+    def lot_pieces(self) -> int | None:
+        return lot_pieces(fold(f"{self.profile.title}\n{self.description}"))
 
 
 @dataclass
@@ -181,8 +205,11 @@ def run_analysis(
 ) -> AnalysisResult:
     """``candidates`` are marketplace listings (they also feed demand and timing); ``evidence``
     adds the user's own records and other marketplaces' prices to the price only."""
-    # The condition the photos show when worse than the declared one: prices follow the item.
-    condition = ins.effective_condition(subject.profile.condition, subject.vision)
+    # The condition the photos show, or the seller's own description admits (a declared hole), when worse than
+    # the declared one: prices follow the item. Both only ever lower it.
+    defects = subject.declared_defects
+    by_photos = ins.effective_condition(subject.profile.condition, subject.vision)
+    condition = ins.effective_condition(subject.profile.condition, subject.vision, defects.worst)
     priced = (
         subject.profile
         if condition == subject.profile.condition
@@ -238,11 +265,25 @@ def run_analysis(
     )
     fmv = market.fair_market_value
     discount = ((fmv - price) / fmv).quantize(Decimal("0.0001")) if fmv and fmv > 0 else None
+    # The ceiling uses the buyer protection the listing really shows (not only the default formula): buying at
+    # the displayed ceiling then meets the targets.
     max_buy = max_buy_price(
-        market.expected_sale_price, costs, targets.min_profit, targets.min_roi, subject.shipping_fee
+        market.expected_sale_price,
+        costs,
+        targets.min_profit,
+        targets.min_roi,
+        subject.shipping_fee,
+        listing_buyer_protection=subject.buyer_protection_fee,
+        listing_price=price,
     )
     good_buy = max_buy_price(
-        market.quick_sale_price, costs, targets.min_profit, targets.min_roi, subject.shipping_fee
+        market.quick_sale_price,
+        costs,
+        targets.min_profit,
+        targets.min_roi,
+        subject.shipping_fee,
+        listing_buyer_protection=subject.buyer_protection_fee,
+        listing_price=price,
     )
     expected = next((s for s in scenarios if s.name == "expected"), None)
 
@@ -383,8 +424,17 @@ def run_analysis(
             listing_shipping=subject.shipping_fee,
             listing_buyer_protection=subject.buyer_protection_fee,
             profile_saved=False,
+            # A repair or cleaning the seller admits is needed but nobody quantified: said as an unknown cost, no
+            # invented figure (the profit shown is before it).
+            restoration=Restoration(None) if defects.needs_restoration else None,
         )
         economics = {**evaluation.as_dict(), "basis": "default_cost_profile"}
+        if defects.hits:
+            economics["declared_defects"] = {
+                "source": "declared",
+                "worst": defects.worst,
+                "phrases": [h.phrase for h in defects.hits[:6]],
+            }
         unknown_costs = evaluation.unknown_costs
     conservative = next((s for s in scenarios if s.name == "conservative"), None)
     # ---- advanced assessment: the distribution of the profit and the seller's scam risk -----------
@@ -418,6 +468,7 @@ def run_analysis(
         off_platform=off_platform,
         price_too_good=discount is not None and float(discount) >= 0.6,
         anomalies=len(subject.seller.anomalies) if subject.seller else 0,
+        seller_known=subject.seller is not None,
     )
     decision = decide(
         DecisionInput(
@@ -450,7 +501,10 @@ def run_analysis(
             status=subject.status,
             discount_vs_market=float(discount) if discount is not None else None,
             demand_level=demand.level.value,
-            condition_downgraded=condition != subject.profile.condition,
+            condition_downgraded=by_photos != subject.profile.condition,
+            declared_defect_severity=defects.worst,
+            declared_defects=tuple(h.phrase for h in defects.hits[:4]),
+            lot_pieces=subject.lot_pieces,
             unknown_costs=unknown_costs,
             risk_labels=tuple(f.label for f in risk.factors if f.severity in ("medium", "high")),
             missing_info=tuple(completeness.missing),
@@ -460,6 +514,11 @@ def run_analysis(
             profit_mean=dist.mean if dist else None,
             profit_p10=dist.p10 if dist else None,
             seller_risk_score=s_risk.score,
+            comparable_tier=market.tier if market.has_value else None,
+            sold_comparables=market.n_sold,
+            market_mixed=market.mixed,
+            market_trend=market.trend,
+            seller_known=subject.seller is not None,
         )
     )
     ctx = build_deal_context(
@@ -696,6 +755,7 @@ def build_insights(
         seller_habits=s.seller_habits,
         identification=s.identification,
         vision=s.vision,
+        declared_defects=[h.as_dict() for h in s.declared_defects.hits],
     )
     tracked = {c.item.id for c in similar if c.item.tracked}
     has = m.has_value
@@ -734,9 +794,18 @@ def build_insights(
     return d
 
 
-def pricing_comparables(pool: list[ScoredComparable]) -> list[ScoredComparable]:
+def pricing_comparables(pool: list[ScoredComparable], kind: str | None = None) -> list[ScoredComparable]:
     """The most similar listings; with enough sales, the most similar *sold* ones (real prices),
-    plus a few on-sale ones shown for reference."""
+    plus a few on-sale ones shown for reference.
+
+    ``kind`` (the subject's tier, see ``subject_kind``): the price is built from that tier alone, so the
+    quota is taken inside it and the rest of the pool (other lines) is only carried along, capped, as the
+    reference the estimate reports - never crowding out the subject's own comparables.
+    """
+    if kind in (TIER_MODEL, TIER_LINE):
+        own = [c for c in pool if c.tier == kind]
+        other = [c for c in pool if c.tier != kind]
+        return pricing_comparables(own) + other[:REFERENCE_OTHER]
     sold = [c for c in pool if c.item.status == "sold"]
     if len(sold) >= SOLD_ONLY_MIN:
         active = [c for c in pool if c.item.status != "sold"]
@@ -782,8 +851,8 @@ def estimate_from_similar(
     pool = [c for c in similar if c.item.status in ("sold", "active")]
     if evidence is not None:
         pool = with_evidence(subject, pool, evidence, now)
-    comps = pricing_comparables(pool)
-    market = estimate_market_value(comps, subject.condition, now, prior)
+    comps = pricing_comparables(pool, subject_kind(subject))
+    market = estimate_market_value(comps, subject.condition, now, prior, subject=subject)
     if evidence is not None and evidence.gate.use_new_cap:
         market = cap_at_new_price(market, evidence, subject.condition)
     return comps, market
@@ -813,8 +882,21 @@ def assess_data_quality(market: MarketEstimate, found: int) -> tuple[str, str | 
     if not market.has_value:
         return (
             "insufficient",
-            f"Solo {market.n_used} comparabili utilizzabili su {found} annunci simili trovati: "
+            market.insufficient_reason
+            or f"Solo {market.n_used} comparabili utilizzabili su {found} annunci simili trovati: "
             "non abbastanza per stimare il valore. Nessun punteggio assegnato.",
+        )
+    if market.tier == TIER_FAMILY:
+        return (
+            "limited",
+            "Stima indicativa a livello di brand e categoria: nessun confronto dello stesso modello o linea "
+            f"({market.n_used} comparabili, confidenza di mercato {market.confidence}/100).",
+        )
+    if market.mixed or market.trend == "falling":
+        return (
+            "limited",
+            "Stima indicativa: i prezzi dei comparabili stanno su livelli diversi o in calo "
+            f"({market.n_used} comparabili, confidenza di mercato {market.confidence}/100).",
         )
     if market.n_used < LIMITED_BELOW or market.confidence < 40:
         return (
@@ -828,6 +910,13 @@ def assess_data_quality(market: MarketEstimate, found: int) -> tuple[str, str | 
 def build_headline(r: AnalysisResult) -> str:
     """The main reason in one line (used by the browser extension and the tracking page)."""
     if r.data_quality == "insufficient":
+        if r.market.tier in (TIER_MODEL, TIER_LINE):
+            what = "dello stesso modello" if r.market.tier == TIER_MODEL else "della stessa linea"
+            return (
+                f"Dati insufficienti: nessun confronto {what}"
+                if r.market.n_used == 0
+                else f"Dati insufficienti: solo {r.market.n_used} comparabili {what}"
+            )
         return f"Dati insufficienti: solo {r.market.n_used} comparabili"
     parts: list[str] = []
     if r.discount_vs_market is not None:
@@ -850,7 +939,7 @@ def build_headline(r: AnalysisResult) -> str:
         flagged = next(s for s in r.risk_signals if s.level == worst)
         parts.append(f"⚠ {flagged.title.lower()}")
     if r.data_quality == "limited":
-        parts.append("pochi comparabili")
+        parts.append("stima a livello di brand" if r.market.tier == TIER_FAMILY else "pochi comparabili")
     return " · ".join(parts)
 
 

@@ -214,6 +214,11 @@ class ComparableOut(Schema):
     listing_date: datetime | None
     sold_at: datetime | None
     image_url: str | None
+    # Why it is (or is not) part of the price: its tier ("model" | "line" | "family"), what it has in common with
+    # the item in short Italian labels, and the reason it was left out. Computed when shown, not stored.
+    tier: str | None = None
+    match: list[str] = []
+    exclusion_label: str | None = None
 
 
 class CostLine(Schema):

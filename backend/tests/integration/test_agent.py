@@ -61,7 +61,7 @@ async def seed(make_listing: Any) -> dict[str, str]:
             "strong": dict(price=12, vision=CLEAR),
             "buy": dict(price=12, vision=None),
             "negotiate": dict(price=16, vision=CLEAR),
-            "watch": dict(price=20, vision=CLEAR),
+            "watch": dict(price=19, vision=CLEAR),
             "dear": dict(price=40, vision=CLEAR),
             "inject": dict(price=12, vision=CLEAR, description=INJECTION),
         }

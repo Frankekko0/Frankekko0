@@ -35,6 +35,7 @@ def _load(name: str) -> Any:
 
 
 CASES = _load("cases").CASES
+HOLDOUT = _load("holdout").CASES
 B = _load("batteries")
 
 from app.identification.engine import IdentificationEngine, ListingText  # noqa: E402
@@ -68,6 +69,8 @@ def counts() -> dict[str, collections.Counter[str]]:
 def finish(st: collections.Counter[str]) -> dict[str, Any]:
     ok, wrong, miss, tn = st["ok"], st["wrong"], st["miss"], st["tn"]
     out: dict[str, Any] = {"ok": ok, "wrong": wrong, "miss": miss, "tn": tn}
+    if st["guess_ok"]:
+        out["miss_but_guessed"] = st["guess_ok"]
     out["precision"] = round(ok / (ok + wrong), 3) if ok + wrong else None
     out["strict_recall"] = round(ok / (ok + wrong + miss), 3) if ok + wrong + miss else None
     return out
@@ -83,13 +86,12 @@ def section(fn: Any) -> Any:
     return run
 
 
-@section
-def labelled_cases() -> dict[str, Any]:
+def score_cases(cases: list[dict[str, Any]]) -> dict[str, Any]:
     stats = counts()
     wrong_cases: dict[str, list[str]] = collections.defaultdict(list)
     certain_wrong = 0
     high_conf_wrong = 0
-    for c in CASES:
+    for c in cases:
         r = ENGINE.identify(listing_text(c))
         t = c["t"]
         pred = {
@@ -121,6 +123,9 @@ def labelled_cases() -> dict[str, Any]:
             elif pred[a] is None:
                 st["miss"] += 1
                 wrong_cases[a].append(c["id"])
+                # A brand the engine only suggests (brand_guess) is not a miss to be ashamed of: it is not a filter.
+                if a == "brand" and getattr(getattr(r, "brand_guess", None), "value", None) == truth:
+                    st["guess_ok"] += 1
             elif ok:
                 st["ok"] += 1
             else:
@@ -139,9 +144,19 @@ def labelled_cases() -> dict[str, Any]:
     out = {a: finish(stats[a]) for a in [*ATTRS, "suspicious"] if a in stats}
     out["_certain_but_wrong_category"] = certain_wrong
     out["_wrong_core_with_confidence_ge_70"] = high_conf_wrong
-    out["_cases"] = len(CASES)
+    out["_cases"] = len(cases)
     out["_wrong_ids"] = {k: v for k, v in wrong_cases.items()}
     return out
+
+
+@section
+def labelled_cases() -> dict[str, Any]:
+    return score_cases(CASES)
+
+
+@section
+def holdout_cases() -> dict[str, Any]:
+    return score_cases(HOLDOUT)
 
 
 @section
@@ -189,7 +204,7 @@ def defect_severity() -> dict[str, Any]:
 @section
 def suspicious() -> dict[str, Any]:
     def susp(t: str, d: str = "") -> list[str]:
-        return ENGINE.identify(ListingText(title=t, description=d, brand_field="Nike")).suspicious_terms
+        return ENGINE.identify(ListingText(title=t, description=d)).suspicious_terms
 
     pos = B.SUSP_POS
     benign = B.SUSP_BENIGN
@@ -364,19 +379,32 @@ def consistency() -> dict[str, Any]:
 
 @section
 def speed() -> dict[str, Any]:
+    """Cold: a fresh engine sees each listing once (what a first capture costs). Warm: the same listings again
+    (the per-engine caches are hot, as in a re-analysis)."""
     cases = [listing_text(c) for c in CASES]
+    engine = IdentificationEngine(DEFAULT_TAXONOMY)
+    t0 = time.perf_counter()
+    for lt in cases:
+        engine.identify(lt)
+    cold = (time.perf_counter() - t0) / len(cases)
     t0 = time.perf_counter()
     n = 0
     for _ in range(10):
         for lt in cases:
-            ENGINE.identify(lt)
+            engine.identify(lt)
             n += 1
-    return {"identify_ms_per_call": round(1000 * (time.perf_counter() - t0) / n, 3)}
+    warm = (time.perf_counter() - t0) / n
+    return {"identify_ms_cold": round(1000 * cold, 3), "identify_ms_warm": round(1000 * warm, 3)}
 
 
 def main() -> None:
+    import structlog
+
+    # Log lines (e.g. an unrecognised condition label) go to stderr: stdout is the JSON report.
+    structlog.configure(logger_factory=structlog.PrintLoggerFactory(sys.stderr))
     sections = {
         "labelled_cases": labelled_cases,
+        "holdout_cases": holdout_cases,
         "defects": defects,
         "defect_severity": defect_severity,
         "suspicious": suspicious,

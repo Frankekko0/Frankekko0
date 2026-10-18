@@ -103,6 +103,7 @@ def identify_listing(engine: IdentificationEngine, pl: ProviderListing) -> Ident
             brand_field=pl.brand,
             category_field=pl.category,
             subcategory_field=pl.subcategory,
+            category_codes=tuple(pl.category_codes),
             size_field=pl.size,
             condition=pl.condition,
             color_field=pl.color,

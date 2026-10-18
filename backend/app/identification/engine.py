@@ -7,6 +7,12 @@ optional image analysis) into a structured product identity with per-attribute c
 * ``probable``      - inferred from title/description/photos with reasonable evidence;
 * ``unverifiable``  - unknown or not confirmable.
 
+Every attribute also says where it comes from (``provenance``): ``declared`` (a structured field the seller
+filled in), ``observed`` (read on the photos) or ``inferred`` (our reading of free text). A guess is not a
+fact: a brand found only in a description, behind a short or ordinary-word alias, as a misspelling or from a
+model name that many brands share, is kept apart as ``brand_guess`` and is never the brand the comparables
+are filtered on. Contradictions between the fields and the text are listed and lower the confidence.
+
 It never claims authenticity: the best it states is "no red flags found"; suspicious wording
 or visual concerns are surfaced as risk signals.
 """
@@ -21,25 +27,49 @@ from typing import Any
 from rapidfuzz import fuzz
 from rapidfuzz.distance import JaroWinkler
 
+from app.analysis.defects import extract_defects
+from app.analysis.lots import lot_pieces
 from app.domain.enums import Certainty
 from app.identification.taxonomy import (
+    CATALOG_ID_CATEGORIES,
+    CATALOG_SLUG_RULES,
+    CLAIM_CUES,
+    CRUMB_GROUPS,
+    CRUMB_ROOT_GENDER,
+    CRUMB_RULES,
     DEFAULT_TAXONOMY,
-    DEFECT_PATTERNS,
     DISTINCTIVE_MODEL_KEYWORDS,
+    DOCUMENT_WORDS,
+    FOOTBALL_CONTEXT,
     FOOTBALL_TEAMS,
     GENDER_KEYWORDS,
+    GENERIC_CATEGORY_KEYWORDS,
+    NEGATION_WORDS,
+    PRODUCT_ALIASES,
     PRODUCT_CODE_PATTERNS,
     SEASON_PATTERN,
     SUSPICIOUS_PATTERNS,
     VINTAGE_PATTERN,
+    WEAK_MODEL_KEYWORDS,
     BrandSpec,
     Taxonomy,
+    catalog_code,
     fold,
+    plausible_product_code,
+    related_brands,
 )
-from app.ingestion.normalizer import normalize_color, normalize_material, normalize_size
+from app.ingestion.normalizer import (
+    normalize_color,
+    normalize_material,
+    normalize_size,
+    size_distance,
+    size_is_ambiguous,
+)
 from app.vision.types import ImageAnalysis
 
 SHORT_ALIAS_LEN = 3
+# Below this a brand is a guess: it is shown, it lowers the confidence, and it filters nothing.
+FIRM_BRAND = 0.8
 SUB_LINES = {
     "polo ralph lauren": "Polo Ralph Lauren",
     "polo by ralph lauren": "Polo Ralph Lauren",
@@ -48,8 +78,73 @@ SUB_LINES = {
     "nike sportswear": "Nike Sportswear",
     "carhartt wip": "Carhartt WIP",
 }
-WINTER = {"puffer-jackets", "coats", "knitwear", "fleece"}
-SUMMER = {"polo-shirts", "t-shirts"}
+WINTER = {"puffer-jackets", "coats", "knitwear", "fleece", "boots"}
+SUMMER = {"polo-shirts", "t-shirts", "shorts", "swimwear", "sandals"}
+# A brand field that says there is no brand: it is "absent", not "a brand outside the catalogue".
+NO_BRAND_FIELDS = frozenset(
+    {"altro", "other", "otro", "autre", "sonstige", "senza marca", "senza marchio", "no brand", "unbranded",
+     "non specificato", "sconosciuto", "unknown", "vintage", "generico", "generic", "-", "n/a", "na"}
+)  # fmt: skip
+PROVENANCE = {"provider_field": "declared", "image": "observed", "image_label": "observed"}
+# Words next to a brand in a description that make it a comparison or an accessory ("abbinabile a pantaloni Tommy"),
+# or that say it is the item's brand ("Marca Moncler", "Ralph Lauren originale").
+_COMPARISON_BEFORE = frozenset(
+    [
+        "abbinabile",
+        "abbinato",
+        "abbinata",
+        "simile",
+        "come",
+        "tipo",
+        "stile",
+        "style",
+        "like",
+        "compatibile",
+        "adatto",
+        "adatta",
+        "ispirato",
+        "ispirata",
+        "rispetto",
+        "confronto",
+        "invece",
+        "oppure",
+        "vs",
+        "versus",
+        "ne",
+        "non",
+        "no",
+        "not",
+        "senza",
+        "paragonabile",
+        "pari",
+        "insieme",
+    ]
+)
+_AFTER_NEGATING = re.compile(
+    r"\b(?:non inclus\w+|not included|escluse?|esclusi?|solo (?:nelle|in) foto|only in (?:the )?photos?)\b"
+)
+_BRAND_CUES = frozenset(
+    [
+        "marca",
+        "brand",
+        "marque",
+        "marke",
+        "marchio",
+        "firmato",
+        "firmata",
+        "by",
+        "originale",
+        "original",
+        "authentic",
+        "autentico",
+        "autentica",
+        "genuine",
+        "griffato",
+        "griffata",
+        "di",
+    ]
+)
+_STRONG_CUES = _BRAND_CUES - {"di"}
 
 
 @dataclass
@@ -59,11 +154,19 @@ class Attribute:
     source: str | None = None
     confidence: float = 0.0
 
+    @property
+    def provenance(self) -> str | None:
+        """``declared`` (a field the seller filled in), ``observed`` (read on the photos) or ``inferred``."""
+        if self.value is None:
+            return None
+        return PROVENANCE.get(self.source or "", "inferred")
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "value": self.value,
             "certainty": self.certainty.value,
             "source": self.source,
+            "provenance": self.provenance,
             "confidence": round(self.confidence, 2),
         }
 
@@ -85,12 +188,18 @@ class ListingText:
     condition: str | None = None
     color_field: str | None = None
     material_field: str | None = None
+    # The marketplace's category entries as catalogue ids and slugs ("5492-polo-shirts"): the same on every
+    # domain, whatever the language of the page.
+    category_codes: tuple[str, ...] = ()
 
 
 @dataclass
 class IdentificationResult:
     brand: Attribute = field(default_factory=Attribute)
     brand_name: str | None = None
+    # A brand the text suggests without proving it (see the module docstring): never used as a filter.
+    brand_guess: Attribute = field(default_factory=Attribute)
+    brand_guess_name: str | None = None
     line: Attribute = field(default_factory=Attribute)
     model: Attribute = field(default_factory=Attribute)
     category: Attribute = field(default_factory=Attribute)
@@ -108,9 +217,13 @@ class IdentificationResult:
     is_vintage: bool = False
     suspicious_terms: list[str] = field(default_factory=list)
     defect_terms: list[str] = field(default_factory=list)
+    # Each declared defect: kind, severity and the phrase it was read from (provenance "declared").
+    defect_hits: list[dict[str, Any]] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
-    # Hidden opportunities and seller claims: misspelled_brand, category_mismatch,
-    # claimed_original_price (never verified facts).
+    # Where the fields and the text disagree: {field, declared, found, where, severity}.
+    contradictions: list[dict[str, str]] = field(default_factory=list)
+    # Hidden opportunities and seller claims: misspelled_brand, category_mismatch, claimed_brand,
+    # unknown_brand, claimed_original_price (never verified facts).
     flags: dict[str, Any] = field(default_factory=dict)
     confidence: int = 0
 
@@ -137,6 +250,7 @@ class IdentificationResult:
     def as_dict(self) -> dict[str, Any]:
         return {
             "brand": self.brand.as_dict() | {"name": self.brand_name},
+            "brand_guess": self.brand_guess.as_dict() | {"name": self.brand_guess_name},
             "line": self.line.as_dict(),
             "model": self.model.as_dict(),
             "category": self.category.as_dict(),
@@ -152,7 +266,9 @@ class IdentificationResult:
             "is_vintage": self.is_vintage,
             "suspicious_terms": self.suspicious_terms,
             "defect_terms": self.defect_terms,
+            "defect_hits": self.defect_hits,
             "evidence": self.evidence,
+            "contradictions": self.contradictions,
             "flags": self.flags,
             "confidence": self.confidence,
         }
@@ -163,6 +279,26 @@ _WORD = re.compile(r"\w+")
 CLAIMED_PRICE = re.compile(
     r"(?:pagat[oaie]|prezzo (?:di |d')?(?:listino|originale|negozio|acquisto)|costo originale|retail|"
     r"costava|acquistat[oaie] a|paid|original price|rrp)\D{0,20}?(\d{2,5}(?:[.,]\d{1,2})?)\s?(?:€|eur|euro)"
+)
+# An explicit size in a title: "taglia 42 (S)", "tg. M", "size L".
+_TITLE_SIZE = re.compile(
+    r"\b(?:tg|taglia|size|talla|taille)\.?\s*([a-z0-9.,/]{1,6}(?:\s*[(/]\s*[a-z0-9]{1,4}\s*\)?)?)(?=\W|$)(?!['’])"
+)
+_TITLE_WAIST = re.compile(r"\bw\s?(2[4-9]|3\d|4[0-4])\b")
+_CLAIM_CUE = re.compile(
+    r"(?<!\w)(?:"
+    + "|".join(re.escape(fold(c)) for c in sorted(CLAIM_CUES, key=len, reverse=True))
+    + r")(?:\s+(?:a|di|de|by|of|the|an?))?\s+"
+)
+_CLAIM_AFTER = re.compile(r"^\s+(?:style|stile|inspired|ispirat[oa]|like|tipo)(?!\w)")
+_SENTENCE_BREAK = re.compile(r"[.,;:!?()\n]")
+_SENTENCE_END = re.compile(r"[.;!?\n]")
+_COLOR_FAMILIES = (
+    {"blue", "navy", "light_blue", "turquoise"},
+    {"grey", "black", "silver"},
+    {"beige", "khaki", "brown", "gold"},
+    {"red", "burgundy", "pink", "orange"},
+    {"white", "beige"},
 )
 
 
@@ -176,6 +312,10 @@ def _gate(literal: str) -> frozenset[str]:
 @lru_cache(maxsize=4096)
 def _tokens(text: str) -> frozenset[str]:
     return frozenset(_WORD.findall(text))
+
+
+# (brand, alias, span, weak)
+BrandMatch = tuple[BrandSpec, str, tuple[int, int], bool]
 
 
 class IdentificationEngine:
@@ -197,41 +337,73 @@ class IdentificationEngine:
                     )
         self._line_index.sort(key=lambda e: len(e[1].pattern), reverse=True)
         self._distinctive = [
-            (_gate(fold(kw)), re.compile(rf"(?<!\w){re.escape(fold(kw))}(?!\w)"), brand)
+            (
+                _gate(fold(kw)),
+                re.compile(rf"(?<!\w){re.escape(fold(kw))}(?!\w)"),
+                brand,
+                fold(kw),
+                line.category,
+            )
             for brand in taxonomy.all_brands
             for line in brand.lines
             for kw in line.keywords
             if fold(kw) in DISTINCTIVE_MODEL_KEYWORDS
         ]
         self._team_patterns = [
-            (_gate(fold(a)), re.compile(rf"(?<!\w){re.escape(fold(a))}(?!\w)"), team)
-            for team, aliases in FOOTBALL_TEAMS
+            (
+                _gate(fold(a)),
+                re.compile(rf"(?<!\w){re.escape(fold(a))}(?!\w)"),
+                team,
+                fold(a) in {fold(s) for s in strong},
+            )
+            for team, aliases, strong in FOOTBALL_TEAMS
             for a in sorted(aliases, key=len, reverse=True)
         ]
         self._suspicious = [(re.compile(p), label) for p, label in SUSPICIOUS_PATTERNS]
-        self._defects = [(re.compile(p), label) for p, label in DEFECT_PATTERNS]
         self._gender = [
             (_gate(w), re.compile(rf"(?<!\w){re.escape(w)}(?!\w)"), g)
             for g, words in GENDER_KEYWORDS.items()
             for w in words
         ]
+        weak_by_brand = {b.slug: {fold(a) for a in b.weak_aliases} for b in taxonomy.all_brands}
         self._brand_aliases = [
-            (_gate(alias), pattern, brand, alias) for pattern, brand, alias in taxonomy.brand_alias_patterns
+            (
+                _gate(alias),
+                pattern,
+                brand,
+                alias,
+                len(alias) <= SHORT_ALIAS_LEN or alias in weak_by_brand.get(brand.slug, ()),
+            )
+            for pattern, brand, alias in taxonomy.brand_alias_patterns
         ]
+        # An alias can match only if every one of its words is in the text, so the text's own words find the few
+        # candidates: aliases are indexed by their first word (their order, longest first, is kept by index).
+        self._alias_by_word: dict[str, list[int]] = {}
+        for idx, entry in enumerate(self._brand_aliases):
+            first = sorted(entry[0])[0] if entry[0] else ""
+            self._alias_by_word.setdefault(first, []).append(idx)
+        self._match_brands_cached = lru_cache(maxsize=8192)(self._match_brands_uncached)
         # Brand names and long aliases for misspellings ("Ralf Loren", "Carhart"): short aliases
         # are excluded, they would match ordinary words.
-        self._fuzzy_aliases = sorted(
+        fuzzy = sorted(
             {
                 (fold(a), brand)
                 for brand in taxonomy.all_brands
                 for a in (brand.name, *brand.aliases)
-                if len(fold(a)) >= 5
+                if len(fold(a)) >= 5 and fold(a) not in weak_by_brand.get(brand.slug, ())
             },
             key=lambda x: x[0],
         )
+        # A misspelling keeps the first two letters ("carhart", "ralf loren"): aliases are looked up by them.
+        self._fuzzy_by_prefix: dict[str, list[tuple[str, BrandSpec]]] = {}
+        for alias, brand in fuzzy:
+            self._fuzzy_by_prefix.setdefault(alias[:2], []).append((alias, brand))
         self._category_keywords = [
             (_gate(kw), pattern, cat, kw) for pattern, cat, kw in taxonomy.category_keyword_patterns
         ]
+        self._crumb_rules = [(re.compile(p), slug) for p, slug in CRUMB_RULES]
+        self._slug_rules = [(re.compile(p), slug) for p, slug in CATALOG_SLUG_RULES]
+        self._leaf_slugs = {c.slug for c in taxonomy.leaf_categories()}
 
     # ------------------------------------------------------------------ public
     def identify(self, item: ListingText, vision: ImageAnalysis | None = None) -> IdentificationResult:
@@ -240,27 +412,66 @@ class IdentificationEngine:
         desc = fold(item.description or "")
         title_masked, desc_masked = self._brand(item, title, desc, res, vision)
         self._team_and_season(title_masked, desc_masked, res)
-        self._model(title_masked, desc_masked, res, vision)
-        self._category(item, title_masked, desc_masked, res, vision)
-        self._gender_attr(title, desc, res)
+        title_for_category = self._model(title_masked, desc_masked, res, vision)
+        self._category(item, title_for_category, desc_masked, res, vision)
+        self._gender_attr(item, title, desc, res)
         self._simple_attributes(item, title, desc, res, vision)
         self._signals(item, title, desc, res, vision)
+        self._contradictions(item, title, desc, res)
         res.confidence = self._confidence(res)
         return res
 
     # ----------------------------------------------------------------- helpers
-    def _match_brand(self, text: str) -> tuple[BrandSpec, str, tuple[int, int]] | None:
+    def _match_brands(self, text: str, *, allow_weak: bool = True) -> list[BrandMatch]:
+        """Every brand alias in ``text`` (longest alias first, each stretch of text counted once)."""
+        return list(self._match_brands_cached(text, allow_weak))
+
+    def _match_brands_uncached(self, text: str, allow_weak: bool) -> tuple[BrandMatch, ...]:
         tokens = _tokens(text)
-        for gate, pattern, brand, alias in self._brand_aliases:
-            if gate <= tokens and (m := pattern.search(text)):
-                return brand, alias, m.span()
-        return None
+        candidates = sorted({i for t in tokens for i in self._alias_by_word.get(t, ())})
+        found: list[BrandMatch] = []
+        masked = text
+        for idx in candidates:
+            gate, pattern, brand, alias, weak = self._brand_aliases[idx]
+            if (weak and not allow_weak) or not gate <= tokens:
+                continue
+            if m := pattern.search(masked):
+                found.append((brand, alias, m.span(), weak))
+                masked = self._mask(masked, m.span())
+        return tuple(found)
+
+    def _match_brand(self, text: str) -> tuple[BrandSpec, str, tuple[int, int]] | None:
+        found = self._match_brands(text)
+        return (found[0][0], found[0][1], found[0][2]) if found else None
 
     @staticmethod
     def _mask(text: str, span: tuple[int, int] | None) -> str:
         if not span:
             return text
         return text[: span[0]] + " " * (span[1] - span[0]) + text[span[1] :]
+
+    def _claims(self, text: str) -> list[tuple[BrandSpec, str, tuple[int, int]]]:
+        """ "tipo Nike", "stile Stone Island", "Nike style": the seller names a brand to say the item is NOT it.
+        Returns (brand, phrase, span) for each; the span is what must not count as the item's brand."""
+        out: list[tuple[BrandSpec, str, tuple[int, int]]] = []
+        for m in _CLAIM_CUE.finditer(text):
+            if hit := self._leading_brand(text[m.end() : m.end() + 40]):
+                brand, alias = hit
+                end = m.end() + len(alias)
+                out.append((brand, text[m.start() : end].strip(), (m.start(), end)))
+        for brand, _alias, span, _weak in self._match_brands(text, allow_weak=False):
+            if tail := _CLAIM_AFTER.match(text[span[1] :]):
+                end = span[1] + tail.end()
+                out.append((brand, text[span[0] : end].strip(), (span[0], end)))
+        return out
+
+    def _leading_brand(self, rest: str) -> tuple[BrandSpec, str] | None:
+        tokens = _tokens(rest)
+        for idx in sorted({i for t in tokens for i in self._alias_by_word.get(t, ())}):
+            gate, pattern, brand, alias, _weak = self._brand_aliases[idx]
+            if gate <= tokens and pattern.match(rest):
+                return brand, alias
+        return None
 
     def _brand(
         self,
@@ -270,67 +481,136 @@ class IdentificationEngine:
         res: IdentificationResult,
         vision: ImageAnalysis | None,
     ) -> tuple[str, str]:
-        field_match = self._match_brand(fold(item.brand_field)) if item.brand_field else None
-        title_match = self._match_brand(title)
-        desc_match = self._match_brand(desc)
-        title_masked = self._mask(title, title_match[2] if title_match else None)
-        desc_masked = self._mask(desc, desc_match[2] if desc_match else None)
+        # A brand named only to say the item is *not* it is a claim, never the item's brand.
+        claims = [(c, "title") for c in self._claims(title)] + [
+            (c, "description") for c in self._claims(desc)
+        ]
+        for (brand, phrase, _), where in claims:
+            res.flags.setdefault(
+                "claimed_brand",
+                {"brand": brand.name, "slug": brand.slug, "phrase": phrase[:40], "where": where},
+            )
+        for (_, _, span), where in claims:
+            if where == "title":
+                title = self._mask(title, span)
+            else:
+                desc = self._mask(desc, span)
+
+        raw_field = (item.brand_field or "").strip()
+        field_text = "" if fold(raw_field) in NO_BRAND_FIELDS else fold(raw_field)
+        field_hits = self._match_brands(field_text) if field_text else []
+        field_match = field_hits[0] if field_hits else None
+        title_hits = self._match_brands(title)
+        strong_title = [h for h in title_hits if not h[3]]
+        title_match = (strong_title or title_hits or [None])[0]
+        desc_hits = self._match_brands(desc, allow_weak=False)
+        title_span = title_match[2] if title_match else None
+        if title_match and title_match[1].startswith("polo ") and title_span:
+            title_span = (title_span[0] + 5, title_span[1])  # "polo ralph lauren": "polo" is still the kind of item
+        if title_match and title_match[1] in PRODUCT_ALIASES:
+            title_span = None  # "Air Jordan 1": the brand's name is also the product's
+        title_masked = self._mask(title, title_span)
+        desc_masked = self._mask(desc, desc_hits[0][2] if desc_hits else None)
 
         chosen: tuple[BrandSpec, str] | None = None
         if field_match:
-            brand, alias, _ = field_match
+            brand, alias, _, _ = field_match
             res.brand = Attribute(brand.slug, Certainty.CERTAIN, "provider_field", 0.98)
             chosen = (brand, alias)
-            if title_match and title_match[0].slug != brand.slug:
-                res.brand.confidence = 0.8
+            lot = bool(lot_pieces(title) or lot_pieces(desc))  # a bundle may name several brands
+            if not lot and (
+                clash := next((h for h in strong_title if not related_brands(h[0].slug, brand.slug)), None)
+            ):
+                # The field and the title name different brands: one of them is wrong, so neither is a filter.
+                res.brand = Attribute()
+                chosen = None
+                res.flags["brand_conflict"] = {"field": brand.name, "title": clash[0].name}
+                self._set_guess(res, brand, "provider_field", 0.5, f"il titolo cita '{clash[0].name}'")
+                res.evidence.append(f"Il titolo cita '{clash[0].name}' ma il brand indicato è '{brand.name}'")
+        elif field_text:
+            if fz := self._fuzzy_brand(field_text):
+                self._misspelled(res, *fz)
+            else:
+                # The marketplace names a brand the catalogue does not know: it stays unknown (a word of the title
+                # does not replace it) and the doubt about authenticity is raised, not lowered.
+                res.flags["unknown_brand"] = raw_field[:60]
                 res.evidence.append(
-                    f"Il titolo cita '{title_match[0].name}' ma il brand indicato è '{brand.name}'"
+                    f"Brand '{raw_field[:60]}' non presente nel catalogo interno: marca sconosciuta, "
+                    "autenticità non valutabile dal solo testo"
                 )
+                if strong_title:
+                    self._set_guess(
+                        res,
+                        strong_title[0][0],
+                        "title",
+                        0.5,
+                        "citato nel titolo, ma il campo marca dice altro",
+                    )
+            return title_masked, desc_masked
         elif title_match:
-            brand, alias, _ = title_match
-            conf = 0.6 if len(alias) <= SHORT_ALIAS_LEN else 0.85
-            res.brand = Attribute(brand.slug, Certainty.PROBABLE, "title", conf)
-            chosen = (brand, alias)
-            res.evidence.append(f"Brand '{brand.name}' riconosciuto nel titolo")
-        elif desc_match:
-            brand, alias, _ = desc_match
-            conf = 0.5 if len(alias) <= SHORT_ALIAS_LEN else 0.7
-            res.brand = Attribute(brand.slug, Certainty.PROBABLE, "description", conf)
-            chosen = (brand, alias)
-            res.evidence.append(f"Brand '{brand.name}' dedotto dalla descrizione")
-        else:
-            inferred = self._brand_from_lines(title) or self._brand_from_lines(desc)
-            if inferred:
-                res.brand = Attribute(inferred.slug, Certainty.PROBABLE, "model_keyword", 0.55)
-                chosen = (inferred, inferred.name)
-                res.evidence.append(f"Brand '{inferred.name}' dedotto dal nome del modello")
-            elif fz := self._fuzzy_brand(fold(item.brand_field or "")) or self._fuzzy_brand(title):
-                brand, written, alias = fz
-                res.brand = Attribute(brand.slug, Certainty.PROBABLE, "fuzzy", 0.55)
+            brand, alias, _, weak = title_match
+            # A short or ordinary-word alias is a hint only; a model name that belongs to that brand alone
+            # ("TNF Nuptse 700") confirms it.
+            inferred = self._brand_from_lines(title, desc) if weak else None
+            if weak and not (inferred and inferred[1] and inferred[0].slug == brand.slug):
+                self._set_guess(res, brand, "title", 0.6, "alias breve o parola comune")
+            else:
+                res.brand = Attribute(brand.slug, Certainty.PROBABLE, "title", 0.85)
                 chosen = (brand, alias)
-                res.flags["misspelled_brand"] = {"written": written, "brand": brand.name}
-                res.evidence.append(
-                    f"Brand scritto male: '{written}' → {brand.name}. Chi cerca '{brand.name}' "
-                    "probabilmente non lo trova: possibile occasione (verifica che sia davvero quel brand)."
+                res.evidence.append(f"Brand '{brand.name}' riconosciuto nel titolo")
+        elif desc_hits:
+            brands = {h[0].slug for h in desc_hits}
+            brand, alias, span, _ = desc_hits[0]
+            context = self._description_context(desc, span)
+            if len(brands) == 1 and context == "cued":
+                res.brand = Attribute(brand.slug, Certainty.PROBABLE, "description", FIRM_BRAND)
+                chosen = (brand, alias)
+                res.evidence.append(f"Brand '{brand.name}' dedotto dalla descrizione")
+            else:
+                why = (
+                    "più marchi citati nella descrizione"
+                    if len(brands) > 1
+                    else "citato in un confronto o come accessorio"
+                    if context == "comparison"
+                    else "citato nella descrizione senza dire che è la marca"
                 )
+                res.flags["brand_mentions"] = sorted(brands)
+                self._set_guess(res, brand, "description", 0.5, why)
+        else:
+            inferred = self._brand_from_lines(title, desc)
+            if inferred:
+                brand, strong = inferred
+                if strong:
+                    res.brand = Attribute(brand.slug, Certainty.PROBABLE, "model_keyword", FIRM_BRAND)
+                    chosen = (brand, brand.name)
+                    res.evidence.append(f"Brand '{brand.name}' dedotto dal nome del modello")
+                else:
+                    self._set_guess(
+                        res, brand, "model_keyword", 0.5, "dedotto da un nome di modello non esclusivo"
+                    )
+            elif fz := self._fuzzy_brand(title):
+                self._misspelled(res, *fz)
             elif vision and vision.brand and (vb := self._match_brand(fold(vision.brand.value))):
-                res.brand = Attribute(vb[0].slug, vision.brand.certainty, "image", vision.brand.confidence)
-                chosen = (vb[0], vb[1])
-                res.evidence.append(f"Brand '{vb[0].name}' riconosciuto dalle foto")
-            elif item.brand_field:
-                res.evidence.append(f"Brand '{item.brand_field}' non presente nel catalogo interno")
+                conf = vision.brand.confidence
+                if vision.brand.certainty == Certainty.CERTAIN or conf >= FIRM_BRAND:
+                    res.brand = Attribute(vb[0].slug, vision.brand.certainty, "image", conf)
+                    chosen = (vb[0], vb[1])
+                    res.evidence.append(f"Brand '{vb[0].name}' riconosciuto dalle foto")
+                else:
+                    self._set_guess(res, vb[0], "image", conf, "letto dalle foto con poca sicurezza")
 
         if chosen:
             brand, alias = chosen
             res.brand_name = brand.name
             # A sub-line ("Polo Ralph Lauren", "Tommy Jeans") can appear in any text field.
-            for match, source in (
-                (field_match, "provider_field"),
-                (title_match, "title"),
-                (desc_match, "description"),
+            for hits, source in (
+                (field_hits, "provider_field"),
+                (title_hits, "title"),
+                (desc_hits, "description"),
             ):
-                if match and match[0].slug == brand.slug and match[1] in SUB_LINES:
-                    res.line = Attribute(SUB_LINES[match[1]], Certainty.PROBABLE, source, 0.8)
+                hit = next((h for h in hits if h[0].slug == brand.slug and h[1] in SUB_LINES), None)
+                if hit:
+                    res.line = Attribute(SUB_LINES[hit[1]], Certainty.PROBABLE, source, 0.8)
                     break
             if vision and vision.brand and vision.brand.certainty == Certainty.CERTAIN:
                 vb = self._match_brand(fold(vision.brand.value))
@@ -338,6 +618,37 @@ class IdentificationEngine:
                     res.brand.confidence = max(res.brand.confidence, 0.95)
                     res.evidence.append("Brand confermato da logo/etichetta nelle foto")
         return title_masked, desc_masked
+
+    def _misspelled(self, res: IdentificationResult, brand: BrandSpec, written: str, _alias: str) -> None:
+        res.flags["misspelled_brand"] = {"written": written, "brand": brand.name}
+        self._set_guess(res, brand, "fuzzy", 0.55, f"'{written}' somiglia a '{brand.name}'")
+        res.evidence.append(
+            f"Brand scritto male: '{written}' → {brand.name}. Chi cerca '{brand.name}' "
+            "probabilmente non lo trova: possibile occasione (verifica che sia davvero quel brand)."
+        )
+
+    def _set_guess(
+        self, res: IdentificationResult, brand: BrandSpec, source: str, conf: float, why: str
+    ) -> None:
+        res.brand_guess = Attribute(brand.slug, Certainty.PROBABLE, source, conf)
+        res.brand_guess_name = brand.name
+        res.evidence.append(
+            f"Brand '{brand.name}' solo ipotizzato ({why}): non usato per cercare i comparabili"
+        )
+
+    @staticmethod
+    def _description_context(desc: str, span: tuple[int, int]) -> str:
+        """``cued`` when the description says the brand is the item's ("Marca Moncler", "Ralph Lauren originale"),
+        ``comparison`` when it is named next to something else, else ``plain``."""
+        # "Brand: Armani Jeans": the colon belongs to the cue, so only a full stop ends the look-back.
+        before = _WORD.findall(_SENTENCE_END.split(desc[: span[0]])[-1])[-3:]
+        after_text = desc[span[1] :]
+        after = _WORD.findall(_SENTENCE_BREAK.split(after_text)[0])[:2]
+        if any(w in _COMPARISON_BEFORE for w in before) or _AFTER_NEGATING.search(after_text[:80]):
+            return "comparison"
+        if any(w in _STRONG_CUES for w in before[-2:] + after) or (before and before[-1] in _BRAND_CUES):
+            return "cued"
+        return "plain"
 
     def _fuzzy_brand(self, text: str) -> tuple[BrandSpec, str, str] | None:
         """(brand, written form, catalog alias) for a near-miss spelling of a known brand."""
@@ -349,7 +660,7 @@ class IdentificationEngine:
                 if len(cand) < 5:
                     continue
                 cand_words = cand.split()
-                for alias, brand in self._fuzzy_aliases:
+                for alias, brand in self._fuzzy_by_prefix.get(cand[:2], ()):
                     if cand == alias or abs(len(alias) - len(cand)) > 3:
                         continue
                     alias_words = alias.split()
@@ -357,7 +668,7 @@ class IdentificationEngine:
                         continue
                     if len(alias_words) == 1:
                         score = fuzz.ratio(cand, alias)
-                        ok = score >= 86
+                        ok = score >= 88
                     else:
                         # word by word: every word close, the whole close on average
                         parts = [
@@ -370,24 +681,46 @@ class IdentificationEngine:
                         best = (score, brand, cand, alias)
         return (best[1], best[2], best[3]) if best else None
 
-    def _brand_from_lines(self, text: str) -> BrandSpec | None:
-        """Infer the brand from a distinctive model name, only when it points to a single brand."""
-        tokens = _tokens(text)
-        candidates = {
-            brand.slug: brand
-            for gate, pattern, brand in self._distinctive
-            if gate <= tokens and pattern.search(text)
-        }
-        return next(iter(candidates.values())) if len(candidates) == 1 else None
+    def _brand_from_lines(self, title: str, desc: str) -> tuple[BrandSpec, bool] | None:
+        """Infer the brand from a distinctive model name, only when it points to a single brand. The second value
+        says whether it is strong enough to be the brand: a name no other brand uses, and a title that does not
+        name another kind of item ("Sciarpa Himalayan" is a scarf, not a puffer jacket)."""
+        for text in (title, desc):
+            tokens = _tokens(text)
+            candidates: dict[str, tuple[BrandSpec, str, str]] = {
+                brand.slug: (brand, kw, cat)
+                for gate, pattern, brand, kw, cat in self._distinctive
+                if gate <= tokens and pattern.search(text)
+            }
+            if len(candidates) != 1:
+                continue
+            brand, kw, line_cat = next(iter(candidates.values()))
+            if kw in WEAK_MODEL_KEYWORDS or text is desc:
+                return brand, False
+            scores = self._keyword_scores(self._mask_keyword(title, kw))
+            named = max(scores, key=lambda s: scores[s]) if scores else None
+            consistent = (
+                named is None
+                or named == line_cat
+                or self.tax.parent_of(named) == self.tax.parent_of(line_cat)
+            )
+            return brand, consistent
+        return None
+
+    @staticmethod
+    def _mask_keyword(text: str, kw: str) -> str:
+        return re.sub(rf"(?<!\w){re.escape(kw)}(?!\w)", " " * len(kw), text)
 
     def _team_and_season(self, title: str, desc: str, res: IdentificationResult) -> None:
-        for text, conf in ((title, 0.85), (desc, 0.6)):
+        """A team is read only where the text is about a football shirt: a football word or a season next to it, or
+        a full club name. "Made in Italy", "Spedisco da Napoli", "Inter-city", "Ritiro a Roma" are not teams."""
+        for text, source, conf in ((title, "title", 0.85), (desc, "description", 0.6)):
             tokens = _tokens(text)
-            for gate, pattern, team in self._team_patterns:
-                if gate <= tokens and pattern.search(text):
-                    res.team = Attribute(
-                        team, Certainty.PROBABLE, "title" if text is title else "description", conf
-                    )
+            context = bool(FOOTBALL_CONTEXT.search(text))
+            for gate, pattern, team, strong in self._team_patterns:
+                if gate <= tokens and pattern.search(text) and (context or (strong and source == "title")):
+                    res.team = Attribute(team, Certainty.PROBABLE, source, conf if context else 0.7)
+                    res.flags["football_context"] = context
                     break
             if res.team.known:
                 break
@@ -398,7 +731,9 @@ class IdentificationEngine:
             if 0 <= end_full - start <= 1:
                 res.season = Attribute(f"{start}/{str(end_full)[-2:]}", Certainty.PROBABLE, "title", 0.8)
 
-    def _model(self, title: str, desc: str, res: IdentificationResult, vision: ImageAnalysis | None) -> None:
+    def _model(self, title: str, desc: str, res: IdentificationResult, vision: ImageAnalysis | None) -> str:
+        """Set the model; returns the title with the model's own words taken out (so "Tech Fleece" does not also
+        count as the category "fleece")."""
         brand_slug = res.brand.value
         if brand_slug:
             for text, source, conf in ((title, "title", 0.85), (desc, "description", 0.65)):
@@ -406,19 +741,68 @@ class IdentificationEngine:
                 for gate, pattern, brand, line_name, _cat in self._line_index:
                     if brand.slug != brand_slug or not gate <= tokens:
                         continue
-                    if pattern.search(text):
+                    if m := pattern.search(text):
                         res.model = Attribute(line_name, Certainty.PROBABLE, source, conf)
                         res.evidence.append(
                             f"Modello '{line_name}' riconosciuto ({'titolo' if source == 'title' else 'descrizione'})"
                         )
-                        return
-        if res.team.known:
+                        return self._mask(title, m.span()) if source == "title" else title
+        # A team is the model of a football shirt only (never of a hoodie that merely names the club).
+        if res.team.known and res.flags.get("football_context"):
             res.model = Attribute(res.team.value, Certainty.PROBABLE, res.team.source, res.team.confidence)
-            return
+            return title
         if vision and vision.model:
             res.model = Attribute(
                 vision.model.value, vision.model.certainty, "image", vision.model.confidence
             )
+        return title
+
+    # ---------------------------------------------------------------- category
+    def _crumb_entries(self, item: ListingText) -> list[str]:
+        raw = " > ".join(x for x in (item.category_field, item.subcategory_field) if x)
+        return [e for e in (fold(p) for p in re.split(r"\s*(?:>|›|\|)\s*", raw)) if e]
+
+    def _slug_category(self, slug: str) -> str | None:
+        """Category of a catalogue slug ("straight-fit-jeans"); a slug that joins several kinds
+        ("coats-and-jackets") is a group and names none."""
+        parts = slug.split("-and-")
+        kinds = [next((k for rx, k in self._slug_rules if rx.search(p)), None) for p in parts]
+        return kinds[0] if None not in kinds and len(set(kinds)) == 1 and len(parts) == 1 else None
+
+    def _category_from_crumbs(self, item: ListingText, res: IdentificationResult) -> str | None:
+        """The category the marketplace itself files the item under, from the catalogue links when the capture has
+        them (language-free), else from the names on the path; the deepest entry that names one of ours wins."""
+        brand_words = {fold(res.brand_name or ""), fold(item.brand_field or "")} - {""}
+        for code in reversed(item.category_codes):
+            parsed = catalog_code(code)
+            if not parsed:
+                continue
+            ident, slug = parsed
+            if ident in CATALOG_ID_CATEGORIES:
+                if CATALOG_ID_CATEGORIES[ident]:
+                    return CATALOG_ID_CATEGORIES[ident]
+                continue
+            if kind := self._slug_category(slug):
+                return kind
+        entries = self._crumb_entries(item)
+        for entry in reversed(entries):
+            if CRUMB_GROUPS.match(entry):
+                continue
+            if any(b and b in entry for b in brand_words):
+                continue  # "Polo Ralph Lauren Polo": the brand's own entry, not a kind of item
+            if entry in self._leaf_slugs:
+                return entry
+            for cat in self.tax.leaf_categories():
+                if entry in (fold(cat.name), fold(cat.name_it)):
+                    return cat.slug
+            if re.search(r"\s(?:e|and|et|y|und|&)\s", entry):
+                kinds = {s for rx, s in self._crumb_rules if rx.search(entry)}
+                if len(kinds) != 1:
+                    continue  # a group of several kinds ("Maglioni e felpe")
+            for rx, slug in self._crumb_rules:
+                if rx.search(entry):
+                    return slug
+        return None
 
     def _category(
         self,
@@ -433,16 +817,10 @@ class IdentificationEngine:
 
         def add(slug: str, pts: float, source: str) -> None:
             scores[slug] = scores.get(slug, 0.0) + pts
-            if source == "provider_field" or slug not in sources:
+            if slug not in sources:
                 sources[slug] = source
 
-        provider_text = fold(" ".join(x for x in (item.category_field, item.subcategory_field) if x))
-        if provider_text:
-            for cat in self.tax.leaf_categories():
-                if provider_text in (fold(cat.name), fold(cat.name_it), cat.slug):
-                    add(cat.slug, 8, "provider_field")
-            for slug, pts in self._keyword_scores(provider_text).items():
-                add(slug, pts * 1.6, "provider_field")
+        crumb = self._category_from_crumbs(item, res)
         for slug, pts in self._keyword_scores(title).items():
             add(slug, pts, "title")
         for slug, pts in self._keyword_scores(desc).items():
@@ -452,39 +830,37 @@ class IdentificationEngine:
             for line in brand.lines if brand else ():
                 if line.name == res.model.value:
                     add(line.category, 2.5, "model")
-        if res.team.known:
+        if res.team.known and res.flags.get("football_context") and res.team.source == "title":
             add("football-shirts", 3.5, "title")
         if vision and vision.category and vision.category.value in self.tax.category_by_slug:
             add(vision.category.value, 2 * vision.category.confidence, "image")
+        if crumb:
+            # Filed under another category than its title says: fewer buyers browse to it.
+            title_scores = self._keyword_scores(title)
+            if title_scores:
+                seen = max(title_scores, key=lambda s: title_scores[s])
+                parents = {c.slug: c.parent for c in self.tax.leaf_categories()}
+                if (
+                    seen != crumb
+                    and parents.get(seen) != parents.get(crumb)
+                    and title_scores[seen] >= 2
+                    and title_scores.get(crumb, 0) == 0
+                ):
+                    res.flags["category_mismatch"] = {"declared": crumb, "detected": seen}
+                    res.evidence.append(
+                        f"Categoria dichiarata '{crumb}' ma il titolo indica '{seen}': chi cerca in quella "
+                        "categoria non lo vede (possibile occasione)."
+                    )
+            res.category = Attribute(crumb, Certainty.CERTAIN, "provider_field", 0.97)
+            return
         if not scores:
             return
-        # Filed under another category than its title says: fewer buyers browse to it.
-        declared = [slug for slug, src in sources.items() if src == "provider_field"]
-        title_scores = self._keyword_scores(title)
-        if declared and title_scores:
-            decl = max(declared, key=lambda s: scores[s])
-            seen = max(title_scores, key=lambda s: title_scores[s])
-            parents = {c.slug: c.parent for c in self.tax.leaf_categories()}
-            if (
-                seen != decl
-                and parents.get(seen) != parents.get(decl)
-                and title_scores[seen] >= 2
-                and title_scores.get(decl, 0) == 0
-            ):
-                res.flags["category_mismatch"] = {"declared": decl, "detected": seen}
-                res.evidence.append(
-                    f"Categoria dichiarata '{decl}' ma il titolo indica '{seen}': chi cerca in quella "
-                    "categoria non lo vede (possibile occasione)."
-                )
         best = max(scores, key=lambda s: scores[s])
         total = sum(scores.values())
         share = scores[best] / total if total else 0
-        source = sources[best]
-        if source == "provider_field" and scores[best] >= 8:
-            res.category = Attribute(best, Certainty.CERTAIN, source, 0.97)
-        else:
-            conf = min(0.9, 0.45 + 0.1 * scores[best]) * (0.6 + 0.4 * share)
-            res.category = Attribute(best, Certainty.PROBABLE, source, round(conf, 2))
+        conf = min(0.9, 0.45 + 0.1 * scores[best]) * (0.6 + 0.4 * share)
+        # Only the marketplace's own category path makes a category certain, never words in a title.
+        res.category = Attribute(best, Certainty.PROBABLE, sources[best], round(conf, 2))
 
     def _keyword_scores(self, text: str) -> dict[str, float]:
         """Longest-first keyword matching with span masking (so 't-shirt' doesn't count as 'shirt')."""
@@ -498,12 +874,17 @@ class IdentificationEngine:
             m = pattern.search(masked)
             if not m:
                 continue
-            weight = 3.0 if len(kw) > 4 else 2.0
+            weight = 1.0 if kw in GENERIC_CATEGORY_KEYWORDS else 3.0 if len(kw) > 4 else 2.0
             scores[cat.slug] = scores.get(cat.slug, 0.0) + weight
             masked = self._mask(masked, m.span())
         return scores
 
-    def _gender_attr(self, title: str, desc: str, res: IdentificationResult) -> None:
+    # ------------------------------------------------------------------ gender
+    def _gender_attr(self, item: ListingText, title: str, desc: str, res: IdentificationResult) -> None:
+        entries = self._crumb_entries(item)
+        if entries and (g := CRUMB_ROOT_GENDER.get(entries[0])):
+            res.gender = Attribute(g, Certainty.CERTAIN, "provider_field", 0.92)
+            return
         for text, source, conf in ((title, "title", 0.8), (desc, "description", 0.6)):
             text = VINTAGE_PATTERN.sub(" ", text)  # "anni 90" must not read as kids' age
             tokens = _tokens(text)
@@ -517,6 +898,7 @@ class IdentificationEngine:
                     res.gender = Attribute(g, Certainty.PROBABLE, source, conf)
                     return
 
+    # ------------------------------------------------------- the simple fields
     def _simple_attributes(
         self,
         item: ListingText,
@@ -543,15 +925,15 @@ class IdentificationEngine:
 
         category = res.category.value
         if s := normalize_size(item.size_field, category, res.gender.value):
-            res.size = Attribute(s, Certainty.CERTAIN, "provider_field", 0.95)
-        else:
-            m2 = re.search(r"\b(?:tg|taglia|size|talla|taille)\.?\s*([a-z0-9.,/]{1,6})\b", title)
-            if m2 and (s := normalize_size(m2.group(1), category, res.gender.value)):
-                res.size = Attribute(s, Certainty.PROBABLE, "title", 0.7)
-            elif vision and vision.size_label and (s := normalize_size(vision.size_label.value, category)):
-                res.size = Attribute(
-                    s, vision.size_label.certainty, "image_label", vision.size_label.confidence
-                )
+            # A bare number is a size only once we know what the item is: until then it is a guess at the scale.
+            if size_is_ambiguous(item.size_field, category, res.gender.value):
+                res.size = Attribute(s, Certainty.PROBABLE, "provider_field", 0.6)
+            else:
+                res.size = Attribute(s, Certainty.CERTAIN, "provider_field", 0.95)
+        elif (s := self._title_size(title, category, res.gender.value)) is not None:
+            res.size = Attribute(s, Certainty.PROBABLE, "title", 0.7)
+        elif vision and vision.size_label and (s := normalize_size(vision.size_label.value, category)):
+            res.size = Attribute(s, vision.size_label.certainty, "image_label", vision.size_label.confidence)
 
         if category in WINTER:
             res.seasonality = Attribute("autumn_winter", Certainty.PROBABLE, "category", 0.7)
@@ -562,8 +944,16 @@ class IdentificationEngine:
 
         raw_text = f"{item.title}\n{item.description or ''}"
         for pattern in PRODUCT_CODE_PATTERNS:
-            if m3 := pattern.search(raw_text):
-                res.product_code = Attribute(m3.group(1).upper(), Certainty.PROBABLE, "text", 0.7)
+            code = next(
+                (
+                    m3.group(1).upper()
+                    for m3 in pattern.finditer(raw_text)
+                    if plausible_product_code(m3.group(1))
+                ),
+                None,
+            )
+            if code:
+                res.product_code = Attribute(code, Certainty.PROBABLE, "text", 0.7)
                 break
         if not res.product_code.known and vision and vision.product_code:
             res.product_code = Attribute(
@@ -578,6 +968,17 @@ class IdentificationEngine:
             season_year is not None and season_year < 2010
         )
 
+    @staticmethod
+    def _title_size(title: str, category: str | None, gender: str | None) -> str | None:
+        """A size the title states ("taglia 42 (S)", "tg. M", "W32 L32")."""
+        m = _TITLE_SIZE.search(title)
+        if m and (s := normalize_size(m.group(1), category, gender)):
+            return s
+        if m := _TITLE_WAIST.search(title):
+            return f"W{m.group(1)}"
+        return None
+
+    # ----------------------------------------------------------------- signals
     def _signals(
         self,
         item: ListingText,
@@ -587,13 +988,26 @@ class IdentificationEngine:
         vision: ImageAnalysis | None,
     ) -> None:
         text = f"{title} \n {desc}"
-        res.suspicious_terms = sorted({label for p, label in self._suspicious if p.search(text)})
-        # "tipo/stile <brand>" ("like Ralph Lauren") is a strong counterfeit/dupe hint.
-        if res.brand_name and re.search(
-            rf"\b(?:tipo|stile|style|like)\s+{re.escape(fold(res.brand_name))}\b", text
-        ):
-            res.suspicious_terms.append(f"'tipo {res.brand_name}'")
-        res.defect_terms = sorted({label for p, label in self._defects if p.search(text)})
+        terms: set[str] = set()
+        for rx, label in self._suspicious:
+            for m in rx.finditer(text):
+                if self._negated_term(text, m.start()):
+                    continue
+                if label == "copia" and self._near_document(text, m.start(), m.end()):
+                    continue
+                terms.add(label)
+                break
+        # "tipo/stile <brand>" ("like Ralph Lauren") is a strong counterfeit/dupe hint, whether or not the brand
+        # was also named properly.
+        # It is suspicious unless the item has a firm brand of its own that is another one ("simile a Nike, ma è
+        # Champion originale" compares, it does not claim).
+        claim = res.flags.get("claimed_brand")
+        if claim and (not res.brand.value or related_brands(res.brand.value, claim["slug"])):
+            terms.add(f"'tipo {claim['brand']}'")
+        res.suspicious_terms = sorted(terms)
+        report = extract_defects(f"{item.title}\n{item.description or ''}")
+        res.defect_terms = report.labels
+        res.defect_hits = [h.as_dict() for h in report.hits]
         if m := CLAIMED_PRICE.search(desc):
             try:
                 value = float(m.group(1).replace(".", "").replace(",", "."))
@@ -615,6 +1029,75 @@ class IdentificationEngine:
             res.authenticity = Attribute("no_red_flags", Certainty.UNVERIFIABLE, "image", 0.5)
 
     @staticmethod
+    def _negated_term(text: str, start: int) -> bool:
+        """ "non è un fake", "garantito non replica", "pas une copie": a term right after a negation is not read."""
+        before = _WORD.findall(_SENTENCE_BREAK.split(text[:start])[-1])[-3:]
+        return any(w in NEGATION_WORDS for w in before)
+
+    @staticmethod
+    def _near_document(text: str, start: int, end: int) -> bool:
+        """ "copia dello scontrino", "allego copia della fattura": a copy of a document, not of the item."""
+        window = (
+            _WORD.findall(text[max(0, start - 30) : start])[-3:] + _WORD.findall(text[end : end + 40])[:4]
+        )
+        return any(w in DOCUMENT_WORDS for w in window)
+
+    # ------------------------------------------------------------ contradictions
+    def _contradictions(self, item: ListingText, title: str, desc: str, res: IdentificationResult) -> None:
+        """Where a field and the free text disagree. They are listed (the dossier shows them) and lower the
+        confidence: the field is kept, the text is not trusted over it."""
+
+        def add(field_name: str, declared: str, found: str, where: str, severity: str = "medium") -> None:
+            res.contradictions.append(
+                {
+                    "field": field_name,
+                    "declared": declared,
+                    "found": found,
+                    "where": where,
+                    "severity": severity,
+                }
+            )
+
+        if clash := res.flags.get("brand_conflict"):
+            add("brand", clash["field"], clash["title"], "titolo", "high")
+        elif res.brand.value:
+            other = next(
+                (h for h in self._match_brands(desc, allow_weak=False) if h[0].slug != res.brand.value), None
+            )
+            if other and self._description_context(desc, other[2]) == "cued":
+                add("brand", res.brand_name or "", other[0].name, "descrizione", "medium")
+        ts = self._title_size(title, res.category.value, res.gender.value)
+        if (
+            res.size.source == "provider_field"
+            and ts
+            and ts != res.size.value
+            and size_distance(ts, res.size.value) != 0
+        ):
+            add("size", res.size.value or "", ts, "titolo")
+        if res.color.source == "provider_field":
+            tc = normalize_color(title)
+            if (
+                tc
+                and tc != res.color.value
+                and not any(tc in f and res.color.value in f for f in _COLOR_FAMILIES)
+            ):
+                add("color", res.color.value or "", tc, "titolo", "low")
+        if res.gender.source == "provider_field":
+            rest = self._title_gender(title)
+            if rest and rest not in (res.gender.value, "unisex"):
+                add("gender", res.gender.value or "", rest, "titolo")
+        if cm := res.flags.get("category_mismatch"):
+            add("category", cm["declared"], cm["detected"], "titolo", "low")
+
+    def _title_gender(self, title: str) -> str | None:
+        text = VINTAGE_PATTERN.sub(" ", title)
+        tokens = _tokens(text)
+        found = {g for gate, pattern, g in self._gender if gate <= tokens and pattern.search(text)}
+        if len(found) == 1:
+            return next(iter(found))
+        return None
+
+    @staticmethod
     def _confidence(res: IdentificationResult) -> int:
         brand_has_lines = False
         if res.brand.value and (spec := DEFAULT_TAXONOMY.brand_by_slug.get(res.brand.value)):
@@ -631,4 +1114,6 @@ class IdentificationEngine:
             + 0.05 * res.color.confidence
             + 0.05 * (0.8 if res.material.known else 0.4)
         )
+        # A disagreement between the fields and the text means one of them is wrong: less sure of the whole.
+        score -= min(0.18, 0.06 * len(res.contradictions))
         return max(0, min(100, round(score * 100)))

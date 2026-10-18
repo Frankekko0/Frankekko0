@@ -25,15 +25,16 @@ from app.api.capture_pipeline import (
 )
 from app.api.deps import DB, CurrentUser, Economics
 from app.core.cache import NS_FEED, cache
-from app.core.errors import InsufficientDataError, NotFoundError
+from app.core.errors import AppError, InsufficientDataError, NotFoundError
 from app.core.rate_limit import RateLimit
 from app.core.serialization import jsonable
 from app.core.timing import measure_analysis
 from app.db.models import Brand, Category, Listing, ListingImage, Opportunity
 from app.domain.enums import AcquisitionMode, CaptureLevel, ListingStatus
 from app.identification.engine import ListingText
+from app.identification.priors import counterfeit_prior
 from app.ingestion.catalog import load_catalog
-from app.ingestion.normalizer import normalize_condition
+from app.ingestion.normalizer import market_country, market_currency, market_from_url, normalize_condition
 from app.ingestion.service import IngestionService, IngestResult, get_engine, listing_columns
 from app.marketplace.base import (
     BatchImportInput,
@@ -198,6 +199,13 @@ def manual_to_provider(
 ) -> ProviderListing:
     url = str(body.url).split("#")[0]
     _provider, external_id = listing_identity(url)
+    market = market_from_url(url)
+    if market_currency(market) != "EUR":
+        # The price would be stored as euros: another currency is not analysed (the extension refuses it too).
+        raise AppError(
+            f"Il mercato vinted.{market} usa una valuta diversa dall'euro: FlipFinder analizza solo prezzi in euro.",
+            code="unsupported_currency",
+        )
     return ProviderListing(
         external_id=external_id,
         url=url,
@@ -206,13 +214,15 @@ def manual_to_provider(
         price=body.price,
         brand=body.brand,
         category=body.category or body.category_path,
+        category_codes=body.category_codes,
         size=body.size,
         condition=body.condition,
         color=body.color,
         material=body.material,
         images=[ProviderImage(url=str(u)) for u in body.image_urls],
         seller=seller_for(body, url),
-        country=body.country,
+        # The page's own domain is the market the price belongs to (a country is only ever read from it).
+        country=body.country or market_country(market),
         published_at=body.published_at,
         published_at_kind=body.published_at_kind if body.published_at else None,
         status=ListingStatus(body.status),
@@ -386,6 +396,7 @@ async def analyze_adhoc(
             description=pl.description,
             brand_field=pl.brand,
             category_field=pl.category,
+            category_codes=tuple(pl.category_codes),
             size_field=pl.size,
             condition=pl.condition,
             color_field=pl.color,
@@ -404,7 +415,7 @@ async def analyze_adhoc(
         listing_age_hours=0.0,
         shipping_fee=pl.shipping_fee,
         brand_name=brand.name if brand else None,
-        brand_counterfeit_risk=brand.counterfeit_risk if brand else 0.1,
+        brand_counterfeit_risk=counterfeit_prior(brand.counterfeit_risk if brand else None, ident.as_dict()),
         category_baseline_days=category.baseline_days if category else 14,
         identification=ident.as_dict(),
         identification_confidence=ident.confidence,

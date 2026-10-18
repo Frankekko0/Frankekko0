@@ -107,7 +107,7 @@ COUNTRY_WORDS = {
     "germany": "DE",
 }
 # Generic words that cover several categories ("felpa" = crewneck sweatshirts and hoodies).
-GENERIC_CATEGORY_WORDS = {"felpa": ("sweatshirts", "hoodies")}
+GENERIC_CATEGORY_WORDS = {"felpa": ("sweatshirts", "hoodies"), "felpe": ("sweatshirts", "hoodies")}
 NUM = r"(\d+(?:[.,]\d+)?)"
 EUR = r"(?:\s*(?:€|euro|eur))?"
 

@@ -124,7 +124,7 @@ async def test_case_w_a_price_change_leaves_the_photo_passes_alone_and_is_told_i
         await AnalysisPipeline(s).analyze_many([lid], now=NOW)
     async with session_scope() as s:
         await IngestionService(s, "test").ingest(
-            [pl.model_copy(update={"price": D("23")})], now=NOW + timedelta(hours=1)
+            [pl.model_copy(update={"price": D("21")})], now=NOW + timedelta(hours=1)
         )
         await AnalysisPipeline(s).analyze_many([lid], now=NOW + timedelta(hours=1))
     async with session_scope() as s:
@@ -140,7 +140,7 @@ async def test_case_w_a_price_change_leaves_the_photo_passes_alone_and_is_told_i
         opp = (await s.execute(select(Opportunity).where(Opportunity.listing_id == lid))).scalar_one()
     assert len(rows) == 2 and rows[1].trigger == "price_change"
     d = opp.dossier
-    assert d["delta"] == ["Prezzo da 35 € a 23 €"]
+    assert d["delta"] == ["Prezzo da 35 € a 21 €"]
     assert {"P1", "P2", "P4", "P5", "P6", "P8", "P9"}.isdisjoint(d["changed_passes"])
     assert "P12" in d["changed_passes"]
     # The permanent record keeps the same account, in its compact form.

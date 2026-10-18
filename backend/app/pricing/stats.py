@@ -5,6 +5,11 @@
   (median absolute deviation). Log space is used because prices are multiplicative: a 150 EUR
   ask among 38-49 EUR comparables is an outlier, while 30 vs 60 EUR is a plausible spread.
 * Small samples (n < 4) fall back to a ratio filter around the median.
+* Price levels: a pool can hold two markets (another line, another season, before and after a price
+  drop). A gap between adjacent log-prices wider than ``LEVEL_GAP`` splits it in clusters; the
+  cluster with the most weight is the price and the others are reported, not averaged in
+  (``cluster_prices``). Plain outlier removal over the whole pool would delete the best-matching
+  minority instead.
 """
 
 from __future__ import annotations
@@ -104,6 +109,64 @@ def detect_outliers(values: Sequence[float], iqr_k: float = 1.5, z_threshold: fl
         else:
             removed.append(i)
     return OutlierResult(kept, sorted(removed), "iqr+mad", math.exp(lo_fence), math.exp(hi_fence))
+
+
+LEVEL_GAP = math.log(1.6)  # adjacent prices more than 60% apart belong to different price levels
+LEVEL_MIN_SIZE = 2  # a level needs at least this many prices ...
+LEVEL_MIN_SHARE = 0.2  # ... and this share of the total weight to count as a market of its own
+
+
+@dataclass(frozen=True)
+class ClusterResult:
+    kept: list[int]  # the price level that is used (indices, residual outliers already removed)
+    other: list[int]  # members of another substantial price level (reported, not averaged in)
+    outliers: list[int]  # implausible or isolated prices
+    mixed: bool  # more than one substantial price level, or none coherent
+
+
+def cluster_prices(
+    values: Sequence[float],
+    weights: Sequence[float] | None = None,
+    gap: float = LEVEL_GAP,
+    iqr_k: float = 1.5,
+    z_threshold: float = 3.5,
+) -> ClusterResult:
+    """Pick the price level of a pool of comparable prices.
+
+    1. split the sorted log-prices wherever two neighbours are further apart than ``gap``;
+    2. a cluster is *substantial* with at least ``LEVEL_MIN_SIZE`` prices and ``LEVEL_MIN_SHARE`` of the
+       weight; the one with the most weight is used, other substantial ones are ``other`` and the
+       rest (isolated prices) ``outliers``; two substantial levels (or none) make the pool ``mixed``;
+    3. inside the chosen level the usual Tukey + MAD rule removes what is left of the tails.
+    """
+    w = list(weights) if weights is not None else [1.0] * len(values)
+    pos = [i for i, v in enumerate(values) if v > 0]
+    outliers = [i for i, v in enumerate(values) if v <= 0]
+    if not pos:
+        return ClusterResult([], [], outliers, False)
+    order = sorted(pos, key=lambda i: values[i])
+    clusters: list[list[int]] = [[order[0]]]
+    for prev, cur in zip(order, order[1:], strict=False):
+        if math.log(values[cur]) - math.log(values[prev]) > gap:
+            clusters.append([])
+        clusters[-1].append(cur)
+    total = sum(w[i] for i in pos) or 1.0
+    mass = [sum(w[i] for i in c) for c in clusters]
+    substantial = [
+        k for k, c in enumerate(clusters) if len(c) >= LEVEL_MIN_SIZE and mass[k] / total >= LEVEL_MIN_SHARE
+    ]
+    mixed = len(substantial) != 1 and len(clusters) > 1
+    chosen = max(substantial or range(len(clusters)), key=lambda k: (mass[k], len(clusters[k])))
+    other: list[int] = []
+    for k, c in enumerate(clusters):
+        if k == chosen:
+            continue
+        (other if k in substantial else outliers).extend(c)
+    members = clusters[chosen]
+    res = detect_outliers([values[i] for i in members], iqr_k, z_threshold)
+    kept = sorted(members[j] for j in res.kept)
+    outliers += [members[j] for j in res.removed]
+    return ClusterResult(kept, sorted(other), sorted(outliers), mixed)
 
 
 @dataclass(frozen=True)

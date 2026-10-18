@@ -54,6 +54,8 @@ class InsightInput:
     seller_habits: dict[str, Any] | None = None
     identification: dict[str, Any] = field(default_factory=dict)
     vision: dict[str, Any] | None = None
+    # What the seller's own text admits (see ``app.analysis.defects``): [{term, kind, severity, phrase, ...}].
+    declared_defects: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _f(v: Any) -> float | None:
@@ -213,31 +215,49 @@ def condition_check(inp: InsightInput) -> dict[str, Any]:
         ],
         "differences": [],
     }
+    out["declared_defects"] = inp.declared_defects
     if inp.condition_effective != inp.condition_declared:
-        out["differences"].append(
-            f"Dichiarato '{CONDITION_LABELS.get(inp.condition_declared, inp.condition_declared)}', dalle foto "
-            f"'{CONDITION_LABELS.get(inp.condition_effective, inp.condition_effective)}': prezzi stimati su quest'ultima."
-        )
+        by_photos = effective_condition(inp.condition_declared, inp.vision)
+        if inp.condition_effective != by_photos:
+            worst = max(inp.declared_defects, key=lambda h: ("minor", "moderate", "severe").index(h["severity"]))
+            out["differences"].append(
+                f"Dichiarato '{CONDITION_LABELS.get(inp.condition_declared, inp.condition_declared)}', ma la "
+                f"descrizione ammette «{worst['phrase']}»: prezzi stimati su "
+                f"'{CONDITION_LABELS.get(inp.condition_effective, inp.condition_effective)}'."
+            )
+        else:
+            out["differences"].append(
+                f"Dichiarato '{CONDITION_LABELS.get(inp.condition_declared, inp.condition_declared)}', dalle foto "
+                f"'{CONDITION_LABELS.get(inp.condition_effective, inp.condition_effective)}': prezzi stimati su quest'ultima."
+            )
     elif defects and inp.condition_declared in ("new_with_tags", "new_without_tags", "very_good"):
         out["differences"].append("Difetti visibili nelle foto non coerenti con la condizione dichiarata.")
     return out
 
 
-def effective_condition(declared: str, vision: dict[str, Any] | None) -> str:
-    """The worse of the declared condition and what the photos show (certain/probable evidence)."""
-    if not vision:
-        return declared
+def effective_condition(
+    declared: str, vision: dict[str, Any] | None, declared_defect_severity: str | None = None
+) -> str:
+    """The worst of the declared condition, what the photos show (certain/probable evidence) and what the
+    seller's own description admits (a hole, a stain: see ``floor_for_severity``). Only ever lowers."""
+    from app.analysis.defects import floor_for_severity
     from app.ingestion.normalizer import normalize_condition
 
+    rank = {c: i for i, c in enumerate(CONDITION_ORDER)}
+    floor = floor_for_severity(declared_defect_severity)
+    if declared not in rank:
+        # An unknown condition stays unknown, unless the text admits a defect: then it is at best that.
+        return floor or declared
+    worst = rank[declared]
+    if floor is not None:
+        worst = max(worst, rank[floor])
+    if not vision:
+        return CONDITION_ORDER[worst]
     seen: str | None = None
     est = vision.get("condition_estimate") or {}
     if est.get("certainty") in ("certain", "probable") and est.get("value"):
         seen = normalize_condition(str(est["value"]))
     severe = [d for d in vision.get("defects", []) if d.get("certainty") in ("certain", "probable")]
-    rank = {c: i for i, c in enumerate(CONDITION_ORDER)}
-    worst = rank.get(declared)
-    if worst is None:
-        return declared
     if seen in rank and rank[seen] > worst:
         worst = rank[seen]
     if any(d.get("severity") == "severe" for d in severe):

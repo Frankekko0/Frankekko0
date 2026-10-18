@@ -4,6 +4,11 @@ Segments (grouping sets): brand x category, brand x category x model, and
 brand x category x model x size. Percentiles are computed in PostgreSQL (``percentile_cont``)
 on realized (sold) prices when at least 5 sales exist, otherwise on asking prices discounted by
 the typical ask-to-sale ratio. The database improves continuously as listings are observed.
+
+A removed listing is never a price: it may have sold, been lowered or withdrawn, and an ask that
+nobody paid says nothing about value (30 removed asks at 80 would lift the prior of a segment
+whose sales are at 30). Prices therefore come from sold and on-sale listings only
+(``PRIOR_STATUSES``); removed ones still count for the sold share.
 """
 
 from __future__ import annotations
@@ -21,6 +26,8 @@ from app.opportunities.pipeline import segment_key
 
 DEFAULT_ASK_RATIO = Decimal("0.88")
 MIN_SAMPLE = 3
+# Statuses whose prices enter the segment's price statistics (see the module docstring).
+PRIOR_STATUSES = ("sold", "active")
 
 SEGMENT_SQL = text(
     """
@@ -30,12 +37,12 @@ SEGMENT_SQL = text(
            count(*) FILTER (WHERE status = 'sold') AS sold_count,
            count(*) FILTER (WHERE status = 'removed') AS removed_count,
            count(*) FILTER (WHERE status = 'active') AS active_count,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY price) AS median_all,
-           percentile_cont(0.25) WITHIN GROUP (ORDER BY price) AS p25_all,
-           percentile_cont(0.75) WITHIN GROUP (ORDER BY price) AS p75_all,
-           percentile_cont(0.10) WITHIN GROUP (ORDER BY price) AS p10_all,
-           percentile_cont(0.90) WITHIN GROUP (ORDER BY price) AS p90_all,
-           avg(price) AS mean_all,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY price) FILTER (WHERE status IN ('sold', 'active')) AS median_all,
+           percentile_cont(0.25) WITHIN GROUP (ORDER BY price) FILTER (WHERE status IN ('sold', 'active')) AS p25_all,
+           percentile_cont(0.75) WITHIN GROUP (ORDER BY price) FILTER (WHERE status IN ('sold', 'active')) AS p75_all,
+           percentile_cont(0.10) WITHIN GROUP (ORDER BY price) FILTER (WHERE status IN ('sold', 'active')) AS p10_all,
+           percentile_cont(0.90) WITHIN GROUP (ORDER BY price) FILTER (WHERE status IN ('sold', 'active')) AS p90_all,
+           avg(price) FILTER (WHERE status IN ('sold', 'active')) AS mean_all,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY price) FILTER (WHERE status = 'sold') AS median_sold,
            percentile_cont(0.25) WITHIN GROUP (ORDER BY price) FILTER (WHERE status = 'sold') AS p25_sold,
            percentile_cont(0.75) WITHIN GROUP (ORDER BY price) FILTER (WHERE status = 'sold') AS p75_sold,
@@ -94,6 +101,8 @@ def segment_row(r: Any, window_days: int, now: datetime) -> dict[str, Any] | Non
             r.mean_all,
         )
         k = ask_ratio or DEFAULT_ASK_RATIO
+    if median is None:
+        return None  # only removed listings: no price to speak of
 
     def adj(v: Any) -> Decimal:
         return (Decimal(str(v)) * k).quantize(Decimal("0.01"))

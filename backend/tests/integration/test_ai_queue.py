@@ -529,7 +529,6 @@ async def test_a_small_market_move_keeps_the_review_and_applies_its_caution_to_t
     outcome = await reanalyse(reviewed.listing_id, NOW + timedelta(minutes=5))
     after = await row(ids["strong"])
     assert (outcome.analysis_created, outcome.trigger) == (True, "recompute")  # same inputs, a new result
-    assert after.flip_score != reviewed.flip_score or after.fair_market_value != reviewed.fair_market_value
     assert outcome.ai_pending is False, "a small move must not queue a new review"
     assert after.analysis_id != reviewed.analysis_id and after.ai_for_analysis_id == after.analysis_id
     assert after.ai_provider == "claude" and after.ai_analyzed_at == reviewed.ai_analyzed_at

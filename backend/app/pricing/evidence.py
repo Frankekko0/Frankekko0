@@ -33,11 +33,14 @@ from app.pricing.comparables import (
     ASK_SOURCES,
     SALE_SOURCES,
     SOURCE_WEIGHTS,
+    TIER_MODEL,
     ItemProfile,
     ScoredComparable,
     evidence_source,
     select_comparables,
+    sort_key,
 )
+from app.pricing.lines import profile_extras
 from app.pricing.market_value import MarketEstimate, SegmentPrior, _euros
 
 __all__ = [
@@ -179,6 +182,9 @@ class PriceEvidence:
     refs: dict[int, ExternalRef] = field(default_factory=dict)  # every external row of the model
     new_prices: list[ExternalRef] = field(default_factory=list)
     negotiation_discount: float | None = None
+    # True when ``negotiation_discount`` is the configured default (``vinted_sold_haircut``), not a figure
+    # measured on the user's own purchases: it is then shown as an assumption.
+    discount_assumed: bool = False
     gate: EvidenceGate = field(default_factory=EvidenceGate)
 
     def candidates(self) -> list[ItemProfile]:
@@ -224,6 +230,7 @@ def own_profile(rec: OwnRecord, category: str | None, parent: str | None) -> Ite
         source_name="tracking",
         ref_id=rec.id,
         linked_listing_id=rec.listing_id,
+        **profile_extras(rec.title, None, category, parent),
     )
 
 
@@ -248,6 +255,7 @@ def external_profile(
         source="external_sold" if sold else "external_asking",
         source_name=ref.source,
         ref_id=ref.id,
+        **profile_extras(ref.title, None, category, parent),
     )
 
 
@@ -302,7 +310,7 @@ def with_evidence(
     extra = [
         c
         for c in select_comparables(subject, evidence.candidates(), now, max_count=10_000)
-        if same_model(c.item.model, subject.model)
+        if c.tier == TIER_MODEL and same_model(c.item.model, subject.model)
     ]
     bought = {c.item.linked_listing_id for c in extra if c.item.source == "own_purchase"}
     out: list[ScoredComparable] = []
@@ -315,7 +323,7 @@ def with_evidence(
     if not extra:
         return out
     merged = out + extra
-    merged.sort(key=lambda c: (c.similarity, c.weight), reverse=True)
+    merged.sort(key=sort_key, reverse=True)
     return merged
 
 
@@ -416,8 +424,16 @@ def build_provenance(
         label = f"Mediana pesata di {sold_part}."
     extras: list[str] = []
     if has_value and by_source["vinted_sold"]:
+        assumed = evidence is not None and evidence.discount_assumed
         extras.append(
-            f"Vinted: ultimo prezzo rilevato, scontato del {_pct(discount)} (trattativa media sui tuoi acquisti)"
+            (
+                f"Vinted: ultimo prezzo rilevato, scontato del {_pct(discount)} "
+                + (
+                    "(ipotesi: la trattativa non è ancora misurata sui tuoi acquisti)"
+                    if assumed
+                    else "(trattativa media sui tuoi acquisti)"
+                )
+            )
             if discount
             else "Vinted: ultimo prezzo rilevato (sconto da trattativa non ancora misurato)"
         )
@@ -514,6 +530,7 @@ def build_provenance(
             "n": market.n_used,
             "by_source": by_source,
             "negotiation_discount": round(discount, 4) if discount else None,
+            "negotiation_discount_assumed": bool(discount and evidence is not None and evidence.discount_assumed),
             "calibrated": bool(calibrated and has_value),
             "prior": {
                 "used": market.used_prior,
