@@ -13,7 +13,9 @@ import pytest
 from app.analysis.condition import ConditionReport
 from app.analysis.consistency import (
     ConsistencyInput,
+    build_matrix,
     check_brand,
+    check_condition,
     check_material,
     check_title_description,
 )
@@ -96,3 +98,22 @@ def test_a_real_material_contradiction_is_kept_but_capped_while_the_label_is_onl
         [LabelState("composition", "present_readable", 3, "100% polyester", "certain")], composition={"polyester": 100}
     )
     assert check_material(matrix_input(title="Maglione", desc="Maglione 100% cashmere", labels=certain)).severity == "high"
+
+
+def test_a_defect_the_description_admits_against_a_better_declared_condition_is_a_discrepancy() -> None:
+    """DEFECT-003: "Ottime condizioni" and "piccolo foro vicino al polsino" are two claims of the same seller."""
+    c = check_condition(matrix_input(desc="Giacca bellissima, piccolo foro vicino al polsino"))
+    assert c.status == "discrepancy" and c.severity == "medium"
+    assert "Ottime condizioni" in c.detail and "foro" in c.detail and "non verificata" in c.detail
+    assert c.impact_eur == 6.0  # 12% of 50 EUR: the step between "very good" and "good"
+    severe = check_condition(matrix_input(desc="Ha un buco sulla manica"))
+    assert severe.impact_eur == 15.0  # 30%: down to "satisfactory"
+    assert any(x.code == "condition" and x.status == "discrepancy" for x in build_matrix(matrix_input(desc="Ha un buco sulla manica")).checks)
+
+
+def test_no_discrepancy_when_the_text_admits_nothing_or_the_condition_already_says_so() -> None:
+    assert check_condition(matrix_input(desc="Nessun difetto, difetti: nessuno")).status == "not_verifiable"
+    assert check_condition(matrix_input(desc="Piccola macchiolina")).status == "not_verifiable"  # minor: no floor
+    worn = matrix_input(desc="Ha un buco sulla manica")
+    worn.declared_condition = "satisfactory"
+    assert check_condition(worn).status == "not_verifiable"

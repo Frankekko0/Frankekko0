@@ -198,6 +198,8 @@ CONDITION_LABELS = [
     ("Satisfactory", "satisfactory"),
     ("New with tags", "new_with_tags"),
     ("New without tags", "new_without_tags"),
+    ("Nowy z metką", "new_with_tags"),
+    ("Nowy bez metki", "new_without_tags"),
 ]
 # Labels that must stay unknown (and be logged), never guessed.
 CONDITION_UNKNOWN = ["Pessime", "Da collezione", "Stato: boh", "###", "Non specificato"]
@@ -282,6 +284,10 @@ SIZES = [
     ("36", "sneakers", None, "EU36"),
     ("45", "sneakers", None, "EU45"),
     ("40", "sneakers", "kids", "EU40"),
+    # a card has no category: an odd number is a shoe (no clothing scale has odd sizes), an even one stays a guess
+    ("43", None, None, "EU43"),
+    ("41", None, None, "EU41"),
+    ("42", None, None, "IT42"),
 ]
 
 # ----------------------------------------------------------------------------------------- colours / materials

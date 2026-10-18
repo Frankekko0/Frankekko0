@@ -75,7 +75,7 @@ CASES = [
          cat=W + "Abiti > Abiti da sera", color="Nero", t=dict(brand="liu-jo", model=None, cat={"dresses"}, gender="women", size="M", color="black")),
     dict(id="X27", kind="item", title="Costume Speedo uomo", desc="Costume da bagno.", brand="Speedo", size="M",
          cat=M + "Costumi da bagno", t=dict(brand=None, model=None, cat={"swimwear"}, gender="men", size="M")),
-    dict(id="X28", kind="item", title="Orologio Casio vintage", desc="Orologio digitale.", brand="Casio", size=None,
+    dict(id="X28", kind="item", title="Orologio Sector No Limits vintage", desc="Orologio digitale.", brand="Sector No Limits", size=None,
          cat="Uomo > Accessori > Orologi", t=dict(brand=None, model=None, cat={"watches"}, gender="men")),
     dict(id="X29", kind="card", title="Jordan 1 Low Travis Scott", brand="Jordan", size="44",
          t=dict(brand="jordan", model="Jordan 1", cat={"sneakers"}, size="EU44")),

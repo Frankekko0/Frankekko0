@@ -150,11 +150,12 @@ def test_j1_a_known_model_with_no_comparable_of_its_own_gives_no_estimate() -> N
 
 @pytest.mark.parametrize(
     "case",
-    ["e1_thin_windbreaker", "e2_tshirt_vs_hoodies", "e3_unbranded_jacket", "i1_gilet_without_category"],
+    ["e1_thin_windbreaker", "e2_tshirt_vs_hoodies", "i1_gilet_without_category"],
 )
-def test_sibling_categories_and_brand_wide_pools_never_make_a_buy(case: str) -> None:
-    """A subject with nothing distinctive ("Nike giacca") has only brand and category: its estimate is labelled as
-    such, capped, and never a purchase; without even a category there is no estimate at all."""
+def test_sibling_categories_and_a_missing_category_give_no_estimate(case: str) -> None:
+    """A subject with nothing distinctive ("Nike giacca") is compared within its own brand and category only: puffers are
+    not a windbreaker's price and hoodies are not a t-shirt's (the other category is a reference); with no category at all
+    there is nothing to compare within. No estimate, no purchase."""
     if case == "e1_thin_windbreaker":
         comps = sold_market(
             "Nike piumino imbottito uomo M", [68 + i for i in range(10)], category="puffer-jackets", parent="outerwear", size="M"
@@ -165,24 +166,32 @@ def test_sibling_categories_and_brand_wide_pools_never_make_a_buy(case: str) -> 
             "Nike felpa con cappuccio uomo M", [42 + i % 4 for i in range(10)], category="hoodies", parent="tops", size="M"
         )
         r = analyse(15, "Nike maglietta uomo M", comps, category="t-shirts", parent="tops", size="M")
-    elif case == "e3_unbranded_jacket":
-        comps = sold_market(
-            "giacca imbottita uomo M", [41 + i % 5 for i in range(8)], brand=None, category="jackets", parent="outerwear", size="M"
-        )
-        r = analyse(12, "giacca leggera uomo M", comps, brand=None, category="jackets", parent="outerwear", size="M")
     else:
         comps = sold_market(
             "Adidas piumino imbottito uomo M", [68 + i for i in range(10)], brand="adidas", category="puffer-jackets",
             parent="outerwear", size="M",
         )
         r = analyse(25, "Adidas gilet uomo M", comps, brand="adidas", category=None, parent=None, size="M")
-    assert r.decision.verdict not in BUYS
-    if case == "i1_gilet_without_category":
-        assert r.market.fair_market_value is None and r.decision.verdict == V.INSUFFICIENT_EVIDENCE
-    else:
-        assert r.market.tier == TIER_FAMILY and r.data_quality == "limited"
-        assert r.market.confidence <= 35 and r.decision.verdict in (V.WATCHLIST, V.PASS)
-        assert any(v.code == "no_same_model_comparables" for v in r.decision.vetoes)
+    assert r.market.fair_market_value is None and r.decision.verdict == V.INSUFFICIENT_EVIDENCE
+    assert r.data_quality == "insufficient" and r.market.insufficient_reason
+    if case != "i1_gilet_without_category":
+        # the other category is kept as a labelled reference, never in the price
+        assert r.market.tier == TIER_FAMILY and r.market.reference is not None and r.market.reference["n"] == 10
+        assert all(c.exclusion_reason == "other_category" and not c.included for c in r.market.comparables)
+
+
+@pytest.mark.parametrize("brand", ["nike", None])
+def test_a_brand_and_category_estimate_is_indicative_capped_and_never_a_buy(brand: str | None) -> None:
+    """E3 (an unbranded jacket at 12 next to 8 padded ones at ~43): BUY flip 92. With nothing but brand and category
+    the price is the same-category median, labelled and capped, and the verdict stops at the watchlist."""
+    title = "Nike giacca imbottita uomo M" if brand else "giacca imbottita uomo M"
+    comps = sold_market(title, [41 + i % 5 for i in range(8)], brand=brand, category="jackets", parent="outerwear", size="M")
+    r = analyse(12, "Nike giacca leggera uomo M" if brand else "giacca leggera uomo M", comps, brand=brand,
+                category="jackets", parent="outerwear", size="M")
+    assert r.market.tier == TIER_FAMILY and r.data_quality == "limited"
+    assert r.market.fair_market_value is not None and r.market.confidence <= 35
+    assert r.decision.verdict in (V.WATCHLIST, V.PASS) and r.decision.verdict not in BUYS
+    assert any(v.code == "no_same_model_comparables" for v in r.decision.vetoes)
 
 
 def test_the_line_key_is_what_the_taxonomy_does_not_name() -> None:

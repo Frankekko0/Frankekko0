@@ -41,6 +41,7 @@ from app.identification.taxonomy import (
     DISTINCTIVE_MODEL_KEYWORDS,
     DOCUMENT_WORDS,
     FOOTBALL_CONTEXT,
+    TEAM_CONTEXT_WINDOW,
     FOOTBALL_TEAMS,
     GENDER_KEYWORDS,
     GENERIC_CATEGORY_KEYWORDS,
@@ -307,6 +308,26 @@ def _gate(literal: str) -> frozenset[str]:
     if all of these tokens occur in the text, so a cheap subset test skips most regex calls
     without ever changing a result."""
     return frozenset(_WORD.findall(literal))
+
+
+# "man" inside a name: not the audience of the item.
+_NAMED_MAN = re.compile(
+    r"(?<!\w)(?:man\s+(?:utd|united|city)|(?:spider|bat|super|iron|ant|aqua|he|pac)[\s-]?man|"
+    r"(?:wo)?man\s+in\s+black|men\s+in\s+black|x-men)(?!\w)"
+)
+_CLAUSE_END = re.compile(r"[.;!?]")
+
+
+def _clause_around(text: str, start: int, end: int, window: int) -> str:
+    """The words within ``window`` characters of a match, without crossing the end of its sentence: "Made in Italy.
+    La maglia è morbida" has a football word, but not next to the name."""
+    left = max(start - window, 0)
+    right = min(end + window, len(text))
+    for m in _CLAUSE_END.finditer(text, left, start):
+        left = m.end()
+    if m := _CLAUSE_END.search(text, end, right):
+        right = m.start()
+    return text[left:right]
 
 
 @lru_cache(maxsize=4096)
@@ -716,11 +737,19 @@ class IdentificationEngine:
         a full club name. "Made in Italy", "Spedisco da Napoli", "Inter-city", "Ritiro a Roma" are not teams."""
         for text, source, conf in ((title, "title", 0.85), (desc, "description", 0.6)):
             tokens = _tokens(text)
-            context = bool(FOOTBALL_CONTEXT.search(text))
             for gate, pattern, team, strong in self._team_patterns:
-                if gate <= tokens and pattern.search(text) and (context or (strong and source == "title")):
-                    res.team = Attribute(team, Certainty.PROBABLE, source, conf if context else 0.7)
-                    res.flags["football_context"] = context
+                if not gate <= tokens:
+                    continue
+                for m in pattern.finditer(text):
+                    # The football word has to stand next to the name ("maglia Roma", "Roma 2019/20"): "Acquistata a
+                    # Roma ... la maglia è morbida" is a city and a garment, not a shirt of the club.
+                    near = _clause_around(text, m.start(), m.end(), TEAM_CONTEXT_WINDOW)
+                    context = bool(FOOTBALL_CONTEXT.search(near))
+                    if context or (strong and source == "title"):
+                        res.team = Attribute(team, Certainty.PROBABLE, source, conf if context else 0.7)
+                        res.flags["football_context"] = context
+                        break
+                if res.team.known:
                     break
             if res.team.known:
                 break
@@ -747,8 +776,9 @@ class IdentificationEngine:
                             f"Modello '{line_name}' riconosciuto ({'titolo' if source == 'title' else 'descrizione'})"
                         )
                         return self._mask(title, m.span()) if source == "title" else title
-        # A team is the model of a football shirt only (never of a hoodie that merely names the club).
-        if res.team.known and res.flags.get("football_context"):
+        # A team is the model of a football shirt only (never of a hoodie that merely names the club), and only
+        # when the title names it: a team found in the description alone is a hint, not the item's model.
+        if res.team.known and res.flags.get("football_context") and res.team.source == "title":
             res.model = Attribute(res.team.value, Certainty.PROBABLE, res.team.source, res.team.confidence)
             return title
         if vision and vision.model:
@@ -887,6 +917,7 @@ class IdentificationEngine:
             return
         for text, source, conf in ((title, "title", 0.8), (desc, "description", 0.6)):
             text = VINTAGE_PATTERN.sub(" ", text)  # "anni 90" must not read as kids' age
+            text = _NAMED_MAN.sub(" ", text)  # "Man Utd", "Spider-Man" are names, not the audience
             tokens = _tokens(text)
             found = {g for gate, pattern, g in self._gender if gate <= tokens and pattern.search(text)}
             if not found:

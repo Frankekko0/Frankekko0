@@ -18,8 +18,10 @@ from typing import Any
 from rapidfuzz import fuzz
 
 from app.analysis.condition import ConditionReport
+from app.analysis.defects import floor_for_severity
 from app.analysis.labels import LabelReport, materials_in
 from app.analysis.text import TextSignals, analyze_text
+from app.domain.enums import CONDITION_LABELS_IT, CONDITION_ORDER, Condition
 from app.identification.brands import same_brand, squash
 from app.identification.taxonomy import fold
 from app.ingestion.normalizer import normalize_color, normalize_size, size_distance
@@ -41,6 +43,9 @@ IMPACT = {
     "category": Decimal("0.20"),
     "measures": Decimal("0.08"),
     "tags_not_shown": Decimal("0.10"),
+    # The price ladder between declared and floor condition (very good 1.0, good 0.88, satisfactory 0.70).
+    "declared_defect_moderate": Decimal("0.12"),
+    "declared_defect_severe": Decimal("0.30"),
 }
 # Materials that are what a garment is worth: declaring them without the label is a big claim.
 VALUE_MATERIALS = {"cashmere", "wool", "silk", "leather", "down", "suede", "linen"}
@@ -369,10 +374,29 @@ def check_color(i: ConsistencyInput) -> Check:
     )
 
 
+def _declared_defects_vs_condition(i: ConsistencyInput, label: str) -> Check | None:
+    """The seller's own description admits a defect that the condition field does not allow for ("Ottime
+    condizioni" and "piccolo foro vicino al polsino"): two claims of the same seller that cannot both be right."""
+    floor = floor_for_severity(i.text.defect_severity)
+    if floor is None or i.declared_condition not in Condition._value2member_map_:
+        return None
+    declared = Condition(i.declared_condition)
+    if declared not in CONDITION_ORDER or CONDITION_ORDER[declared] >= CONDITION_ORDER[Condition(floor)]:
+        return None
+    worst = max(i.text.defect_hits, key=lambda h: ("minor", "moderate", "severe").index(h["severity"]))
+    share = IMPACT["declared_defect_severe" if i.text.defect_severity == "severe" else "declared_defect_moderate"]
+    detail = (
+        f"Condizione dichiarata «{CONDITION_LABELS_IT[declared]}», ma la descrizione ammette «{worst['phrase']}» "
+        "(dichiarazione del venditore, non verificata sulle foto)."
+    )
+    return Check("condition", label, "discrepancy", "medium", detail, _eur(i.price, share), [detail])
+
+
 def check_condition(i: ConsistencyInput) -> Check:
     label = "Condizione: dichiarata e difetti visibili"
+    from_text = _declared_defects_vs_condition(i, label)
     if i.condition.condition_class == "undeterminable":
-        return _no("condition", label, "foto non analizzate dal modello visivo")
+        return from_text or _no("condition", label, "foto non analizzate dal modello visivo")
     bad = [c for c in i.condition.contradictions if c["code"] == "declared_better_than_seen"]
     if bad:
         c = bad[0]
@@ -386,6 +410,8 @@ def check_condition(i: ConsistencyInput) -> Check:
             round(float(i.price) * impact, 2),
             [c["detail"]],
         )
+    if from_text:
+        return from_text
     tags = [c for c in i.condition.contradictions if c["code"] == "declared_tags_not_shown"]
     if tags:
         return Check(

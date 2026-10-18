@@ -461,3 +461,9 @@ test("catalogue links reduce to ids and slugs, once each, never anything else", 
     ["5492-polo-shirts", "257-jeans"],
   );
 });
+
+test("a label that ends in the words of another is not read as that one ('bez metki' is not 'z metk')", () => {
+  assert.equal(P.normalizeCondition("Nowy z metką", C), "new_with_tags");
+  assert.equal(P.normalizeCondition("Nowy bez metki", C), "new_without_tags");
+  assert.equal(P.normalizeCondition("Ottime", C), "very_good");
+});

@@ -53,6 +53,13 @@ def extract(text: str):
         ("Agujero en el bolsillo", "severe"),
         ("senza difetti tranne una macchia", "moderate"),
         ("no stains, no holes, hole in the pocket lining", "severe"),
+        ("Rovinata sul colletto", "moderate"),
+        ("Tomaia scollata", "moderate"),
+        ("La cerniera non va", "severe"),
+        # a denial that belongs to something else does not hide the defect
+        ("Buco sul gomito. Nessun altro difetto", "severe"),
+        ("Difetti: vedi foto", "moderate"),
+        ("hole no larger than a coin", "severe"),
     ],
 )
 def test_a_declared_defect_is_found_with_its_severity(text: str, severity: str) -> None:
@@ -79,6 +86,17 @@ def test_a_declared_defect_is_found_with_its_severity(text: str, severity: str) 
         "Come nuovo, senza segni di usura",
         "No rips, no tears, no fading",
         "Zip funziona perfettamente",
+        # the denial after the word, the way a form-like description is written
+        "Difetti: nessuno",
+        "Difetti: assenti",
+        "Macchie: no. Buchi: no.",
+        "Stains: none. Holes: none.",
+        "Défauts: aucun",
+        "Buchi non ce ne sono",
+        "Macchie non presenti",
+        # a possibility is not an admission
+        "Controllate le foto per eventuali difetti",
+        "Se ci sono difetti li vedete nelle foto",
     ],
 )
 def test_a_reassurance_is_not_a_defect(text: str) -> None:

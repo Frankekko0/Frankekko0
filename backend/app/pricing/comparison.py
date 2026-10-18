@@ -97,6 +97,7 @@ EXCLUSION_LABELS: dict[str, str] = {
     REASON_OUTLIER: "prezzo anomalo rispetto agli altri",
     REASON_ASKING: "prezzo richiesto: con abbastanza vendite resta solo di riferimento",
     "other_line": "altra linea o modello: solo di riferimento",
+    "other_category": "altra categoria dello stesso brand: solo di riferimento",
     REASON_OTHER_LEVEL: "su un altro livello di prezzo (stagione, versione o mercato cambiato)",
     REASON_STALE_ASK: f"annuncio non rivisto da oltre {ACTIVE_FRESH_DAYS} giorni: potrebbe non esistere più",
 }

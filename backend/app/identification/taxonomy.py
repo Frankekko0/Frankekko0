@@ -1049,6 +1049,89 @@ _EXTENDED_BRANDS: tuple[BrandSpec, ...] = (
 )
 BRANDS = BRANDS + _EXTENDED_BRANDS
 
+# Brands of the Italian resale that a check against a list of 194 names (not the one the catalogue was built from)
+# found missing: the ones copied most come first, with a prior of their own, so that a listing under them is judged
+# on the photos of the label and not as an unknown brand.
+_MORE_BRANDS: tuple[BrandSpec, ...] = (
+    _b("Canada Goose", "canada-goose", ["canada goose"], "luxury", "0.65"),
+    _b("Moose Knuckles", "moose-knuckles", ["moose knuckles"], "premium", "0.45"),
+    _b("Parajumpers", "parajumpers", ["parajumpers"], "premium", "0.40"),
+    _b("Palm Angels", "palm-angels", ["palm angels"], "luxury", "0.55"),
+    _b("Bape", "bape", ["bape", "a bathing ape"], "streetwear", "0.55"),
+    _b("Miu Miu", "miu-miu", ["miu miu"], "luxury", "0.55"),
+    _b("Yeezy", "yeezy", ["yeezy"], "sport", "0.55"),
+    _b("Balmain", "balmain", ["balmain"], "luxury", "0.50"),
+    _b("Cartier", "cartier", ["cartier"], "luxury", "0.65"),
+    _b("Tiffany & Co", "tiffany", ["tiffany & co", "tiffany and co", "tiffany"], "luxury", "0.55"),
+    _b("Salvatore Ferragamo", "ferragamo", ["salvatore ferragamo", "ferragamo"], "luxury", "0.40"),
+    _b("Vivienne Westwood", "vivienne-westwood", ["vivienne westwood"], "premium", "0.40"),
+    _b("Rick Owens", "rick-owens", ["rick owens", "drkshdw"], "luxury", "0.40"),
+    _b("Comme des Garçons", "comme-des-garcons", ["comme des garcons", "comme des garçons", "cdg"], "premium", "0.40"),
+    _b("Thom Browne", "thom-browne", ["thom browne"], "luxury", "0.35"),
+    _b("Daniel Wellington", "daniel-wellington", ["daniel wellington"], "mid", "0.35"),
+    _b("Persol", "persol", ["persol"], "mid", "0.35"),
+    _b("GCDS", "gcds", ["gcds"], "premium", "0.35"),
+    _b("Stella McCartney", "stella-mccartney", ["stella mccartney"], "premium", "0.25"),
+    _b("Loro Piana", "loro-piana", ["loro piana"], "luxury", "0.25"),
+    _b("Etro", "etro", ["etro"], "premium", "0.25"),
+    _b("Missoni", "missoni", ["missoni"], "premium", "0.25"),
+    _b("Trussardi", "trussardi", ["trussardi"], "premium", "0.25"),
+    _b("Duvetica", "duvetica", ["duvetica"], "premium", "0.25"),
+    _b("Tatras", "tatras", ["tatras"], "premium", "0.25"),
+    _b("Mugler", "mugler", ["mugler", "thierry mugler"], "premium", "0.20"),
+    _b("Isabel Marant", "isabel-marant", ["isabel marant", "isabel marant etoile"], "premium", "0.20"),
+    _b("Marni", "marni", ["marni"], "premium", "0.20"),
+    _b("Jil Sander", "jil-sander", ["jil sander"], "premium", "0.20"),
+    _b("Yohji Yamamoto", "yohji-yamamoto", ["yohji yamamoto", "y-3", "y3"], "premium", "0.20"),
+    _b("Oliver Peoples", "oliver-peoples", ["oliver peoples"], "premium", "0.20"),
+    _b("Ciesse Piumini", "ciesse", ["ciesse piumini", "ciesse"], "premium", "0.20"),
+    _b("Ann Demeulemeester", "ann-demeulemeester", ["ann demeulemeester"], "premium", "0.15"),
+    _b("Issey Miyake", "issey-miyake", ["issey miyake", "pleats please"], "premium", "0.15"),
+    _b("Kiton", "kiton", ["kiton"], "luxury", "0.15"),
+    _b("Corneliani", "corneliani", ["corneliani"], "premium", "0.10"),
+    _b("Canali", "canali", ["canali"], "premium", "0.10", weak=["canali"]),
+    _b("Santoni", "santoni", ["santoni"], "premium", "0.15"),
+    _b("Church's", "churchs", ["church's", "churchs"], "premium", "0.15"),
+    _b("Alden", "alden", ["alden"], "premium", "0.10", weak=["alden"]),
+    _b("The Kooples", "the-kooples", ["the kooples"], "premium", "0.15"),
+    _b("Zadig & Voltaire", "zadig-voltaire", ["zadig & voltaire", "zadig et voltaire", "zadig&voltaire"], "premium", "0.15"),
+    _b("Ganni", "ganni", ["ganni"], "premium", "0.10"),
+    _b("Save The Duck", "save-the-duck", ["save the duck"], "mid", "0.10"),
+    _b("Swatch", "swatch", ["swatch"], "mid", "0.10"),
+    _b("Fossil", "fossil", ["fossil"], "mid", "0.10", weak=["fossil"]),
+    _b("Casio", "casio", ["casio", "g-shock", "gshock"], "mid", "0.15"),
+    _b("Aigle", "aigle", ["aigle"], "mid", "0.05"),
+    _b("Berghaus", "berghaus", ["berghaus"], "sport", "0.05"),
+    _b("Hoka", "hoka", ["hoka", "hoka one one"], "sport", "0.05"),
+    _b("On Running", "on-running", ["on running", "on cloud"], "sport", "0.05", weak=["on running", "on cloud"]),
+    _b("Brooks", "brooks", ["brooks running"], "sport", "0.03", weak=["brooks"]),
+    _b("Saucony", "saucony", ["saucony"], "sport", "0.03"),
+    _b("Merrell", "merrell", ["merrell"], "sport", "0.03"),
+    _b("Skechers", "skechers", ["skechers"], "sport", "0.03"),
+    _b("Clarks", "clarks", ["clarks"], "mid", "0.05"),
+    _b("American Eagle", "american-eagle", ["american eagle"], "fast_fashion", "0.02"),
+    _b("Old Navy", "old-navy", ["old navy"], "fast_fashion", "0.02"),
+    _b("Vero Moda", "vero-moda", ["vero moda"], "fast_fashion", "0.01"),
+    _b("Only", "only", ["only"], "fast_fashion", "0.01", weak=["only"]),
+    _b("Selected", "selected", ["selected homme", "selected femme"], "fast_fashion", "0.01", weak=["selected"]),
+    _b("Gas", "gas", ["gas jeans"], "mid", "0.08", weak=["gas"]),
+    _b("OVS", "ovs", ["ovs"], "fast_fashion", "0.00"),
+    _b("Calzedonia", "calzedonia", ["calzedonia"], "fast_fashion", "0.00"),
+    _b("Intimissimi", "intimissimi", ["intimissimi"], "fast_fashion", "0.00"),
+    _b("Tezenis", "tezenis", ["tezenis"], "fast_fashion", "0.00"),
+    _b("Yamamay", "yamamay", ["yamamay"], "fast_fashion", "0.00"),
+    _b("Terranova", "terranova", ["terranova"], "fast_fashion", "0.00"),
+    _b("Piazza Italia", "piazza-italia", ["piazza italia"], "fast_fashion", "0.00"),
+    _b("Primark", "primark", ["primark"], "fast_fashion", "0.00"),
+    _b("Shein", "shein", ["shein"], "fast_fashion", "0.00"),
+    _b("Arket", "arket", ["arket"], "mid", "0.00"),
+    _b("COS", "cos", ["cos"], "mid", "0.00"),
+    _b("& Other Stories", "other-stories", ["& other stories", "and other stories", "other stories"], "mid", "0.00"),
+    _b("Weekday", "weekday", ["weekday"], "fast_fashion", "0.00", weak=["weekday"]),
+    _b("Monki", "monki", ["monki"], "fast_fashion", "0.00"),
+)
+BRANDS = BRANDS + _MORE_BRANDS
+
 COLORS: dict[str, tuple[str, ...]] = {
     "black": ("nero", "nera", "neri", "nere", "black", "noir", "noire", "noirs", "negro", "negra", "schwarz"),
     "white": (
@@ -1540,12 +1623,15 @@ FOOTBALL_TEAMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ("Bayern", ("bayern", "bayern munich", "bayern monaco"), ("bayern munich", "bayern monaco")),
     ("Ajax", ("ajax",), ("afc ajax",)),
 )
-# Words that say a text is about a football shirt: without one of them (or a season) a team name is not read.
+# Words that say a text is about a football shirt: without one of them (or a season) a team name is not read. They
+# count only within ``TEAM_CONTEXT_WINDOW`` characters of the name ("maglia Roma"), never anywhere in the text, and
+# the everyday English words ("home", "away", "third", "match") are not on the list: "away from home" is not a kit.
 FOOTBALL_CONTEXT = re.compile(
     r"(?<!\w)(?:maglia|maglie|maglietta|jersey|jerseys|maillot|trikot|camiseta|kit|calcio|football|soccer|fussball|"
-    r"futbol|serie a|champions|home|away|third|gara|match|authentic|player issue|replica|ultras|curva|stadio|stagione)(?!\w)"
+    r"futbol|serie a|ultras|curva|stadio|stagione)(?!\w)"
     r"|(?:19|20)\d{2}\s*[/-]\s*(?:19|20)?\d{2}"
 )
+TEAM_CONTEXT_WINDOW = 28
 
 SEASON_PATTERN = re.compile(r"\b((?:19|20)\d{2})\s*[/-]\s*((?:19|20)?\d{2})\b")
 # A style code needs a digit (and letters or a hyphen): "Articolo", "Style casual", "Reference photos" are words.
@@ -1601,7 +1687,7 @@ CRUMB_RULES: tuple[tuple[str, str], ...] = (
     (r"parka|trench|cappott|\bcoats?\b|manteau|abrigo|\bmantel\b|montgomery|loden|peacoat", "coats"),
     (r"\bpile\b|fleece|polaire|forro polar|micropile", "fleece"),
     (
-        r"giacch|giubbott|giubbin|jacket|\bveste|chaqueta|jacke\b|bomber|gilet|blazer|k-way|softshell|windbreaker|impermeabil",
+        r"giacch|giubbott|giubbin|jacket|\bveste|chaqueta|jacken?\b|bomber|gilet|blazer|k-way|softshell|windbreaker|impermeabil",
         "jackets",
     ),
     (r"con cappuccio|hoodie|hooded|kapuzen|capuche|capucha", "hoodies"),
@@ -1619,7 +1705,7 @@ CRUMB_RULES: tuple[tuple[str, str], ...] = (
         r"\btut[ae]\b|joggers?|tracksuit|pantaloni sportiv|pantaloni della tuta|survet|chandal|felpa e pantaloni",
         "tracksuits",
     ),
-    (r"pantalon|chino|cargo|leggings|trousers|\bpants\b|\bhose\b", "trousers"),
+    (r"pantalon|chino|cargo|leggings|trousers|\bpants\b|\bhosen?\b", "trousers"),
     (r"gonn|skirt|\bjupe|falda", "skirts"),
     (r"\babit[oi]\b|\bdress|\brobe\b|vestido|\bkleider?\b", "dresses"),
     (r"costum\w* da bagno|\bswim|bikini|beachwear|maillot de bain|banador|badehose|costumi", "swimwear"),

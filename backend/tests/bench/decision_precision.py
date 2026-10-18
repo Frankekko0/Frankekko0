@@ -474,9 +474,9 @@ def run_seed(
                 "condition": subj.condition,
                 "size": subj.size,
                 "days_before_end": round((NOW - x.published_at).total_seconds() / 86400, 1),  # type: ignore[operator]
-                "tier": r.market.tier,
-                "mixed": r.market.mixed,
-                "trend": r.market.trend,
+                "tier": getattr(r.market, "tier", None),  # absent in the baseline checkout
+                "mixed": getattr(r.market, "mixed", False),
+                "trend": getattr(r.market, "trend", None),
                 "conf": r.confidence.score,
                 "mkt_conf": r.market.confidence,
                 "quality": r.data_quality,

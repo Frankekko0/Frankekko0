@@ -38,6 +38,11 @@ def ident(title: str, desc: str = "", **kw: object):
         "Inter-city train, 10 pezzi",
         "Felpa in jersey di cotone",
         "Prodotto in Italy",
+        # a football word somewhere else in the text is not a football word next to the name
+        "Made in Italy. La maglia è morbida e calda, tessuto di qualità",
+        "Acquistata a Roma, away from home, third owner",
+        "Maglia in pura lana, ritiro a Roma o spedizione tracciata",
+        "Camicia estiva home made, ritiro a Napoli",
     ],
 )
 def test_ambient_words_are_not_a_team_a_model_or_a_football_shirt(desc: str) -> None:
@@ -62,6 +67,12 @@ def test_a_team_is_read_next_to_a_football_word_or_a_season(title: str, team: st
     assert (r.team.value, r.category.value) == (team, "football-shirts")
 
 
+def test_a_team_only_the_description_names_is_a_hint_not_the_model() -> None:
+    r = ident("Maglia Nike originale taglia L", "Maglia ufficiale dell'Italia", brand_field="Nike")
+    assert r.team.value == "Italia" and r.team.source == "description"
+    assert r.model.value is None and r.category.value != "football-shirts"
+
+
 def test_a_city_in_a_title_without_football_words_is_not_a_team() -> None:
     assert ident("Felpa Roma vintage").team.value is None
     assert ident("Souvenir Napoli").team.value is None
@@ -83,6 +94,9 @@ def test_a_city_in_a_title_without_football_words_is_not_a_team() -> None:
         ("Uomo > Vestiti > Pantaloncini", "Nike dri-fit", "shorts"),
         ("Uomo > Vestiti > Camicie e t-shirt > Polo > Polo Ralph Lauren Polo", "Polo t shirt", "polo-shirts"),
         ("Uomo > Vestiti > Jeans > Jeans straight fit", "Levi's 501", "jeans"),
+        # the plural of a word the path prints in another language: "Jacken" is jackets, "Hosen" trousers
+        ("Herren > Kleidung > Jacken & Mäntel > Jacken", "Schwarz Gr. M", "jackets"),
+        ("Herren > Kleidung > Hosen", "Schwarz Gr. M", "trousers"),
     ],
 )
 def test_the_marketplace_path_decides_the_category(crumb: str, title: str, slug: str) -> None:
@@ -128,6 +142,17 @@ def test_the_catalogue_knows_the_brands_of_the_italian_resale() -> None:
     for name in B.COUNTERFEIT_HEAVY:
         slug = ident(f"Borsa {name}", brand_field=name).brand.value
         assert slug and float(ENGINE.tax.brand_by_slug[slug].counterfeit_risk) >= 0.3, name
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Canada Goose", "Palm Angels", "Bape", "Miu Miu", "Yeezy", "Balmain", "Cartier", "Tiffany & Co", "Moose Knuckles"],
+)
+def test_the_brands_copied_most_that_a_fresh_list_found_missing_are_known_with_a_prior(name: str) -> None:
+    """A list of 194 names written after the catalogue (not the one it was built from) missed these: a Canada Goose
+    jacket was an unknown brand at 0.2, outside the authenticity veto and the per-brand photo rules."""
+    r = ident(f"Giacca {name} nera", brand_field=name)
+    assert r.brand.value and float(ENGINE.tax.brand_by_slug[r.brand.value].counterfeit_risk) >= 0.3, name
 
 
 def test_a_brand_outside_the_catalogue_stays_unknown_and_raises_the_doubt() -> None:
@@ -247,6 +272,11 @@ def test_a_size_field_against_a_size_in_the_title_is_a_contradiction_and_lowers_
     clash = ident("Felpa Nike taglia L", brand_field="Nike", size_field="M", category_field="Uomo > Maglioni e felpe > Felpe")
     assert clean.contradictions == []
     assert [c["field"] for c in clash.contradictions] == ["size"] and clash.confidence < clean.confidence
+
+
+@pytest.mark.parametrize("title", ["Maglia Man Utd 2008 Rooney", "T-shirt Spider-Man Marvel", "Felpa Batman bambino"])
+def test_man_inside_a_name_is_not_the_audience(title: str) -> None:
+    assert ident(title).gender.value != "men"
 
 
 def test_the_gender_comes_from_the_marketplace_path() -> None:

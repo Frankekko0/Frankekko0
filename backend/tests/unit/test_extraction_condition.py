@@ -47,6 +47,11 @@ LABELS = [
     ("Nieuw zonder kaartje", Condition.NEW_WITHOUT_TAGS),
     ("Very good", Condition.VERY_GOOD),
     ("Good", Condition.GOOD),
+    # "bez metki" (without tags) contains "z metk" (with tags): the order of the words is what tells them apart
+    ("Nowy z metką", Condition.NEW_WITH_TAGS),
+    ("Nowy bez metki", Condition.NEW_WITHOUT_TAGS),
+    ("Novo com etiquetas", Condition.NEW_WITH_TAGS),
+    ("Novo sem etiquetas", Condition.NEW_WITHOUT_TAGS),
 ]
 
 
@@ -72,6 +77,22 @@ def test_an_unknown_label_stays_unknown_and_says_so() -> None:
 def test_a_condition_phrase_in_the_description_is_still_read() -> None:
     assert condition_from_text("Giacca usata ma in ottime condizioni, nessun difetto") == Condition.VERY_GOOD
     assert condition_from_text("Mai indossata, ancora con cartellino") == Condition.NEW_WITH_TAGS
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # the bare cue of newness gives way to a phrase that names a condition
+        ("Giacca in buone condizioni, con cartellino", Condition.GOOD),
+        ("Mai indossata, ancora con cartellino", Condition.NEW_WITH_TAGS),
+        ("Nuovo con cartellino e ottime condizioni", Condition.NEW_WITH_TAGS),
+        # a phrase after a negation says nothing
+        ("Non usurato, tenuta bene", Condition.UNKNOWN),
+        ("Scarpe non da sistemare, ottime condizioni", Condition.VERY_GOOD),
+    ],
+)
+def test_two_phrases_in_the_description_are_read_with_care(text: str, expected: Condition) -> None:
+    assert condition_from_text(text) == expected
 
 
 @pytest.mark.parametrize(

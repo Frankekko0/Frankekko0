@@ -69,6 +69,7 @@ REASON_OUTLIER = "outlier"
 REASON_ASKING = "asking_price"
 REASON_OTHER_LEVEL = "other_price_level"
 REASON_STALE_ASK = "stale_ask"
+REASON_OTHER_CATEGORY = "other_category"
 
 
 @dataclass(frozen=True)
@@ -188,7 +189,7 @@ def _level(group: list[ScoredComparable]) -> tuple[list[ScoredComparable], bool,
     return [group[i] for i in res.kept], res.mixed, len(res.outliers)
 
 
-def _reference(rest: list[ScoredComparable]) -> dict[str, Any] | None:
+def _reference(rest: list[ScoredComparable], family: bool = False) -> dict[str, Any] | None:
     """The comparables outside the subject's tier, as a reference: counts and medians, nothing else."""
     if not rest:
         return None
@@ -199,7 +200,11 @@ def _reference(rest: list[ScoredComparable]) -> dict[str, Any] | None:
         "n_sold": len(sold),
         "median_sold": round(statistics.median(sold), 2) if sold else None,
         "median_ask": round(statistics.median(asks), 2) if asks else None,
-        "label": "Altre linee o versioni dello stesso brand: riferimento, non usato per il prezzo.",
+        "label": (
+            "Altre categorie dello stesso brand: riferimento, non usato per il prezzo."
+            if family
+            else "Altre linee o versioni dello stesso brand: riferimento, non usato per il prezzo."
+        ),
     }
 
 
@@ -243,9 +248,18 @@ def estimate_market_value(
         for c in rest:
             c.included = False
             c.exclusion_reason = REASON_OTHER_LINE
+    elif kind == TIER_FAMILY and subject is not None:
+        # Nothing distinctive about the item: the price is that of the brand's items in the item's OWN category, labelled
+        # and capped. Sibling categories (a t-shirt next to hoodies) are a reference, never part of the median, and an
+        # item with no category has nothing to be compared within.
+        primary = [c for c in comparables if subject.category and c.item.category == subject.category]
+        rest = [c for c in comparables if not (subject.category and c.item.category == subject.category)]
+        for c in rest:
+            c.included = False
+            c.exclusion_reason = REASON_OTHER_CATEGORY
     else:
         primary, rest = list(comparables), []
-    reference = _reference(rest)
+    reference = _reference(rest, family=kind == TIER_FAMILY)
     family_level = kind == TIER_FAMILY
     n_primary = len(primary)
 
@@ -332,6 +346,20 @@ def estimate_market_value(
                 "Nessun punteggio assegnato."
             )
             notes.append(reason)
+        elif kind == TIER_FAMILY and subject is not None:
+            reason = (
+                "Nessun confronto dello stesso modello o linea e "
+                + ("nessun annuncio" if n_used == 0 else f"solo {n_used} annunci")
+                + " della stessa categoria dello stesso brand: dati insufficienti per stimare il valore. "
+                "Nessun punteggio assegnato."
+            )
+            notes.append(reason)
+            if reference:
+                notes.append(
+                    f"Altre categorie dello stesso brand: {reference['n']} annunci"
+                    + (f", mediana venduti €{reference['median_sold']:.0f}" if reference["median_sold"] else "")
+                    + ". Riferimento non usato come stima."
+                )
         elif prior and prior.sample_size >= 5 and prior.has_sales:
             notes.append(
                 f"Riferimento di segmento (brand e categoria): mediana €{prior.median_price:.0f} su "
@@ -399,6 +427,12 @@ def estimate_market_value(
     quick = min(p25, median * 0.93)
     optimistic = max(p75, median * 1.07)
     optimistic = min(optimistic, max(p90, median * 1.07), max(max_r, median * 1.07))
+    # The next sale is spread around the true level by the noise between items AND by the error of this median: with few
+    # comparables the range widens (sqrt(1 + pi / 2n), measured: about half of the next sales fall inside at any n,
+    # where a fixed band caught 44% at n=3 against 50% at n=40).
+    widen = math.sqrt(1 + 1.57 / n_used)
+    quick = median * (quick / median) ** widen
+    optimistic = median * (optimistic / median) ** widen
 
     # ---- confidence -------------------------------------------------------------------------
     sample_f = 1 - math.exp(-n_used / 10)

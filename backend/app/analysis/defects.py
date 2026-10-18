@@ -80,6 +80,7 @@ def _rule(term: str, kind: str, severity: str, pattern: str) -> tuple[str, str, 
 _ZIP = r"(?:cerniera|zip|lampo|chiusura lampo|zipper|fermeture eclair|fermeture|cremallera|reissverschluss)"
 _ZIP_BAD = (
     r"(?:rott[aeio]|bloccat[aeio]|difettos[aeio]|non funzion\w+|funziona male|incastrat[aeio]|guast[aeio]|saltat[aeio]|"
+    r"non va|non scorre|non chiude|non si chiude|non si apre|"
     r"broken|stuck|jammed|damaged|faulty|defective|doesn t work|does not work|not working|"
     r"cassee?s?|bloquee?s?|defectueu\w+|rota|atascada|defekt|kaputt|klemmt)"
 )
@@ -190,8 +191,9 @@ _RULES: tuple[tuple[str, str, str, re.Pattern[str]], ...] = (
         "danneggiato",
         "damage",
         "moderate",
-        r"\b(?:danneggiat[aeio]|damaged|endommage\w*|danado\w*|beschadigt\w*|beschaedigt\w*)\b",
+        r"\b(?:danneggiat[aeio]|rovinat[aeio]|rovinatur[ae]|damaged|endommage\w*|danado\w*|beschadigt\w*|beschaedigt\w*)\b",
     ),
+    _rule("scollato", "seam", "moderate", r"\bscollat[aeio]\b|\bscollatur[ae]\b"),
     # ---- wear, fading, pilling, yellowing, scratches, odour
     _rule(
         "usura",
@@ -372,6 +374,17 @@ _NO_DEFECT_PHRASES = (
 )  # fmt: skip
 
 
+# "Buchi non ce ne sono", "difetti assenti", "macchie: nessuna", "defects: none": the denial follows the word.
+_POST_DENIAL = re.compile(
+    r"^\W*(?:non (?:ce ne|ce n|ci|c e|ne|sono|presenti|presente|visibili)\b"
+    r"|(?:nessun\w*|nulla|niente|zero|assent\w+|none|no|aucun\w*|absent\w*|kein\w*|ninguno|ninguna|ausente\w*)\W*$)"
+)
+# "Eventuali difetti sono nelle foto", "se ci sono difetti", "any defects": a possibility, not an admission.
+_CONDITIONAL = re.compile(
+    r"\b(?:eventual\w+|possibil\w+|se ci sono|se presenti|if any|any|eventuel\w*|falls)\W+(?:\w+\W+){0,2}$"
+)
+
+
 @dataclass(frozen=True)
 class DefectHit:
     term: str
@@ -473,6 +486,21 @@ def _negated(sentence: str, start: int, end: int) -> bool:
     return False
 
 
+def _denied_after(sentence: str, end: int, following: str | None) -> bool:
+    """A denial after the word: in the same sentence ("buchi non ce ne sono") or at the start of the next one
+    when the word closes its sentence ("Difetti: nessuno")."""
+    tail = sentence[end:].split(",")[0]
+    words = _words(tail)
+    if words:
+        return len(words) <= 5 and bool(_POST_DENIAL.match(tail)) and (
+            len(words) <= 3 or tail.strip().startswith("non ")
+        )
+    if following is None:
+        return False
+    head = following.split(",")[0]
+    return len(_words(head)) <= 2 and bool(_POST_DENIAL.match(head))
+
+
 def _severity(base: str, sentence: str, start: int, end: int) -> str:
     """One step down for a softener next to the defect, one up for an intensifier."""
     pre = re.split(r",|\b(?:e|and|et|und|y|con|with|ma|but)\b", sentence[:start])[-1]
@@ -496,10 +524,14 @@ def extract_defects(text: str | None) -> DefectReport:
         return report
     folded = fold(_HASHTAG.sub(" ", text)).replace("ß", "ss")
     hits: dict[tuple[str, str], DefectHit] = {}
-    for sentence in _sentences(folded):
+    sentences = _sentences(folded)
+    for idx, sentence in enumerate(sentences):
+        following = sentences[idx + 1] if idx + 1 < len(sentences) else None
         for term, kind, base, rx in _RULES:
             for m in rx.finditer(sentence):
-                if _negated(sentence, m.start(), m.end()):
+                if kind == "generic" and _CONDITIONAL.search(sentence[: m.start()] + " "):
+                    continue
+                if _negated(sentence, m.start(), m.end()) or _denied_after(sentence, m.end(), following):
                     if kind in _DENIABLE:
                         report.denied.append(" ".join(sentence[max(0, m.start() - 16) : m.end()].split()))
                     continue

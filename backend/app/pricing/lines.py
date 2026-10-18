@@ -49,6 +49,9 @@ _GENERIC = frozenset(
     colore colori
     running corsa ginnastica trail training sport sportive sportivo casual
     bianche bianchi nere rosse rossi gialle gialli verdi grigie grigi azzurre azzurri marroni blu rosa viola beige
+    leggero leggera leggeri leggere pesante pesanti imbottito imbottita imbottiti imbottite foderato foderata
+    invernale invernali estivo estiva estivi estive primaverile autunnale termico termica caldo calda
+    lungo lunga lunghi lunghe corto corta corti corte manica maniche
     """.split()
 )
 

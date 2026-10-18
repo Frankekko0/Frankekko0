@@ -84,6 +84,10 @@ def normalize_condition(raw: str | None) -> Condition:
     return Condition.UNKNOWN
 
 
+_WEAK_NEWNESS = frozenset({"con cartellino", "mai indossato", "mai indossata", "never worn"})
+_NEGATED_BEFORE = re.compile(r"(?<!\w)(?:non|no|senza|not|pas|ne|nicht|kein)\W+(?:\w+\W+)?$")
+
+
 def condition_from_text(text: str) -> Condition:
     """Fallback when the structured field is missing: a condition phrase in free text.
 
@@ -91,11 +95,22 @@ def condition_from_text(text: str) -> Condition:
     if not text:
         return Condition.UNKNOWN
     folded = fold(text)
+    # Several phrases can match ("buone condizioni, con cartellino"): the bare cues of newness ("con cartellino",
+    # "mai indossata") give way to a phrase that names a condition, and a phrase after a negation ("non usurato")
+    # says nothing.
+    strong: Condition | None = None
+    weak: Condition | None = None
     for value, phrases in CONDITION_PHRASES:
         for phrase in phrases:
-            if re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", folded):
-                return Condition(value)
-    return Condition.UNKNOWN
+            for m in re.finditer(rf"(?<!\w){re.escape(phrase)}(?!\w)", folded):
+                if _NEGATED_BEFORE.search(folded[max(0, m.start() - 14) : m.start()]):
+                    continue
+                if phrase in _WEAK_NEWNESS:
+                    weak = weak or Condition(value)
+                else:
+                    strong = strong or Condition(value)
+                break
+    return strong or weak or Condition.UNKNOWN
 
 
 def normalize_size(
@@ -142,6 +157,9 @@ def normalize_size(
             return _IT_WOMEN[n]
         if n in _IT_MEN:
             return _IT_MEN[n]
+        if category_slug is None and 35 <= n <= 49 and n % 2 == 1:
+            # Clothing sizes are even (IT 44, 46, 48...): an odd number on a card with no category is a shoe.
+            return f"EU{n}"
         return f"IT{n}"
     return None
 

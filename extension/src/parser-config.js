@@ -1,7 +1,7 @@
 /* Generated from backend/app/acquisition/vinted_parser.json by tools/sync-parser-config.mjs.
  * Do not edit: change the JSON (the server and the extension share it) and run the tool. */
 globalThis.FF_PARSER_CONFIG = {
-  "version": "2026.10.8-2",
+  "version": "2026.10.18-1",
   "about": "Single source of Vinted selectors, labels and patterns, shared by the FlipFinder server (Python) and the browser extension (JavaScript). Regexes use only syntax common to both languages (numbered groups, no named groups). Edit here when Vinted changes its pages; the extension downloads it from the server.",
   "domains": [
     "vinted.it",
@@ -365,7 +365,7 @@ globalThis.FF_PARSER_CONFIG = {
   "conditions": [
     [
       "new_with_tags",
-      "(con cartellino|with tags|avec étiquettes?|avec etiquettes?|mit etikett|con etiquetas?|met labels?|z metk|com etiquetas?|med etiket|met (?:prijs)?kaartje)"
+      "(con cartellino|with tags|avec étiquettes?|avec etiquettes?|mit etikett|con etiquetas?|met labels?|\\bz metk|com etiquetas?|med etiket|met (?:prijs)?kaartje)"
     ],
     [
       "new_without_tags",
