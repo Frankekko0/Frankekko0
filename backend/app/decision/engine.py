@@ -79,6 +79,11 @@ class DecisionConfig:
     strong_completeness: int = 70
     strong_risk_below: int = 35
     strong_min_photos: int = 3
+    # What the photos must show of the item for "no visible defect" to mean something: the share of the inspection the
+    # photo roles cover (front, back, label...), the technical quality of the files, and how many parts no photo shows.
+    strong_min_coverage: int = 60
+    strong_min_photo_quality: int = 50
+    strong_max_unobserved: int = 3
     strong_min_comparables: int = 8
     strong_min_market_confidence: int = 60
     strong_min_identification: int = 70
@@ -143,6 +148,13 @@ class DecisionInput:
     # A photo analysis really ran (condition and defects checked), and a label photo was seen.
     photos_analysed: bool = False
     label_photo_seen: bool | None = None
+    # The analysis covers the whole gallery and has no text that gives orders (``app.analysis.coverage.photo_gates``).
+    photos_complete: bool = True
+    # What the photos show (None: not evaluated, as for callers that do not know it): the share of the inspection the
+    # photos cover, their technical quality and the number of parts of the item no photo shows.
+    inspection_coverage: int | None = None
+    photo_quality: int | None = None
+    unobserved_parts: int = 0
     brand_counterfeit_risk: float = 0.1
     authenticity_verdict: str | None = (
         None  # probably_authentic | uncertain | not_verifiable | counterfeit_risk
@@ -304,7 +316,22 @@ def strong_buy_requirements(inp: DecisionInput, cfg: DecisionConfig = DEFAULT_CO
         ),
         Requirement("condition", "Condizione dichiarata", inp.condition_known),
         Requirement(
-            "photos_checked", "Foto analizzate: condizioni e difetti verificati", inp.photos_analysed
+            "photos_checked",
+            "Foto analizzate: condizioni e difetti verificati",
+            inp.photos_analysed and inp.photos_complete,
+        ),
+        Requirement(
+            "coverage",
+            f"Le foto mostrano abbastanza dell'articolo (copertura almeno {cfg.strong_min_coverage}%, "
+            f"qualità almeno {cfg.strong_min_photo_quality}, al massimo {cfg.strong_max_unobserved} parti non viste)",
+            # Unknown coverage passes only for callers that never evaluate it (None); a photo analysis that ran always
+            # evaluates it, and «nessun difetto visibile» is not «nessun difetto».
+            inp.inspection_coverage is None
+            or (
+                inp.inspection_coverage >= cfg.strong_min_coverage
+                and (inp.photo_quality is None or inp.photo_quality >= cfg.strong_min_photo_quality)
+                and inp.unobserved_parts <= cfg.strong_max_unobserved
+            ),
         ),
         Requirement("label", "Etichetta visibile nelle foto", inp.label_photo_seen is True),
         Requirement("total_cost", "Costo totale letto dall'annuncio", inp.acquisition_cost_verified),

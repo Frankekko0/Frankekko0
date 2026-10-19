@@ -27,13 +27,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.db.models import VisionCache
 from app.db.session import session_scope
-from app.vision.analyzer import ImageAnalyzer, PhotoInput
+from app.vision.analyzer import ImageAnalyzer, PhotoInput, prompt_fingerprint
 from app.vision.types import ImageAnalysis
 
 log = get_logger(__name__)
 # Bump when the prompt or the schema of the photo analysis changes: every stored answer is then stale.
-# (-3: answers stored before a failed model call stopped being cached may hold the local fallback as a "result".)
-VISION_PROMPT_VERSION = "vision-2026.10-3"
+# (-3: answers stored before a failed model call stopped being cached may hold the local fallback as a "result".
+# -4: answers are validated before they are stored; an answer cached before could be an empty or invented one.)
+# The key also holds a fingerprint of the prompt and the schema (``prompt_fingerprint``), so that editing either can
+# never serve an answer given to the old text, bumped or not.
+VISION_PROMPT_VERSION = "vision-2026.10-4"
 RETENTION_DAYS = 90
 Scope = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
@@ -45,7 +48,13 @@ def cache_key(photos_in: list[PhotoInput], model: str, context: dict[str, Any]) 
         "categories": sorted(context.get("category_slugs") or []),
     }
     raw = json.dumps(
-        {"photos": photos, "model": model, "prompt": VISION_PROMPT_VERSION, "told": told},
+        {
+            "photos": photos,
+            "model": model,
+            "prompt": VISION_PROMPT_VERSION,
+            "fingerprint": prompt_fingerprint(),
+            "told": told,
+        },
         sort_keys=True,
         default=str,
         separators=(",", ":"),

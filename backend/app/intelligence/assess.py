@@ -33,6 +33,10 @@ class AssessInputs:
     return_cost: float
     photos_analysed: bool
     condition_known: bool
+    # What the photos show of the item (None: not evaluated) and how many parts no photo shows: a defect nobody could
+    # see is more likely when the photos cover little.
+    inspection_coverage: int | None = None
+    unobserved_parts: int = 0
 
 
 def straight_line(exact: Callable[[float], float], span: float = 1000.0) -> Callable[[float], float]:
@@ -44,8 +48,18 @@ def straight_line(exact: Callable[[float], float], span: float = 1000.0) -> Call
     return lambda price: base + slope * price
 
 
-def hidden_defect_probability(photos_analysed: bool, condition_known: bool) -> float:
-    return HIDDEN_DEFECT_BASE + (0.0 if photos_analysed else 0.06) + (0.0 if condition_known else 0.04)
+def hidden_defect_probability(
+    photos_analysed: bool,
+    condition_known: bool,
+    coverage: int | None = None,
+    unobserved_parts: int = 0,
+) -> float:
+    """Chance of a defect the photos do not show (an assumption, see LIMITATIONS). «Photos analysed» is not «item
+    seen»: every part the photos leave out adds to it (0.10 for no coverage at all, 0.03 per unseen part, at most 4)."""
+    p = HIDDEN_DEFECT_BASE + (0.0 if photos_analysed else 0.06) + (0.0 if condition_known else 0.04)
+    if photos_analysed and coverage is not None:
+        p += 0.10 * (1 - max(0, min(100, coverage)) / 100) + 0.03 * min(max(0, unobserved_parts), 4)
+    return p
 
 
 def distribution(i: AssessInputs) -> montecarlo.ProfitDistribution:
@@ -59,7 +73,9 @@ def distribution(i: AssessInputs) -> montecarlo.ProfitDistribution:
             net_of_price=i.net_of_price,
             p_fake=max(0.0, min(1.0, 1 - i.p_authentic)),
             p_return=RETURN_RATE,
-            p_defect=hidden_defect_probability(i.photos_analysed, i.condition_known),
+            p_defect=hidden_defect_probability(
+                i.photos_analysed, i.condition_known, i.inspection_coverage, i.unobserved_parts
+            ),
             return_cost=i.return_cost,
             hazard=hazard,
         ),
@@ -71,7 +87,9 @@ def distribution(i: AssessInputs) -> montecarlo.ProfitDistribution:
 def value_of_analysis(i: AssessInputs, expected_profit: float, cost_of_analysis: float) -> voi.Voi:
     """Whether a photo analysis could change the decision: the larger value of resolving authenticity or a
     hidden defect (each treated as a risk that is either present or not)."""
-    p_def = hidden_defect_probability(i.photos_analysed, i.condition_known)
+    p_def = hidden_defect_probability(
+        i.photos_analysed, i.condition_known, i.inspection_coverage, i.unobserved_parts
+    )
     profit_without_defect = expected_profit
     profit_with_defect = i.net_of_price(i.resale_mid * 0.75) - i.cost
     a = voi.decide_analysis(1 - i.p_authentic, profit_without_defect, -i.cost, cost_of_analysis)

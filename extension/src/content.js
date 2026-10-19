@@ -262,7 +262,7 @@
     const link = card.root.matches(C.selectors.item_link) ? card.root : card.root.querySelector(C.selectors.item_link);
     if (!link) return;
     const parsed = P.parseCatalogCard(collectCard(card.root, link), location.href, C);
-    const payload = parsed && parsed.title && parsed.title.length >= 3 && parsed.price ? P.capturePayload(parsed, C) : null;
+    const payload = parsed && parsed.title && parsed.title.length >= 3 && parsed.price ? P.capturePayload({ ...parsed, observed_at: Date.now() }, C) : null;
     if (!payload) {
       drawBadge(vid, { unreadable: true });
       return;
@@ -433,7 +433,7 @@
       };
       batch.push(card.q);
       // Second step, in the background: the whole card goes to FlipFinder for the full analysis.
-      const payload = opts.captureCards && !page.sent.has(vid) ? P.capturePayload(parsed, C) : null;
+      const payload = opts.captureCards && !page.sent.has(vid) ? P.capturePayload({ ...parsed, observed_at: Date.now() }, C) : null;
       if (payload) {
         pendingCards.set(vid, payload);
         card.captured = true;
@@ -910,6 +910,15 @@
       this.tries += 1;
       const parsed = P.parseItem(collectDocument(scriptsAreFresh()), location.href, Date.now(), C, { useScripts: scriptsAreFresh() });
       if (!parsed.complete) {
+        // The page says the item is gone (and keeps saying it once it has settled): tell FlipFinder, so that the deal
+        // is not shown as available, instead of blaming the parser.
+        if (parsed.status === "removed" && this.tries >= 3 && this.vid && opts.captureItems) {
+          this.waiting = false;
+          this.sent = true;
+          const r = await send({ type: "ff:gone", vid: this.vid, observedAt: Date.now() });
+          itemBox.render(r && r.known === false ? "Annuncio non più disponibile su Vinted (non era tra quelli analizzati da FlipFinder)." : r && r.ok === false ? "Annuncio non più disponibile su Vinted. FlipFinder non è raggiungibile: la sua scheda resta com'era." : "Annuncio non più disponibile su Vinted: segnato come rimosso in FlipFinder.");
+          return;
+        }
         if (this.tries < 12) {
           clearTimeout(this.timer);
           this.timer = setTimeout(() => this.attempt(), 700);
@@ -920,7 +929,7 @@
         return;
       }
       this.waiting = false;
-      const payload = await P.itemPayload(parsed, C);
+      const payload = await P.itemPayload({ ...parsed, observed_at: Date.now() }, C);
       if (!payload) {
         itemBox.render(parsed.currency !== "EUR" ? "Valuta non supportata: FlipFinder analizza solo prezzi in euro." : "Dati dell'annuncio non validi.");
         return;

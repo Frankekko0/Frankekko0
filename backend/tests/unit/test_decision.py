@@ -223,7 +223,9 @@ def test_strong_red_flags_give_counterfeit_risk() -> None:
     assert ev.box == [0.1, 0.2, 0.3, 0.2]
 
 
-def test_consistent_key_photos_are_probably_authentic_but_never_certain() -> None:
+def test_consistent_key_photos_are_never_a_certificate() -> None:
+    """V03 (was: «probably authentic»): labels, codes and logos are copied by counterfeiters. Photos that look right
+    leave the verdict «uncertain», say so in ``photos_consistent`` and lift the probability by the cap at most."""
     findings = [
         PhotoFinding(i, kind, "consistent", "certain", f"{kind} coerente")
         for i, kind in enumerate(
@@ -231,7 +233,7 @@ def test_consistent_key_photos_are_probably_authentic_but_never_certain() -> Non
         )
     ]
     a = assess(base_input(photos_analyzed=True, findings=findings, seller_reviews=80, seller_rating=4.9))
-    assert a.verdict == "probably_authentic"
+    assert a.verdict == "uncertain" and a.photos_consistent is True
     assert a.p_authentic <= 0.97
 
 

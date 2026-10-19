@@ -16,6 +16,8 @@ from functools import cached_property
 from typing import Any
 
 from app.ai.deal_analyst import DealAnalysis, DealContext, RuleBasedDealAnalyst, ScenarioSummary
+from app.analysis.categories import plugin_for
+from app.analysis.coverage import photo_gates
 from app.analysis.defects import DefectReport, extract_defects
 from app.analysis.dossier import DossierFacts, build_dossier
 from app.analysis.lots import lot_pieces
@@ -290,6 +292,10 @@ def run_analysis(
     # ---- seller, risk, confidence, flip --------------------------------------------------------
     seller = seller_reliability(subject.seller, now)
     vision = subject.vision or {}
+    # What the photo analysis lets the decision claim: complete, clean, with enough of the item seen.
+    gates = photo_gates(
+        vision, plugin_for(subject.profile.category, subject.profile.parent_category), subject.photo_count
+    )
     signals = build_signals(
         SignalInput(
             title=subject.profile.title,
@@ -356,6 +362,8 @@ def run_analysis(
             condition_known=subject.profile.condition != Condition.UNKNOWN,
             seller_known=subject.seller is not None,
             demand_observations=demand.observations,
+            inspection_coverage=gates.inspection_coverage,
+            photo_quality=gates.photo_quality,
         )
     )
     quality_vision = vision.get("photo_quality") or {}
@@ -372,6 +380,11 @@ def run_analysis(
             label_photo_seen=quality_vision.get("has_label_photo"),
             photos_analysed=vision.get("analyzer") not in (None, "heuristic"),
             identification_confidence=subject.identification_confidence,
+            photos_complete=gates.complete,
+            inspection_coverage=gates.inspection_coverage,
+            label_unreadable=any(
+                lab.get("state") == "present_unreadable" for lab in vision.get("labels") or []
+            ),
         )
     )
     flip = compute_flip_score(
@@ -455,6 +468,8 @@ def run_analysis(
             return_cost=float(costs.shipping_out + costs.shipping_in),
             photos_analysed=vision.get("analyzer") not in (None, "heuristic"),
             condition_known=subject.profile.condition != Condition.UNKNOWN,
+            inspection_coverage=gates.inspection_coverage,
+            unobserved_parts=gates.unobserved,
         )
     dist = intel.distribution(assessment) if assessment is not None else None
     text = analyze_text(subject.profile.title, subject.description)
@@ -495,6 +510,10 @@ def run_analysis(
             acquisition_cost_verified=subject.shipping_fee is not None,
             photos_analysed=vision.get("analyzer") not in (None, "heuristic"),
             label_photo_seen=quality_vision.get("has_label_photo"),
+            photos_complete=gates.verified or not gates.analysed,
+            inspection_coverage=gates.inspection_coverage,
+            photo_quality=gates.photo_quality,
+            unobserved_parts=gates.unobserved,
             brand_counterfeit_risk=subject.brand_counterfeit_risk,
             authenticity_verdict=auth.verdict,
             suspicious_terms=bool(subject.suspicious_terms),
@@ -719,6 +738,9 @@ def assess_authenticity(subject: SubjectContext, price: Decimal, fmv: Decimal | 
             seller_rating=float(seller.rating) if seller and seller.rating is not None else None,
             seller_multi_size_same_item=bool(seller and SAME_ITEM_ANOMALY in seller.anomalies),
             photos_reused_by_other_seller=bool(subject.identification.get("photos_reused_by_other_seller")),
+            # A proof from outside the photos that the user wrote down (an authentication service's result, a
+            # verified receipt): declared, never inferred. Nothing else makes an item "probably authentic".
+            external_proof=str(proof)[:200] if (proof := subject.identification.get("authenticity_proof")) else None,
             **photos,
         )
     )

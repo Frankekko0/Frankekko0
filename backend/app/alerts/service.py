@@ -270,6 +270,23 @@ async def evaluate_alerts(
     return pending
 
 
+async def alerts_for_outcomes(
+    session: AsyncSession, outcomes: list[AnalysisOutcome], catalog: Catalog
+) -> list[tuple[uuid.UUID, str]]:
+    """Alerts for the analyses of a capture, as the worker raises them for its own: a new find, a price drop, a
+    watchlist match, an Ultra Deal. Called inside the capture's transaction (the opportunity and the previous price it
+    reads are those of this very analysis), and idempotent through the alert's ``dedupe_key``: the nightly worker
+    analysing the same listing later raises nothing twice. An analysis that came out as the one on record
+    (``written`` False) was alerted when it was new and is skipped. Returns the (alert, channel) pairs to deliver
+    once the transaction is committed."""
+    pending: list[tuple[uuid.UUID, str]] = []
+    for outcome in outcomes:
+        if outcome.listing is None or not outcome.written:
+            continue
+        pending.extend(await evaluate_alerts(session, outcome, outcome.listing, catalog))
+    return pending
+
+
 def build_channel(channel: str, settings: Settings) -> NotificationChannel:
     if channel == NotificationChannelType.TELEGRAM.value:
         if not settings.telegram_bot_token:

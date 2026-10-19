@@ -32,6 +32,46 @@ _DROP = {"additionalProperties", "$schema", "title", "default", "examples"}
 # budget all three accept (Flash-Lite's minimum; Pro cannot switch thinking off, so not 0) and leaves the answer room.
 THINKING_BUDGET = {"vision": 1024, "negotiation": 512}
 _TAKES_THINKING = re.compile(r"^(models/)?gemini-2\.5")
+# ``finishReason`` values that mean the provider will not read THIS content: the same request is blocked every time, so
+# asking again only spends the day's request quota (a parcel label or an ID card in the photos is SPII; text that
+# resembles protected material is RECITATION; OTHER and the IMAGE_* reasons are blocks of the content as well).
+BLOCKED_FINISH = frozenset(
+    {
+        "SAFETY",
+        "PROHIBITED_CONTENT",
+        "BLOCKLIST",
+        "SPII",
+        "RECITATION",
+        "OTHER",
+        "LANGUAGE",
+        "IMAGE_SAFETY",
+        "IMAGE_PROHIBITED_CONTENT",
+        "IMAGE_RECITATION",
+        "IMAGE_OTHER",
+    }
+)
+# Upper bounds of the lists of the photo analysis, for Gemini's schema only (Anthropic's structured output takes no
+# ``maxItems``): an unbounded array lets a looping answer run to the token limit.
+VISION_ARRAY_CAPS = {
+    "defects": 20,
+    "labels": 24,
+    "photo_roles": 20,
+    "photo_findings": 40,
+    "photo_checks": 20,
+    "unobserved_parts": 12,
+    "authenticity_concerns": 6,
+}
+
+
+def cap_arrays(schema: dict[str, Any], caps: dict[str, int]) -> dict[str, Any]:
+    """The top-level lists of an object schema with a ``maxItems`` (a copy; the schema given is left as it is)."""
+    out = dict(schema)
+    props = dict(out.get("properties") or {})
+    for name, cap in caps.items():
+        if isinstance(props.get(name), dict) and props[name].get("type") == "array":
+            props[name] = {**props[name], "maxItems": cap}
+    out["properties"] = props
+    return out
 
 
 def to_gemini_schema(node: Any) -> Any:
@@ -224,7 +264,9 @@ class GeminiClient(LLMClient):
         generation: dict[str, Any] = {
             "maxOutputTokens": max_tokens,
             "responseMimeType": "application/json",
-            "responseSchema": to_gemini_schema(schema),
+            "responseSchema": to_gemini_schema(
+                cap_arrays(schema, VISION_ARRAY_CAPS) if purpose == "vision" else schema
+            ),
         }
         budget = THINKING_BUDGET.get(purpose)
         if budget is not None and _TAKES_THINKING.match(self.model_for(tier)):
@@ -250,7 +292,7 @@ class GeminiClient(LLMClient):
             log.info("llm.refused", purpose=purpose, category=blocked)
             unusable("refused")
             return None
-        if finish in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST"):
+        if finish in BLOCKED_FINISH:
             log.info("llm.refused", purpose=purpose, category=finish)
             unusable("refused")
             return None

@@ -31,10 +31,20 @@ MAX_SIDE = 1600  # px: larger photos are shrunk before reading (speed), small pr
 MIN_CONFIDENCE = 0.5
 MAX_LINES = 40
 
-_SIZE = re.compile(
-    r"(?:SIZE|TAGLIA|TG|TAILLE|GROSSE|GRÖSSE|TALLA|T)[:.]?(XXXL|XXL|XL|XXS|XS|S|M|L|\d{2}(?:/\d{2})?)(?![A-Z])"
+# A size is read only where a label says it: after an explicit size word (the long ones also glued to the size, as the
+# OCR loses spaces: "SIZEM"), after "TG" as a separate word, or as a line of its own on a photo that carries other label
+# text. A bare letter is not a size ("Originals TM", "SPORTS", "WASH COLD T30" were read as M, S and 30).
+_SIZES = r"(XXXL|XXL|XL|XXS|XS|S|M|L|\d{2}(?:/\d{2})?)"
+_SIZE_WORD = re.compile(r"(?:SIZE|TAGLIA|TAILLE|GROSSE|GRÖSSE|TALLA)[:.]?" + _SIZES + r"(?![A-Z])")
+_SIZE_TG = re.compile(r"(?<![A-Z0-9])TG\.?\s?" + _SIZES + r"(?![A-Z0-9])")
+_SIZE_ALONE = re.compile(r"^" + _SIZES + r"$")
+# "MADE IN <country>" within one line (spaces kept), or a line that is only the glued words.
+_COUNTRY_SPACED = re.compile(
+    r"(?<![A-Z])(?:MADE\s+IN|FABRIQU[EÉ]\s+EN|HERGESTELLT\s+IN)\s+([A-Z]{3,20})(?![A-Z])"
 )
-_COUNTRY = re.compile(r"MADEIN([A-Z]{3,20})|FABRIQU[EÉ]ENF?([A-Z]{3,20})|HERGESTELLTIN([A-Z]{3,20})")
+_COUNTRY_GLUED = re.compile(r"^(?:MADEIN|FABRIQU[EÉ]ENF?|HERGESTELLTIN)([A-Z]{3,20})$")
+_COUNTRY_OPEN = re.compile(r"(?:MADEIN|FABRIQU[EÉ]EN|HERGESTELLTIN)$")  # the country is on the next line
+_URL = re.compile(r"www\.|http|\.com|\.it\b|\.net|@")
 _BARCODE = re.compile(r"\b(\d{12,13})\b")
 
 
@@ -141,9 +151,13 @@ class OcrFacts:
     composition_photo: int | None = None
     codes: dict[str, str] = field(default_factory=dict)
     country: str | None = None
-    brands: list[str] = field(default_factory=list)
+    brands: list[str] = field(default_factory=list)  # a brand name read on a photo that carries label text
     brand_photo: int | None = None
     label_photos: list[int] = field(default_factory=list)  # photos that show label-like text
+    # A brand name read on a photo with no label text around it (a logo, a bag in the background): a lead, not a label.
+    logo_text: list[str] = field(default_factory=list)
+    # How surely the lines each fact came from were read (the lowest of them): the OCR is a reading, not a measurement.
+    confidence: dict[str, float] = field(default_factory=dict)
 
     @property
     def found(self) -> bool:
@@ -156,28 +170,59 @@ def _compact(text: str) -> str:
 
 _BRAND_ALIASES = sorted(
     {
-        (fold(alias).replace(" ", ""), b.name)
+        (" ".join(fold(alias).split()), fold(alias).replace(" ", ""), b.name)
         for b in BRANDS
         for alias in (b.name, *b.aliases)
         if len(alias) >= 4
     },
-    key=lambda t: -len(t[0]),
+    key=lambda t: -len(t[1]),
 )
+_WORDS = re.compile(r"[a-z0-9]+")
+
+
+def _brand_in(line_text: str) -> str | None:
+    """The brand a single line of text names, as whole words (or the glued word the OCR makes of them); a line that is
+    a web address names nothing ("SHOP AT NIKE.COM" on a bag is not a Nike label)."""
+    if _URL.search(line_text.lower()):
+        return None
+    tokens = _WORDS.findall(fold(line_text))
+    joined, squashed = " " + " ".join(tokens) + " ", "".join(tokens)
+    for spaced, glued, name in _BRAND_ALIASES:
+        if f" {spaced} " in joined or squashed == glued:
+            return name
+    return None
+
+
+def _country_of(lines: list[OcrLine]) -> tuple[str, float] | None:
+    """The country of "made in ...", read line by line (never across two lines that happen to follow each other)."""
+    for i, line in enumerate(lines):
+        up = line.text.upper()
+        m = _COUNTRY_SPACED.search(up) or _COUNTRY_GLUED.match(_compact(line.text))
+        if m:
+            return m.group(1).title(), line.confidence
+        if _COUNTRY_OPEN.search(_compact(line.text)) and i + 1 < len(lines):
+            nxt = _compact(lines[i + 1].text)
+            if re.fullmatch(r"[A-Z]{3,20}", nxt):
+                return nxt.title(), min(line.confidence, lines[i + 1].confidence)
+    return None
 
 
 def parse_ocr(photos: list[tuple[int, list[OcrLine]]]) -> OcrFacts:
     """Facts from the OCR text of the photos: ``(photo index, lines)`` pairs.
 
-    Spaces are often lost by OCR, so patterns are matched on the compacted uppercase text."""
+    Spaces are often lost by OCR, so the long size words are matched on the compacted uppercase text. Each fact is read
+    from single lines (a country is never glued to the next line's text), and every line keeps its confidence."""
     facts = OcrFacts()
     for photo, lines in photos:
         label_like = False
         text_all = " ".join(line.text for line in lines)
-        compact_all = _compact(text_all)
+        size_here: tuple[str, float] | None = None
         for line in lines:
             c = _compact(line.text)
-            if facts.size is None and (m := _SIZE.search(c)):
-                facts.size, facts.size_photo, label_like = m.group(1), photo, True
+            if facts.size is None and size_here is None:
+                m = _SIZE_WORD.search(c) or _SIZE_TG.search(line.text.upper())
+                if m:
+                    size_here = (m.group(1), line.confidence)
             if m := RN_CA.search(line.text.replace(" ", "")) or RN_CA.search(line.text):
                 facts.codes[m.group(1).lower()] = m.group(2)
                 label_like = True
@@ -187,16 +232,31 @@ def parse_ocr(photos: list[tuple[int, list[OcrLine]]]) -> OcrFacts:
         comp = parse_composition(text_all)
         if comp and (not facts.composition or sum(comp.values()) > sum(facts.composition.values())):
             facts.composition, facts.composition_text, facts.composition_photo = comp, text_all[:160], photo
+            shares = [x.confidence for x in lines if "%" in x.text] or [x.confidence for x in lines]
+            facts.confidence["composition"] = round(min(shares), 2)
             label_like = True
-        if facts.country is None and (m := _COUNTRY.search(compact_all)):
-            facts.country = next(g for g in m.groups() if g).title()
+        if facts.country is None and (found := _country_of(lines)):
+            facts.country = found[0]
+            facts.confidence["country"] = round(found[1], 2)
             label_like = True
-        folded = fold(text_all).replace(" ", "")
-        for alias, name in _BRAND_ALIASES:
-            if alias in folded:
-                if name not in facts.brands:
-                    facts.brands.append(name)
-                    facts.brand_photo = facts.brand_photo if facts.brand_photo is not None else photo
+        if size_here is not None:
+            label_like = True
+        elif facts.size is None and label_like:
+            # A size on a line of its own ("M", "42") counts only beside other label text.
+            for line in lines:
+                if m := _SIZE_ALONE.match(_compact(line.text)):
+                    size_here = (m.group(1), line.confidence)
+                    break
+        if facts.size is None and size_here is not None:
+            facts.size, facts.size_photo = size_here[0], photo
+            facts.confidence["size"] = round(size_here[1], 2)
+        for line in lines:
+            if name := _brand_in(line.text):
+                target = facts.brands if label_like else facts.logo_text
+                if name not in target:
+                    target.append(name)
+                    if label_like and facts.brand_photo is None:
+                        facts.brand_photo = photo
                 break
         if label_like:
             facts.label_photos.append(photo)

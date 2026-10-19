@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from app.analysis.categories import ROLE_REQUEST, CategoryPlugin
+from app.analysis.categories import GENERIC, ROLE_REQUEST, CategoryPlugin
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,7 @@ def roles_seen(vision: dict[str, Any] | None) -> set[str]:
             elif lab.get("type") in ("care_label", "composition"):
                 roles.add("care_label")
     for f in v.get("photo_findings") or []:  # findings on a label or care tag count as seen
-        if f.get("verdict") != "unreadable":
+        if f.get("verdict") != "unreadable" and f.get("certainty") != "unverifiable":
             if f.get("kind") == "label":
                 roles.add("label")
             elif f.get("kind") == "care_tag":
@@ -93,4 +93,64 @@ def photo_coverage(vision: dict[str, Any] | None, plugin: CategoryPlugin, photo_
         missing,
         tuple(f"Chiedi la {ROLE_REQUEST[r]}" for r in missing if r in ROLE_REQUEST),
         True,
+    )
+
+
+@dataclass(frozen=True)
+class PhotoGates:
+    """What the photo analysis lets the decision claim. Every number is ``None``/``False`` when the photos were not
+    analysed by a model, and a claim the validation could not back (``app.vision.validate``) does not open a gate."""
+
+    # A model read the photos; ``complete``: all of them (a blocked photo leaves it False); ``verified``: analysed,
+    # complete and with no text in the photos that gives orders, which is the Strong-buy photo gate.
+    analysed: bool
+    complete: bool
+    verified: bool
+    # A label was read on a photo that was sent (derived from the readings, not asserted).
+    label_seen: bool | None
+    # None: not evaluated (not analysed, or an analysis without roles).
+    inspection_coverage: int | None
+    photo_quality: int | None
+    # Parts of the item no photo shows, as the model listed them.
+    unobserved: int
+    injection: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "analysed": self.analysed,
+            "complete": self.complete,
+            "verified": self.verified,
+            "label_seen": self.label_seen,
+            "inspection_coverage": self.inspection_coverage,
+            "photo_quality": self.photo_quality,
+            "unobserved": self.unobserved,
+            "injection": self.injection,
+        }
+
+
+def photo_gates(
+    vision: dict[str, Any] | None, plugin: CategoryPlugin | None = None, photo_count: int = 0
+) -> PhotoGates:
+    """The photo requirements of the decision, from the stored analysis. An analysis stored before the validation
+    existed (no ``validation`` record) counts as it did, except for what it cannot tell (coverage without roles)."""
+    v = vision or {}
+    analysed = is_analysed(v)
+    validation = v.get("validation")
+    validated = isinstance(validation, dict)
+    complete = analysed and (bool(validation.get("complete")) if validated else True)  # type: ignore[union-attr]
+    injection = bool(v.get("injection_suspected"))
+    label_seen = (v.get("photo_quality") or {}).get("has_label_photo") if analysed else None
+    coverage: int | None = None
+    quality = photo_quality_score(v) if analysed else None
+    if analysed and (validated or v.get("photo_roles")):
+        coverage = photo_coverage(v, plugin or GENERIC, photo_count).inspection_coverage
+    return PhotoGates(
+        analysed=analysed,
+        complete=complete,
+        verified=analysed and complete and not injection,
+        label_seen=label_seen if label_seen is None else bool(label_seen),
+        inspection_coverage=coverage,
+        photo_quality=quality,
+        unobserved=len(v.get("unobserved_parts") or []),
+        injection=injection,
     )

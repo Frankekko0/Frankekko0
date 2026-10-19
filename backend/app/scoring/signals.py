@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+from app.analysis.categories import category_stem
 from app.identification.brands import same_brand, squash
 from app.identification.taxonomy import fold
 
@@ -248,9 +249,16 @@ def seller_reviews(inp: SignalInput) -> Signal:
     return Signal("seller_reviews", "Venditore", "ok", "Venditore con un buono storico", evidence)
 
 
+# A reading of the photos weighs on the risk (a brand "read" that contradicts the listing is +20) only when the model was
+# sure: certain, or probable from this confidence. A shaky reading is a lead, not a contradiction.
+MIN_VISION_CONFIDENCE = 0.7
+
+
 def _vision_value(vision: dict[str, Any], key: str) -> str | None:
     finding = vision.get(key)
     if not isinstance(finding, dict) or finding.get("certainty") == "unverifiable":
+        return None
+    if finding.get("certainty") != "certain" and float(finding.get("confidence") or 0) < MIN_VISION_CONFIDENCE:
         return None
     value = finding.get("value")
     return fold(str(value)) if value else None
@@ -281,7 +289,7 @@ def title_photo_consistency(inp: SignalInput) -> Signal:
         ):
             mismatches.append(f"Nelle foto si legge “{seen_brand}”, l'annuncio dice “{inp.brand_name}”")
     seen_category = _vision_value(vision, "category")
-    if seen_category and inp.category and fold(inp.category).split("-")[0] not in seen_category:
+    if seen_category and inp.category and category_stem(inp.category) != category_stem(seen_category):
         title = fold(inp.title)
         if seen_category not in title:
             mismatches.append(f"Le foto sembrano mostrare “{seen_category}”")

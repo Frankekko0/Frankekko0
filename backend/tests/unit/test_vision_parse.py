@@ -109,7 +109,7 @@ async def test_a_refused_or_failed_call_is_no_analysis_and_carries_the_measured_
         await analyse(None)
     out = e.value.partial  # what was measured locally, never given out as the photo analysis
     assert out.analyzer == "heuristic" and out.defects == [] and out.labels == []
-    assert e.value.reason == "no_answer" and e.value.asked  # a bad answer: the model was asked
+    assert e.value.reason == "bad_answer" and e.value.asked  # a bad answer: the model was asked
 
 
 async def test_a_deferral_of_the_provider_is_passed_on_with_its_reason_and_wait() -> None:

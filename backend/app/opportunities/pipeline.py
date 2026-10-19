@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
+from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -59,7 +61,6 @@ from app.opportunities.engine import (
     run_analysis,
 )
 from app.pricing.comparables import ItemProfile
-from app.pricing.lines import line_tokens, profile_extras, same_line
 from app.pricing.evidence import (
     GATE_KEY,
     NEGOTIATION_KEY,
@@ -70,12 +71,16 @@ from app.pricing.evidence import (
     discount_from_state,
     evidence_for_subject,
 )
+from app.pricing.lines import line_tokens, profile_extras, same_line
 from app.pricing.market_value import SegmentPrior
 from app.profit.calculator import CostProfile
 from app.scoring.seller import SellerProfile
 
 log = get_logger(__name__)
 CANDIDATE_LIMIT = 400
+# An analysis that comes out the same as the one on record leaves the opportunity row alone while that row is younger
+# than this (the time-dependent text of the dossier is refreshed by the first one after it).
+ANALYSIS_REWRITE_AFTER = timedelta(hours=2)
 REMOVED_LIMIT = 60
 # Model-first strata: the recent rows of a family are cut by recency, so a rare model would vanish behind a
 # popular one (260 recent Air Force 1 hide 12 Air Max 95). The subject's own model/line is therefore also
@@ -189,6 +194,9 @@ class AnalysisOutcome:
     # True when this is a new analysis the model has no valid review of (a new listing, or a change that makes the
     # old review stale): it has just entered the model-analysis queue (see ``app.ai.queue``).
     ai_pending: bool = False
+    # False when the analysis equals the one on record and that one is recent: the opportunity row and its comparables
+    # were left as they were (nothing was rewritten), see ``AnalysisPipeline.persist_many``.
+    written: bool = True
 
 
 _SIZE_TOKEN = re.compile(r"^(?:x{0,4}[sl]|xx+|[2-5]\d)$")
@@ -316,10 +324,65 @@ def seller_profile(seller: Seller | None, anomalies: tuple[str, ...] = ()) -> Se
     )
 
 
+# What an analysis reads from a listing that a concurrent writer can change while the analysis is being computed: the
+# price and the lifecycle, the descriptive facts it identified, the photo evidence. ``_read_by_analysis`` is the same
+# tuple taken from the loaded entity, to be compared with the row as it is when the result is about to be written.
+_READ_BY_ANALYSIS = (
+    Listing.price,
+    Listing.currency,
+    Listing.status,
+    Listing.capture_level,
+    Listing.photo_count,
+    Listing.brand_id,
+    Listing.category_id,
+    Listing.model_name,
+    Listing.size_normalized,
+    Listing.condition,
+    Listing.seller_id,
+    Listing.duplicate_of_id,
+    Listing.shipping_fee,
+    Listing.buyer_protection_fee,
+    func.md5(Listing.title),
+    func.md5(func.coalesce(Listing.description, "")),
+    Listing.identification["vision"]["analyzer"].astext,
+    Listing.identification["vision"]["photos_key"].astext,
+    Listing.identification["photos_reused_by_other_seller"].astext.is_not_distinct_from("true"),
+)
+
+
+def _read_by_analysis(listing: Listing) -> tuple[Any, ...]:
+    ident = listing.identification or {}
+    vision = ident.get("vision") or {}
+    return (
+        listing.price,
+        listing.currency,
+        listing.status,
+        listing.capture_level,
+        listing.photo_count,
+        listing.brand_id,
+        listing.category_id,
+        listing.model_name,
+        listing.size_normalized,
+        listing.condition,
+        listing.seller_id,
+        listing.duplicate_of_id,
+        listing.shipping_fee,
+        listing.buyer_protection_fee,
+        hashlib.md5((listing.title or "").encode(), usedforsecurity=False).hexdigest(),
+        hashlib.md5((listing.description or "").encode(), usedforsecurity=False).hexdigest(),
+        vision.get("analyzer"),
+        vision.get("photos_key"),
+        bool(ident.get("photos_reused_by_other_seller")),
+    )
+
+
 class AnalysisPipeline:
     def __init__(self, session: AsyncSession, settings: Settings | None = None) -> None:
         self.session = session
         self.settings = settings or get_settings()
+        # Listings that changed after they were read for an analysis (a capture, a sale) and whose out-of-date
+        # result was therefore not stored: the caller analyses them again from their new state.
+        self.superseded: list[uuid.UUID] = []
 
     # ---------------------------------------------------------------- data access
     async def candidates(
@@ -461,7 +524,9 @@ class AnalysisPipeline:
                     .label("model_rank")
                 )
                 inner = (
-                    base.where(Listing.status == status, time_col >= since, Listing.model_name.in_(new_models))
+                    base.where(
+                        Listing.status == status, time_col >= since, Listing.model_name.in_(new_models)
+                    )
                     .add_columns(rank)
                     .subquery()
                 )
@@ -922,6 +987,9 @@ class AnalysisPipeline:
         of the data and the analysis depth.
         """
         version = self.settings.algorithm_version
+        items = await self._drop_superseded(items)
+        if not items:
+            return []
         ids = [listing.id for listing, _ in items]
         # The model's review of a row is kept (not overwritten with the rules' text) while it is still valid for the
         # current analysis; the JSON of those rows is read only for them.
@@ -933,6 +1001,10 @@ class AnalysisPipeline:
             for r in (
                 await self.session.execute(
                     select(
+                        Opportunity.id.label("opportunity_id"),
+                        Opportunity.is_active,
+                        Opportunity.analyzed_at,
+                        Opportunity.algorithm_version.label("row_algorithm_version"),
                         Opportunity.listing_id,
                         Opportunity.flip_score,
                         Opportunity.listing_price,
@@ -962,6 +1034,7 @@ class AnalysisPipeline:
         analysis_rows: list[dict[str, Any]] = []
         analysis_info: dict[uuid.UUID, tuple[uuid.UUID, bool, str | None]] = {}
         ai_pending: dict[uuid.UUID, bool] = {}
+        untouched: set[uuid.UUID] = set()  # identical analysis on a recent row: nothing to write for them
         for listing, result in ordered:
             values = opportunity_values(listing, result, version, now, mode)
             inputs = listing_inputs(listing)
@@ -1003,6 +1076,13 @@ class AnalysisPipeline:
                     }
                 )
             analysis_info[listing.id] = (analysis_id, created, why)
+            if not created and self._unchanged_and_recent(previous.get(listing.id), now, version):
+                # The same analysis again, on a row written less than ``ANALYSIS_REWRITE_AFTER`` ago: the stored
+                # row already says all of this. (Older, it is rewritten: the time-dependent text of the dossier,
+                # such as how long the item has been online, moves.)
+                ai_pending[listing.id] = False
+                untouched.add(listing.id)
+                continue
             row = {"id": uuid.uuid4(), "created_at": now, **values, "analysis_id": analysis_id}
             ai_pending[listing.id] = self._keep_review(
                 row, previous.get(listing.id), prev, created, analysis_id, inputs, version
@@ -1013,12 +1093,14 @@ class AnalysisPipeline:
         # One single-row statement run with many parameter sets ("insertmanyvalues"): compiled
         # once and cached, where a 200-row VALUES clause took ~0.5 s just to compile.
         table = Opportunity.__table__
-        stmt = pg_insert(table)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["listing_id"],
-            set_={k: stmt.excluded[k] for k in rows[0] if k not in ("id", "created_at", "listing_id")},
-        ).returning(table.c.id, table.c.listing_id)
-        opp_ids = {r.listing_id: r.id for r in (await self.session.execute(stmt, rows)).all()}
+        opp_ids = {lid: previous[lid].opportunity_id for lid in untouched}
+        if rows:
+            stmt = pg_insert(table)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["listing_id"],
+                set_={k: stmt.excluded[k] for k in rows[0] if k not in ("id", "created_at", "listing_id")},
+            ).returning(table.c.id, table.c.listing_id)
+            opp_ids |= {r.listing_id: r.id for r in (await self.session.execute(stmt, rows)).all()}
 
         # Core (not ORM) executemany: no per-row ORM bookkeeping on the hot path. One score row per
         # *new* analysis: an identical re-run adds nothing.
@@ -1045,26 +1127,10 @@ class AnalysisPipeline:
                     for listing, result in recorded
                 ],
             )
-        await self.session.execute(delete(MarketComparable).where(MarketComparable.listing_id.in_(ids)))
-        records = [
-            (
-                listing.id,
-                c.item.id,
-                Decimal(str(round(c.similarity, 4))),
-                c.item.price,
-                Decimal(str(round(c.adjusted_price, 2))),
-                Decimal(str(round(min(c.weight, 999999), 4))),
-                c.is_sold,
-                c.included,
-                c.exclusion_reason,
-                now,
-            )
-            for listing, result in ordered
-            for c in result.comparables
-            if c.item.id is not None
-        ]
-        if records:
-            await self._copy_comparables(records)
+        # An identical analysis used the identical comparables: those rows are checked and kept.
+        await self._replace_comparables(
+            ordered, {lid for lid, info in analysis_info.items() if not info[1]}, now
+        )
 
         return [
             AnalysisOutcome(
@@ -1079,9 +1145,106 @@ class AnalysisPipeline:
                 analysis_created=analysis_info[listing.id][1],
                 trigger=analysis_info[listing.id][2],
                 ai_pending=ai_pending[listing.id],
+                written=listing.id not in untouched,
             )
             for listing, result in items
         ]
+
+    @staticmethod
+    def _unchanged_and_recent(old: Any, now: datetime, version: str) -> bool:
+        """Whether the stored opportunity row can stand for an analysis that came out the same: it exists, is active,
+        carries the current algorithm version and was written less than ``ANALYSIS_REWRITE_AFTER`` ago."""
+        return bool(
+            old is not None
+            and old.is_active
+            and old.row_algorithm_version == version
+            and old.analyzed_at is not None
+            and timedelta(0) <= now - old.analyzed_at < ANALYSIS_REWRITE_AFTER
+        )
+
+    async def _drop_superseded(
+        self, items: list[tuple[Listing, AnalysisResult]]
+    ) -> list[tuple[Listing, AnalysisResult]]:
+        """Keep only the analyses of listings that are still as they were read.
+
+        An analysis takes a second or two between reading the listings and writing the result. A capture that lands
+        in between (a new price, a sale, the photo check) makes the result out of date, and writing it would put the
+        old price or the buyable status back over the new one. The listing rows are read again here under a shared
+        row lock (a capture that wants to change them waits for this transaction), in the order the ingestion locks
+        them, and an analysis whose listing moved is not written: it is remembered in ``superseded`` for the caller
+        to analyse again."""
+        if not items:
+            return items
+        by_id = {listing.id: listing for listing, _ in items}
+        rows = (
+            await self.session.execute(
+                select(Listing.id, *_READ_BY_ANALYSIS)
+                .where(Listing.id.in_(list(by_id)))
+                .order_by(Listing.id)
+                .with_for_update(read=True)
+            )
+        ).all()
+        now_state = {r.id: tuple(r[1:]) for r in rows}
+        stale = {lid for lid, listing in by_id.items() if now_state.get(lid) != _read_by_analysis(listing)}
+        if not stale:
+            return items
+        self.superseded += sorted(stale, key=str)
+        log.info("analysis.superseded", listings=len(stale), of=len(by_id))
+        return [it for it in items if it[0].id not in stale]
+
+    async def _replace_comparables(
+        self,
+        ordered: list[tuple[Listing, AnalysisResult]],
+        same_analysis: set[uuid.UUID],
+        now: datetime,
+    ) -> None:
+        """Store the comparables each analysis used, replacing the previous ones.
+
+        A listing whose analysis came out the same (``same_analysis``) and whose stored comparables are exactly these
+        ones keeps its rows: re-analysing an unchanged listing used to delete and copy about sixty identical rows."""
+        wanted: dict[uuid.UUID, set[tuple[uuid.UUID, bool]]] = {
+            listing.id: {(c.item.id, bool(c.included)) for c in result.comparables if c.item.id is not None}
+            for listing, result in ordered
+        }
+        check = [lid for lid in wanted if lid in same_analysis]
+        # Same analysis, same comparables: compare with what is stored (a listing analysed before the table
+        # existed, or whose rows were lost, has nothing stored and is written).
+        stored: dict[uuid.UUID, set[tuple[uuid.UUID, bool]]] = defaultdict(set)
+        # One statement whatever the batch holds (with nothing to check it matches no row): the cost of a batch does
+        # not depend on how many of its listings came out unchanged.
+        for r in await self.session.execute(
+            select(
+                MarketComparable.listing_id,
+                MarketComparable.comparable_listing_id,
+                MarketComparable.included,
+            ).where(MarketComparable.listing_id.in_(check))
+        ):
+            stored[r.listing_id].add((r.comparable_listing_id, bool(r.included)))
+        keep = {lid for lid in check if stored.get(lid) == wanted[lid]}
+        replace = [lid for lid in wanted if lid not in keep]
+        if not replace:
+            return
+        await self.session.execute(delete(MarketComparable).where(MarketComparable.listing_id.in_(replace)))
+        records = [
+            (
+                listing.id,
+                c.item.id,
+                Decimal(str(round(c.similarity, 4))),
+                c.item.price,
+                Decimal(str(round(c.adjusted_price, 2))),
+                Decimal(str(round(min(c.weight, 999999), 4))),
+                c.is_sold,
+                c.included,
+                c.exclusion_reason,
+                now,
+            )
+            for listing, result in ordered
+            if listing.id not in keep
+            for c in result.comparables
+            if c.item.id is not None
+        ]
+        if records:
+            await self._copy_comparables(records)
 
     def _keep_review(
         self,
@@ -1138,10 +1301,15 @@ class AnalysisPipeline:
         # The flip score is compared with the one the review was written for, not with the previous row: that row is
         # rewritten on every small move, so a drift in one direction would never add up to a new review.
         reviewed_flip = old.ai_reviewed_flip if old.ai_reviewed_flip is not None else old.flip_score
+        current = jsonable(inputs)
+        # A new price alone is not new material for the model: it read the text and the photos, which did not
+        # change, and its caution still holds (the review only lowers). It is a new review when the price moves the
+        # score by ``AI_REANALYZE_FLIP_DELTA`` or turns the engine's verdict, like any other market move.
+        price_only = prev is not None and without_price(current) == without_price(prev.inputs)
         material = (
             prev is None
             or prev.algorithm_version != version
-            or jsonable(inputs) != prev.inputs
+            or (current != prev.inputs and not price_only)
             or abs(row["flip_score"] - reviewed_flip) >= self.settings.ai_reanalyze_flip_delta
             or row["decision_verdict"] != prev.decision_verdict
         )
@@ -1203,6 +1371,11 @@ class AnalysisPipeline:
             await self.session.execute(
                 update(Opportunity).where(Opportunity.listing_id.in_(listing_ids)).values(is_active=False)
             )
+
+
+def without_price(inputs: dict[str, Any] | None) -> dict[str, Any]:
+    """The inputs of an analysis but for the price (to tell a price move from any other change)."""
+    return {k: v for k, v in (inputs or {}).items() if k != "price"}
 
 
 def analysis_depth(listing: Listing) -> str:

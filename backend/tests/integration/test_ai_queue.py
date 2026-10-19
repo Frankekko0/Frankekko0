@@ -67,6 +67,9 @@ def env(monkeypatch: pytest.MonkeyPatch) -> Env:
 
     def configure(*answers: Any, **cfg_kw: Any) -> Env:
         cfg_kw.setdefault("ai_auto_analyze_min_flip_score", 0)
+        # These tests are about the queue's mechanics, with every row above the flip threshold eligible; the verdict
+        # scope has its own tests (test_ai_review_scope.py).
+        cfg_kw.setdefault("ai_review_scope", "all")
         e.cfg = ai_settings(**cfg_kw)
         e.fake = FakeAnthropic(*(answers or (text_response(answer("CONSIDER")),)))
         e.llm = LLMClient(e.cfg, budget=AiBudget(e.cfg))
@@ -491,11 +494,14 @@ async def test_a_material_change_drops_the_review_and_queues_a_new_one(
     reviewed = await row(ids["strong"])
     assert reviewed.ai_provider == "claude"
 
-    async with session_scope() as s:  # the seller drops the price
+    async with session_scope() as s:  # the seller rewrites the description: new material for the model to read
         listing = await s.get(Listing, reviewed.listing_id)
         assert listing is not None
-        pl = SimpleNamespace(price=listing.price)
-        await s.execute(update(Listing).where(Listing.id == listing.id).values(price=pl.price - D("2")))
+        await s.execute(
+            update(Listing)
+            .where(Listing.id == listing.id)
+            .values(description=listing.description + " Aggiornamento: due piccoli segni di usura sul colletto.")
+        )
     outcome = await reanalyse(reviewed.listing_id, NOW + timedelta(hours=1))
     assert outcome.analysis_created is True and outcome.ai_pending is True
     after = await row(ids["strong"])

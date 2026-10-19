@@ -148,7 +148,9 @@ async def test_recapturing_the_same_page_keeps_the_photo_analysis_and_what_the_l
     await mark_reused(sx.listing_id)
 
     await sx.recapture()  # the page is opened again: same text, same photos
-    await sx.recapture(sx.listing.model_copy(update={"price": Decimal("19.00")}), hours=2)  # and after a price drop
+    await sx.recapture(
+        sx.listing.model_copy(update={"price": Decimal("19.00")}), hours=2
+    )  # and after a price drop
 
     after = await sx.stored()
     assert after.identification["vision"] == before.identification["vision"]  # the stored analysis, untouched
@@ -202,7 +204,9 @@ async def test_a_gallery_that_changed_drops_the_photo_analysis_but_not_the_reuse
 
     after = await sx.stored()
     assert "vision" not in after.identification  # it described other photos: the check runs again
-    assert after.identification["photos_reused_by_other_seller"] is True  # an observed signal is never forgotten
+    assert (
+        after.identification["photos_reused_by_other_seller"] is True
+    )  # an observed signal is never forgotten
 
 
 async def test_a_card_never_touches_the_photo_analysis(
@@ -257,14 +261,23 @@ async def test_the_inputs_of_an_analysis_name_the_photo_evidence_it_read() -> No
         duplicate_of_id=None,
     )
     plain = listing_inputs(SimpleNamespace(**base, identification={"brand": {}}))
-    assert "photo_evidence" not in plain  # listings without photo evidence keep their inputs (and hash) as they were
+    assert (
+        "photo_evidence" not in plain
+    )  # listings without photo evidence keep their inputs (and hash) as they were
     checked = listing_inputs(
         SimpleNamespace(
             **base,
-            identification={"vision": {"analyzer": "claude_vision", "photos_key": "k1"}, "photos_reused_by_other_seller": True},
+            identification={
+                "vision": {"analyzer": "claude_vision", "photos_key": "k1"},
+                "photos_reused_by_other_seller": True,
+            },
         )
     )
-    assert checked["photo_evidence"] == {"analyzer": "claude_vision", "photos_key": "k1", "reused_photos": True}
+    assert checked["photo_evidence"] == {
+        "analyzer": "claude_vision",
+        "photos_key": "k1",
+        "reused_photos": True,
+    }
     # A lost photo analysis is a change of the inputs, and one that asks for the photos to be checked again.
     from app.opportunities.analysis_record import jsonable
 

@@ -143,10 +143,43 @@ def test_vintage_decade_is_not_kids_age() -> None:
 def test_vision_evidence_is_used_but_never_asserts_authenticity() -> None:
     vision = ImageAnalysis(
         analyzer="test",
-        brand=VisualFinding(value="Ralph Lauren", certainty=Certainty.CERTAIN, confidence=0.9),
+        brand=VisualFinding(
+            value="Ralph Lauren", certainty=Certainty.CERTAIN, confidence=0.9, corroborated=True
+        ),
         authenticity_positive_signals=["etichetta coerente"],
     )
     r = engine.identify(ListingText(title="Polo blu uomo"), vision)
     assert r.brand.value == "ralph-lauren" and r.brand.source == "image"
     assert r.authenticity.value == "no_red_flags"
     assert r.authenticity.certainty == Certainty.UNVERIFIABLE
+
+
+@pytest.mark.parametrize(
+    ("certainty", "confidence", "corroborated", "adopted"),
+    [
+        (Certainty.CERTAIN, 0.9, True, True),
+        (Certainty.PROBABLE, 0.75, True, True),
+        (Certainty.PROBABLE, 0.6, True, False),  # not sure enough
+        (Certainty.CERTAIN, 0.9, False, False),  # nothing but the model's word: a lead, not a fact
+        (Certainty.CERTAIN, 0.9, None, False),  # nothing to compare with
+        (Certainty.UNVERIFIABLE, 0.2, True, False),
+    ],
+)
+def test_a_brand_the_photos_suggest_is_a_fact_only_when_a_label_or_the_ocr_confirms_it(
+    certainty: Certainty, confidence: float, corroborated: bool | None, adopted: bool
+) -> None:
+    """V04: «Giacca blu» with a compass-like patch read as Stone Island must not turn into a Stone Island listing."""
+    vision = ImageAnalysis(
+        analyzer="test",
+        brand=VisualFinding(
+            value="Stone Island", certainty=certainty, confidence=confidence, corroborated=corroborated
+        ),
+    )
+    r = engine.identify(ListingText(title="Giacca blu taglia L"), vision)
+    if adopted:
+        assert r.brand.value == "stone-island" and r.brand.source == "image"
+        assert r.brand_guess.value is None
+    else:
+        assert r.brand.value is None  # filters nothing, names no brand
+        assert r.brand_guess.value == "stone-island" and r.brand_guess.source == "image"
+        assert r.brand_guess.confidence == confidence

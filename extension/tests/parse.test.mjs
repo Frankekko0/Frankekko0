@@ -467,3 +467,11 @@ test("a label that ends in the words of another is not read as that one ('bez me
   assert.equal(P.normalizeCondition("Nowy bez metki", C), "new_without_tags");
   assert.equal(P.normalizeCondition("Ottime", C), "very_good");
 });
+
+test("a capture carries the time the page was read, so a queued one is not stamped with the time it arrives", () => {
+  const base = { url: "https://www.vinted.it/items/9-x", title: "Felpa", price: 12 };
+  const readAt = Date.parse("2026-10-06T10:15:30Z");
+  assert.equal(P.capturePayload({ ...base, observed_at: readAt }, C).observed_at, "2026-10-06T10:15:30.000Z");
+  assert.equal(P.capturePayload(base, C).observed_at, undefined);
+  for (const bad of [0, -5, NaN, "tomorrow", 9e18, null]) assert.equal(P.capturePayload({ ...base, observed_at: bad }, C).observed_at, undefined);
+});

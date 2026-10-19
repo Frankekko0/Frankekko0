@@ -131,7 +131,7 @@ def test_new_seller_is_not_called_a_scammer() -> None:
 def test_label_photos_and_title_photo_mismatch_with_image_analysis() -> None:
     vision = {
         "analyzer": "claude",
-        "brand": {"value": "Lacoste", "certainty": "probable"},
+        "brand": {"value": "Lacoste", "certainty": "probable", "confidence": 0.85},
         "color": {"value": "navy", "certainty": "certain"},
         "photo_quality": {"has_label_photo": False},
     }
@@ -143,11 +143,38 @@ def test_label_photos_and_title_photo_mismatch_with_image_analysis() -> None:
     ok = signals(
         vision={
             **vision,
-            "brand": {"value": "Ralph Lauren", "certainty": "probable"},
+            "brand": {"value": "Ralph Lauren", "certainty": "probable", "confidence": 0.85},
             "photo_quality": {"has_label_photo": True},
         }
     )
     assert ok["label_photos"].level == "ok" and ok["title_photo_mismatch"].level == "ok"
+
+
+def test_a_shaky_reading_of_the_photos_is_not_a_contradiction_of_the_listing() -> None:
+    """V04: a brand the model only half-read (probable at 0.4) must not add the +20 «si legge» risk."""
+    shaky = {
+        "analyzer": "claude",
+        "brand": {"value": "Lacoste", "certainty": "probable", "confidence": 0.4},
+        "photo_quality": {"has_label_photo": True},
+    }
+    assert signals(vision=shaky)["title_photo_mismatch"].level == "ok"
+    unsure = {**shaky, "brand": {"value": "Lacoste", "certainty": "unverifiable", "confidence": 0.9}}
+    assert signals(vision=unsure)["title_photo_mismatch"].level == "ok"
+    sure = {**shaky, "brand": {"value": "Lacoste", "certainty": "certain", "confidence": 0.4}}
+    assert signals(vision=sure)["title_photo_mismatch"].level == "high"
+
+
+def test_category_in_the_photos_is_compared_as_a_slug_not_as_a_prefix() -> None:
+    """V10: the first segment of «t-shirts» is the letter «t», which used to match any category containing a t."""
+    shirt = {
+        "analyzer": "claude",
+        "category": {"value": "jackets", "certainty": "certain", "confidence": 0.9},
+    }
+    assert (
+        signals(vision=shirt, category="t-shirts", title="Maglia blu")["title_photo_mismatch"].level != "ok"
+    )
+    same = {"analyzer": "claude", "category": {"value": "t-shirt", "certainty": "certain", "confidence": 0.9}}
+    assert signals(vision=same, category="t-shirts", title="Maglia blu")["title_photo_mismatch"].level == "ok"
     assert signals(brand_counterfeit_risk=0.2)["possible_fake"].level == "low"
     few_photos = signals(photo_count=1)["label_photos"]
     assert few_photos.level in ("low", "medium") and "poche foto" in few_photos.label.lower()

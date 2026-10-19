@@ -12,6 +12,7 @@ Duplicate detection layers (cheapest first):
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
@@ -20,7 +21,7 @@ from decimal import Decimal
 from typing import Any
 
 from rapidfuzz import fuzz
-from sqlalchemy import insert, select, update
+from sqlalchemy import insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,6 +58,28 @@ log = get_logger(__name__)
 _engines: dict[int, IdentificationEngine] = {}
 REPOST_WINDOW_DAYS = 120
 PHASH_MAX_DISTANCE = 4
+# A capture older than this was read too long ago to say what the listing looks like now (the extension keeps a
+# queued capture for 24 hours): its time is clamped to this far back.
+OBSERVED_MAX_AGE = timedelta(hours=48)
+# A listing seen again unchanged within this time of its last verification is not written again.
+RESIGHT_DEBOUNCE = timedelta(minutes=2)
+
+
+def observation_time(observed_at: datetime | None, now: datetime) -> datetime:
+    """When the capture was read from the page: the time the browser reported, clamped to ``[now - 48 h, now]``
+    (a clock in the future or a stale queue entry never stamps a listing with an impossible time); the arrival time
+    when the source does not say."""
+    if observed_at is None:
+        return now
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=UTC)
+    return min(now, max(observed_at, now - OBSERVED_MAX_AGE))
+
+
+def advisory_key(provider: str, external_id: str) -> int:
+    """A stable 64-bit key for the lock that serialises captures of the same listing."""
+    digest = hashlib.blake2b(f"{provider}:{external_id}".encode(), digest_size=8).digest()
+    return int.from_bytes(digest, "big", signed=True)
 
 
 def get_engine(taxonomy: Taxonomy) -> IdentificationEngine:
@@ -86,6 +109,8 @@ class IngestResult:
     # Existing listings whose descriptive data was replaced by a richer capture (re-analyse).
     enriched_ids: list[uuid.UUID] = field(default_factory=list)
     status_updates: dict[uuid.UUID, StatusUpdate] = field(default_factory=dict)
+    # Known listings whose capture was read before the one already stored: nothing of it was applied.
+    out_of_order_ids: list[uuid.UUID] = field(default_factory=list)
     # Vinted/external id -> internal id, for every listing of the batch.
     ids_by_external: dict[str, uuid.UUID] = field(default_factory=dict)
     received: int = 0
@@ -246,6 +271,47 @@ def descriptive_columns(pl: ProviderListing, ident: IdentificationResult, catalo
     return out
 
 
+def _same_date(ex: Any, pl: ProviderListing) -> bool:
+    """The publication date the capture states is the stored one. A relative date ("3 days ago") is computed anew
+    from the page's text at every capture and drifts with the clock: it counts as the same within a day and a half."""
+    if pl.published_at is None or ex.published_at == pl.published_at:
+        return True
+    return bool(
+        pl.published_at_kind == "relative"
+        and ex.published_at is not None
+        and abs(pl.published_at - ex.published_at) <= timedelta(hours=36)
+    )
+
+
+def _same_description(ex: Any, pl: ProviderListing, seller_id: uuid.UUID | None) -> bool:
+    """Whether a capture says, field by field, what the stored listing already says (so writing it would change
+    nothing). The raw values are compared with the raw columns; what the server derives from them (brand, model,
+    size...) follows from them."""
+
+    def cut(value: str | None, n: int) -> str | None:
+        return (value or None) and value[:n]  # type: ignore[index]
+
+    return bool(
+        ex.url == pl.url
+        and ex.title == pl.title[:300]
+        and (ex.description or "") == (pl.description or "")
+        and ex.currency == pl.currency
+        and ex.brand_raw == cut(pl.brand, 120)
+        and ex.category_raw == cut(pl.category, 120)
+        and ex.subcategory_raw == cut(pl.subcategory, 120)
+        and ex.size_raw == cut(pl.size, 60)
+        and ex.condition_raw == cut(pl.condition, 60)
+        and ex.color_raw == cut(pl.color, 60)
+        and ex.material_raw == cut(pl.material, 120)
+        and ex.country == normalize_country(pl.country)
+        and ex.shipping_fee == pl.shipping_fee
+        and ex.buyer_protection_fee == pl.buyer_protection_fee
+        and ex.buyer_protection_available == pl.buyer_protection_available
+        and _same_date(ex, pl)
+        and (seller_id is None or ex.seller_id == seller_id)
+    )
+
+
 def _lifecycle(update: StatusUpdate) -> dict[str, Any]:
     return {
         "status": update.status.value,
@@ -297,6 +363,9 @@ class IngestionService:
         # Last occurrence wins if a page contains the same listing twice.
         by_ext = {pl.external_id: pl for pl in listings}
         listings = list(by_ext.values())
+        # Two captures of the same listing (two browsers, a retry racing a slow first attempt) are served one after
+        # the other: the second sees the listing the first stored as known, instead of inserting it a second time.
+        await self._lock_listings(list(by_ext))
         catalog = await load_catalog(self.session)
         engine = get_engine(catalog.taxonomy)
 
@@ -324,6 +393,24 @@ class IngestionService:
                     Listing.photo_count,
                     Listing.seller_id,
                     Listing.currency,
+                    Listing.last_seen_at,
+                    Listing.last_verified_at,
+                    # What a capture would write again: compared with it, so that nothing identical is rewritten.
+                    Listing.url,
+                    Listing.title,
+                    Listing.description,
+                    Listing.brand_raw,
+                    Listing.category_raw,
+                    Listing.subcategory_raw,
+                    Listing.size_raw,
+                    Listing.condition_raw,
+                    Listing.color_raw,
+                    Listing.material_raw,
+                    Listing.country,
+                    Listing.shipping_fee,
+                    Listing.buyer_protection_fee,
+                    Listing.buyer_protection_available,
+                    Listing.published_at_kind,
                     # What the photos established (a page capture cannot produce it): read to be carried over.
                     Listing.identification["vision"].label("stored_vision"),
                     Listing.identification["photos_reused_by_other_seller"].label("stored_reused"),
@@ -331,7 +418,7 @@ class IngestionService:
             )
         ).all()
         existing = {r.external_id: r for r in existing_rows}
-        stored_photo_keys = await self._stored_photo_keys([r.id for r in existing_rows if r.stored_vision])
+        stored_photo_keys = await self._stored_photo_keys([r.id for r in existing_rows])
         last_seen_rows = await self._last_snapshots([r.id for r in existing_rows])
         heartbeat = timedelta(hours=get_settings().snapshot_heartbeat_hours)
 
@@ -346,8 +433,10 @@ class IngestionService:
 
         for pl in listings:
             ex = existing.get(pl.external_id)
+            # When the page was read: a capture queued in the browser while the server was away keeps its own time.
+            seen_at = observation_time(pl.observed_at, now)
             obs = Observation(
-                observed_at=now,
+                observed_at=seen_at,
                 evidence=self.evidence,
                 status=ListingStatus(pl.status),
                 price=pl.price,
@@ -355,6 +444,12 @@ class IngestionService:
             )
             if ex is not None:
                 result.ids_by_external[pl.external_id] = ex.id
+                if ex.last_seen_at is not None and seen_at < ex.last_seen_at:
+                    # Read before the capture we already hold: it says what the listing looked like earlier, and
+                    # must not put an older price or status over the newer one. The listing is still "seen".
+                    result.updated_ids.append(ex.id)
+                    result.out_of_order_ids.append(ex.id)
+                    continue
                 upd_status = apply_observation(
                     StatusState(
                         status=ListingStatus(ex.status),
@@ -377,11 +472,11 @@ class IngestionService:
                     upd_status = replace(upd_status, unchanged_checks=0)
                 result.status_updates[ex.id] = upd_status
                 favourites = pl.favourite_count if pl.favourite_count is not None else ex.favourite_count
-                tracked_at = ex.tracked_at or (now if self.track else None)
+                tracked_at = ex.tracked_at or (seen_at if self.track else None)
                 upd: dict[str, Any] = {
                     "id": ex.id,
-                    "last_seen_at": now,
-                    "last_checked_at": now,
+                    "last_seen_at": seen_at,
+                    "last_checked_at": seen_at,
                     "price": pl.price,
                     "favourite_count": favourites,
                     "view_count": pl.view_count if pl.view_count is not None else ex.view_count,
@@ -389,13 +484,13 @@ class IngestionService:
                         (ex.capture_level, CaptureLevel(pl.capture_level).value), key=CAPTURE_RANK.__getitem__
                     ),
                     "tracked_at": tracked_at,
-                    "status_changed_at": now if upd_status.changed else None,
-                    **({} if link_capture else {"last_verified_at": now}),
+                    "status_changed_at": seen_at if upd_status.changed else None,
+                    **({} if link_capture else {"last_verified_at": seen_at}),
                     "next_check_at": schedule(
                         status=upd_status.status,
                         tracked_at=tracked_at,
                         acquisition_mode=ex.acquisition_mode,
-                        now=now,
+                        now=seen_at,
                         published_at=ex.published_at,
                         favourite_count=favourites,
                         unchanged_checks=upd_status.unchanged_checks,
@@ -406,7 +501,19 @@ class IngestionService:
                 }
                 if not upd_status.changed:
                     del upd["status_changed_at"]
-                updates.append(upd)
+                # Seen again, unchanged, minutes after the last time: there is nothing new to write.
+                quiet = (
+                    not price_changed
+                    and not upd_status.changed
+                    and ex.last_verified_at is not None
+                    and timedelta(0) <= seen_at - ex.last_verified_at < RESIGHT_DEBOUNCE
+                    and favourites == ex.favourite_count
+                    and upd["view_count"] == ex.view_count
+                    and upd["capture_level"] == ex.capture_level
+                    and tracked_at == ex.tracked_at
+                )
+                if not quiet:
+                    updates.append(upd)
                 result.updated_ids.append(ex.id)
                 if price_changed:
                     result.price_changes.append(PriceChange(ex.id, ex.price, pl.price))
@@ -418,6 +525,7 @@ class IngestionService:
                 richer = incoming_rank > stored_rank or (
                     incoming_rank == stored_rank and self.mode != AcquisitionMode.PROVIDER_SCAN
                 )
+                seller_id = seller_ids.get(pl.seller.external_id) if pl.seller else None
                 if richer:
                     # The gallery this capture leaves behind: its own when it replaces the stored one, else the stored.
                     replaces_gallery = bool(pl.images) and (
@@ -426,8 +534,11 @@ class IngestionService:
                         or incoming_rank > stored_rank
                     )
                     photos_unchanged = not replaces_gallery or [
-                        r["image_key"] for r in incoming_rows(ex.id, pl.images, None, now)
+                        r["image_key"] for r in incoming_rows(ex.id, pl.images, None, seen_at)
                     ] == stored_photo_keys.get(ex.id, [])
+                if richer and photos_unchanged and _same_description(ex, pl, seller_id):
+                    richer = False  # the same page again: nothing it says differs from what is stored
+                if richer:
                     # The photo analysis is part of what is known about the item: a page capture does not erase it
                     # (the brand, model or size read on a label are folded back in); it is dropped only when the
                     # photos themselves changed, and the photo check then runs again.
@@ -446,7 +557,10 @@ class IngestionService:
                         if seen.category.value and cols["category_id"] is None:
                             cols["category_id"] = catalog.category_id(seen.category.value)
                     cols["identification"] = carry_photo_evidence(
-                        cols["identification"], ex.stored_vision, ex.stored_reused, photos_unchanged=photos_unchanged
+                        cols["identification"],
+                        ex.stored_vision,
+                        ex.stored_reused,
+                        photos_unchanged=photos_unchanged,
                     )
                     if not pl.images:
                         cols.pop("photo_count")  # this capture has no photos: keep the stored ones
@@ -454,24 +568,25 @@ class IngestionService:
                         # Only reached by a capture at least as rich as what is stored: the photos
                         # it does not list are retired (kept as history), not deleted.
                         replace_images[ex.id] = (
-                            incoming_rows(ex.id, pl.images, self._images_source(pl), now),
+                            incoming_rows(ex.id, pl.images, self._images_source(pl), seen_at),
                             True,
                         )
                     else:
                         cols.pop("photo_count")
-                    seller_id = seller_ids.get(pl.seller.external_id) if pl.seller else None
                     enrich_updates.append(
                         {"id": ex.id, **cols, **({"seller_id": seller_id} if seller_id else {})}
                     )
                     result.enriched_ids.append(ex.id)
                 prev = self._previous(ex, last_seen_rows.get(ex.id), was_link_only)
-                reasons = snapshot_reasons(prev, current_from(pl, upd_status.status.value), now, heartbeat)
+                reasons = snapshot_reasons(
+                    prev, current_from(pl, upd_status.status.value), seen_at, heartbeat
+                )
                 if reasons:
-                    snapshot_rows.append(self._snapshot(ex.id, pl, upd_status.status, now, reasons))
+                    snapshot_rows.append(self._snapshot(ex.id, pl, upd_status.status, seen_at, reasons))
                 continue
 
             ident = identify_listing(engine, pl)
-            row = listing_columns(pl, ident, catalog, self.provider, now)
+            row = listing_columns(pl, ident, catalog, self.provider, seen_at)
             row["id"] = uuid.uuid4()
             result.ids_by_external[pl.external_id] = row["id"]
             row["seller_id"] = seller_ids.get(pl.seller.external_id) if pl.seller else None
@@ -480,14 +595,14 @@ class IngestionService:
             )
             row.update(_lifecycle(first))
             row["acquisition_mode"] = self.mode.value
-            row["tracked_at"] = now if self.track else None
-            row["last_checked_at"] = now
-            row["last_verified_at"] = None if pl.capture_level == CaptureLevel.LINK else now
+            row["tracked_at"] = seen_at if self.track else None
+            row["last_checked_at"] = seen_at
+            row["last_verified_at"] = None if pl.capture_level == CaptureLevel.LINK else seen_at
             row["next_check_at"] = schedule(
                 status=first.status,
                 tracked_at=row["tracked_at"],
                 acquisition_mode=self.mode,
-                now=now,
+                now=seen_at,
                 published_at=row["published_at"],
                 favourite_count=row["favourite_count"],
             )
@@ -496,9 +611,9 @@ class IngestionService:
             result.status_updates[row["id"]] = first
             if pl.status == ListingStatus.ACTIVE:
                 result.new_active_ids.add(row["id"])
-            snapshot_rows.append(self._snapshot(row["id"], pl, first.status, now, ["first"]))
-            new_images += incoming_rows(row["id"], pl.images, self._images_source(pl), now)
-            row["photo_count"] = len(incoming_rows(row["id"], pl.images, None, now))
+            snapshot_rows.append(self._snapshot(row["id"], pl, first.status, seen_at, ["first"]))
+            new_images += incoming_rows(row["id"], pl.images, self._images_source(pl), seen_at)
+            row["photo_count"] = len(incoming_rows(row["id"], pl.images, None, seen_at))
             if key := ident.product_key:
                 row_product_key[row["id"]] = key
                 product_specs.setdefault(
@@ -526,11 +641,25 @@ class IngestionService:
         if new_rows:
             await self._detect_duplicates(new_rows, new_images, now, result)
             # Core (table) inserts: no per-row ORM bookkeeping on the ingestion hot path.
-            stmt = pg_insert(Listing.__table__).on_conflict_do_nothing(
-                index_elements=["provider", "external_id"]
+            stmt = (
+                pg_insert(Listing.__table__)
+                .on_conflict_do_nothing(index_elements=["provider", "external_id"])
+                .returning(Listing.__table__.c.id)
             )
-            # Sorted keys = same row-lock order in concurrent ingestions (no deadlocks).
-            await self.session.execute(stmt, sorted(new_rows, key=lambda r: r["external_id"]))
+            # Sorted keys = same row-lock order in concurrent ingestions (no deadlocks); a repost goes after the
+            # original it points to when both are in this batch (the foreign key needs the original first).
+            in_batch = {r["id"] for r in new_rows}
+            ordered = sorted(new_rows, key=lambda r: (r["duplicate_of_id"] in in_batch, r["external_id"]))
+            inserted = {r.id for r in (await self.session.execute(stmt, ordered)).all()}
+            if len(inserted) < len(new_rows):
+                # Another transaction stored the same listing first (a source that does not take the lock): what
+                # was not inserted is a known listing now, and none of its images or snapshots may be stored for
+                # the id this batch made up.
+                await self._known_after_race(new_rows, inserted, result)
+                lost = {r["id"] for r in new_rows} - inserted
+                new_rows = [r for r in new_rows if r["id"] not in lost]
+                new_images = [i for i in new_images if i["listing_id"] not in lost]
+                snapshot_rows = [r for r in snapshot_rows if r["listing_id"] not in lost]
         if new_images:
             await self.session.execute(pg_insert(ListingImage.__table__).on_conflict_do_nothing(), new_images)
         if updates:
@@ -547,6 +676,42 @@ class IngestionService:
             await self.session.execute(insert(ListingSnapshot.__table__), snapshot_rows)
         await self._record_sales(result, new_rows)
         return result
+
+    async def _lock_listings(self, external_ids: list[str]) -> None:
+        """Take the transaction-scoped advisory locks of these listings, in key order (so two batches that share
+        listings wait for each other and never deadlock). Held until the transaction ends."""
+        keys = sorted({advisory_key(self.provider, e) for e in external_ids})
+        if keys:
+            await self.session.execute(
+                text("SELECT pg_advisory_xact_lock(k) FROM unnest(CAST(:keys AS bigint[])) AS k"),
+                {"keys": keys},
+            )
+
+    async def _known_after_race(
+        self, new_rows: list[dict[str, Any]], inserted: set[uuid.UUID], result: IngestResult
+    ) -> None:
+        """Re-point the listings this batch lost the insert race for at the rows that won it."""
+        lost = [r for r in new_rows if r["id"] not in inserted]
+        found = (
+            await self.session.execute(
+                select(Listing.id, Listing.external_id).where(
+                    Listing.provider == self.provider,
+                    Listing.external_id.in_([r["external_id"] for r in lost]),
+                )
+            )
+        ).all()
+        real = {f.external_id: f.id for f in found}
+        for r in lost:
+            mine, theirs = r["id"], real.get(r["external_id"])
+            result.new_ids = [i for i in result.new_ids if i != mine]
+            result.new_active_ids.discard(mine)
+            result.status_updates.pop(mine, None)
+            result.duplicates.pop(mine, None)
+            result.duplicates_of_active.discard(mine)
+            if theirs is not None:
+                result.ids_by_external[r["external_id"]] = theirs
+                result.updated_ids.append(theirs)
+        log.info("ingest.insert_race", listings=len(lost))
 
     async def _record_sales(self, result: IngestResult, new_rows: list[dict[str, Any]]) -> None:
         """Listings seen sold (or no longer sold) go to the concluded sales right away."""

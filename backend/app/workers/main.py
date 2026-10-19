@@ -29,7 +29,7 @@ from app.market.jobs import sync_price_evidence_task
 from app.marketplace.registry import close_provider
 from app.workers import tasks
 from app.workers.queue import QUEUE_DEFAULT, QUEUE_HIGH, close_queue, redis_settings
-from app.workers.vision_queue import VISION_MAX_TRIES
+from app.workers.vision_queue import VISION_MAX_TRIES, vision_job_timeout
 
 log = get_logger("app.worker")
 
@@ -38,7 +38,14 @@ def _functions() -> list[Any]:
     return [
         func(tasks.analyze_listing, keep_result=0, max_tries=4, timeout=120),
         func(tasks.analyze_batch, keep_result=0, max_tries=4, timeout=300),
-        func(tasks.vision_task, keep_result=0, max_tries=VISION_MAX_TRIES, timeout=180),
+        # The timeout is past the model client's worst case for a gallery read in three requests, see
+        # ``vision_budget_seconds``: it is the task's own budget that ends a slow check, with its reason on record.
+        func(
+            tasks.vision_task,
+            keep_result=0,
+            max_tries=VISION_MAX_TRIES,
+            timeout=vision_job_timeout(get_settings()),
+        ),
         # One try: the backoff is kept on the opportunity (``ai_next_attempt_at``) and the sweep queues it again. The
         # timeout is past the model client's worst case (timeout x its retries), see ``review_job_timeout``.
         func(tasks.ai_analyze_task, keep_result=0, max_tries=1, timeout=review_job_timeout(get_settings())),

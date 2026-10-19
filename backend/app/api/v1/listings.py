@@ -26,6 +26,7 @@ from app.api.capture_pipeline import (
 from app.api.deps import DB, CurrentUser, Economics
 from app.core.cache import NS_FEED, cache
 from app.core.errors import AppError, InsufficientDataError, NotFoundError
+from app.core.logging import get_logger
 from app.core.rate_limit import RateLimit
 from app.core.serialization import jsonable
 from app.core.timing import measure_analysis
@@ -51,6 +52,7 @@ from app.schemas.opportunity import OpportunityCard, OpportunityFilters
 from app.scoring.seller import SellerProfile
 
 router = APIRouter(tags=["listings"])
+log = get_logger(__name__)
 
 
 class ListingOut(BaseModel):
@@ -233,8 +235,23 @@ def manual_to_provider(
         view_count=body.view_count,
         capture_level=capture_level,
         images_authoritative=body.images_source in ("item_json", "gallery_dom") and bool(body.image_urls),
+        observed_at=body.observed_at,
         raw={"source": origin, "images_source": body.images_source},
     )
+
+
+def _merge_into(merged: IngestResult, res: IngestResult) -> None:
+    merged.new_ids += res.new_ids
+    merged.updated_ids += res.updated_ids
+    merged.price_changes += res.price_changes
+    merged.status_changes += res.status_changes
+    merged.duplicates |= res.duplicates
+    merged.enriched_ids += res.enriched_ids
+    merged.out_of_order_ids += res.out_of_order_ids
+    merged.status_updates |= res.status_updates
+    merged.ids_by_external |= res.ids_by_external
+    merged.new_active_ids |= res.new_active_ids
+    merged.duplicates_of_active |= res.duplicates_of_active
 
 
 async def persist_observations(
@@ -245,6 +262,7 @@ async def persist_observations(
     reuse_recent: bool = False,
     extension_version: str | None = None,
     parser_version: str | None = None,
+    failures: dict[str, str] | None = None,
 ) -> tuple[IngestResult, list[Any]]:
     """Store observations (grouped by provider) and analyse every listing they touch.
 
@@ -252,7 +270,65 @@ async def persist_observations(
     analysis with its algorithm version and acquisition mode. ``reuse_recent`` (extension
     captures): unchanged listings with a recent analysis keep it, and the comparables pools are
     shared across requests (see ``app.api.capture_pipeline``).
+
+    ``failures``: pass a dict to isolate the listings the server cannot store or analyse. A batch that fails is
+    split in halves (each in its own savepoint, so nothing of the failed attempt stays) until the listing at fault
+    is alone; it is left out and named in ``failures`` (external id -> reason) while the others are stored. Without
+    it, the first error ends the request as before.
     """
+    if failures is None:
+        return await _persist_batch(
+            db, listings, mode, track, reuse_recent, extension_version, parser_version
+        )
+    return await _persist_isolating(
+        db, listings, mode, track, reuse_recent, extension_version, parser_version, failures
+    )
+
+
+async def _persist_isolating(
+    db: DB,
+    listings: list[ProviderListing],
+    mode: AcquisitionMode,
+    track: bool | None,
+    reuse_recent: bool,
+    extension_version: str | None,
+    parser_version: str | None,
+    failures: dict[str, str],
+) -> tuple[IngestResult, list[Any]]:
+    try:
+        async with db.begin_nested():
+            return await _persist_batch(
+                db, listings, mode, track, reuse_recent, extension_version, parser_version
+            )
+    except Exception as exc:
+        if len(listings) == 1:
+            log.exception("capture.listing_failed", vinted_id=listings[0].external_id)
+            failures[listings[0].external_id] = (
+                "Scheda non salvata: il server non è riuscito a elaborarla. Le altre schede sono state salvate."
+            )
+            return IngestResult(received=1), []
+        log.warning("capture.batch_split", listings=len(listings), error=type(exc).__name__)
+    half = len(listings) // 2
+    merged = IngestResult(received=len(listings))
+    outcomes: list[Any] = []
+    for part in (listings[:half], listings[half:]):
+        res, out = await _persist_isolating(
+            db, part, mode, track, reuse_recent, extension_version, parser_version, failures
+        )
+        _merge_into(merged, res)
+        outcomes += out
+    return merged, outcomes
+
+
+async def _persist_batch(
+    db: DB,
+    listings: list[ProviderListing],
+    mode: AcquisitionMode,
+    track: bool | None,
+    reuse_recent: bool,
+    extension_version: str | None,
+    parser_version: str | None,
+) -> tuple[IngestResult, list[Any]]:
     before = await inputs_before(db, listings) if reuse_recent else {}
     by_provider: dict[str, list[ProviderListing]] = {}
     for pl in listings:
@@ -267,14 +343,7 @@ async def persist_observations(
             extension_version=extension_version,
             parser_version=parser_version,
         ).ingest(items)
-        merged.new_ids += res.new_ids
-        merged.updated_ids += res.updated_ids
-        merged.price_changes += res.price_changes
-        merged.status_changes += res.status_changes
-        merged.duplicates |= res.duplicates
-        merged.enriched_ids += res.enriched_ids
-        merged.status_updates |= res.status_updates
-        merged.ids_by_external |= res.ids_by_external
+        _merge_into(merged, res)
     if reuse_recent:
         shared = await prepare_pools(db, changes_market(merged, listings))
         ids = await analysis_needed(db, merged, before)

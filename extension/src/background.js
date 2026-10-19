@@ -630,6 +630,23 @@ const HANDLERS = {
     return { queued: 1 };
   },
 
+  async "ff:gone"(msg) {
+    // The user's browser opened an item page that says it is gone: one small request, not queued (a removal read
+    // hours ago says nothing the next visit will not). Only a listing FlipFinder already knows is updated.
+    if (!/^\d{1,20}$/.test(String(msg.vid)) || !(await getKey())) return { ok: false };
+    const parser_version = String((await rawParserConfig()).version || "").slice(0, 24) || null;
+    try {
+      const observed = Number(msg.observedAt);
+      const body = { vinted_id: String(msg.vid), extension_version: VERSION, parser_version };
+      if (Number.isFinite(observed) && observed > 0) body.observed_at = new Date(observed).toISOString();
+      const res = await api("/capture/gone", { method: "POST", body, timing: { ep: "gone", n: 1 } });
+      if (res.evaluation) await cacheEvaluations([res.evaluation]);
+      return { ok: true, known: Boolean(res.known), status: res.status || null, changed: Boolean(res.changed) };
+    } catch (err) {
+      return { ok: false, status: err.status || 0 };
+    }
+  },
+
   async "ff:get-evals"(msg, sender) {
     const vids = (msg.vids || []).filter((v) => /^\d+$/.test(v)).slice(0, 300);
     const found = await cachedEvaluations(vids);

@@ -33,6 +33,7 @@ assert sum(WEIGHTS.values()) == 100
 
 MIN_PHOTOS = 4
 MIN_DESCRIPTION = 120
+MIN_COVERAGE = 60  # percent of the inspection a Strong buy needs the photos to show (see ``DecisionConfig``)
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,11 @@ class CompletenessInput:
     # True only when a photo analysis actually ran (the rule-based fallback does not count).
     photos_analysed: bool = False
     identification_confidence: int = 0
+    # The analysis read the whole gallery (False: a part was blocked by the provider), what the photos show of the
+    # item (None: not evaluated), and a label photo that exists but cannot be read.
+    photos_complete: bool = True
+    inspection_coverage: int | None = None
+    label_unreadable: bool = False
 
 
 @dataclass(frozen=True)
@@ -89,7 +95,7 @@ def compute_completeness(inp: CompletenessInput) -> Completeness:
         "description": min(1.0, inp.description_length / MIN_DESCRIPTION),
         "shipping": 1.0 if inp.shipping_known else 0.0,
         "seller": 1.0 if inp.seller_known else 0.0,
-        "photos_analysed": 1.0 if inp.photos_analysed else 0.0,
+        "photos_analysed": (1.0 if inp.photos_complete else 0.5) if inp.photos_analysed else 0.0,
         "identification": max(0.0, min(1.0, inp.identification_confidence / 100)),
     }
     score = round(sum(WEIGHTS[k] * v for k, v in parts.items()))
@@ -112,7 +118,11 @@ def compute_completeness(inp: CompletenessInput) -> Completeness:
     )
     need(
         "label_photo",
-        "Etichetta non fotografata" if inp.label_photo_seen is False else "Etichetta non verificabile",
+        "Etichetta fotografata ma non leggibile"
+        if inp.label_photo_seen is False and inp.label_unreadable
+        else "Etichetta non fotografata"
+        if inp.label_photo_seen is False
+        else "Etichetta non verificabile",
         "strong_buy",
         inp.label_photo_seen is not True,
     )
@@ -125,4 +135,18 @@ def compute_completeness(inp: CompletenessInput) -> Completeness:
     )
     need("seller", "Venditore non noto", "confidence", not inp.seller_known)
     need("photos_analysed", "Foto non analizzate dal modello visivo", "confidence", not inp.photos_analysed)
+    need(
+        "photos_partial",
+        "Una parte delle foto non è stata letta dal modello (bloccata dal fornitore)",
+        "strong_buy",
+        inp.photos_analysed and not inp.photos_complete,
+    )
+    need(
+        "photo_coverage",
+        f"Le foto mostrano poco dell'articolo (copertura {inp.inspection_coverage}%): chiedi le foto mancanti",
+        "strong_buy",
+        inp.photos_analysed
+        and inp.inspection_coverage is not None
+        and inp.inspection_coverage < MIN_COVERAGE,
+    )
     return Completeness(max(0, min(100, score)), parts, missing)

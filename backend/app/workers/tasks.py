@@ -7,14 +7,17 @@ Every task opens its own unit of work, logs failures with context (never secrets
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
 import uuid
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 from arq import Retry
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, OperationalError
 
@@ -35,10 +38,11 @@ from app.ai.service import review_opportunity, run_vision
 from app.alerts.channels.base import ChannelError
 from app.alerts.service import deliver_alert, evaluate_alerts
 from app.analytics.accuracy import fit_price_calibration
+from app.analytics.calibration import STATE_KEY as CALIBRATION_KEY
 from app.analytics.learning import recompute_all_affinities
 from app.analytics.market_stats import recompute_market_statistics
 from app.core.cache import NS_FEED, cache
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.errors import ProviderUnavailableError
 from app.core.logging import get_logger
 from app.core.redis import redis_lock
@@ -59,12 +63,20 @@ from app.marketplace.base import SearchQuery
 from app.marketplace.registry import get_provider
 from app.media.cleanup import clean_foreign_data
 from app.opportunities.pipeline import AnalysisPipeline
+from app.pricing.evidence import GATE_KEY, NEGOTIATION_KEY
 from app.tracking.service import Attempt, TrackingService, record_attempts
 from app.tracking.status import Observation
 from app.vision.analyzer import VisionDeferred
 from app.vision.cache import VisionCacheStore
+from app.vision.types import ImageAnalysis
 from app.workers.queue import backoff_seconds, enqueue
-from app.workers.vision_queue import mark_model_gave_up, queue_vision, retry_vision, vision_order
+from app.workers.vision_queue import (
+    mark_model_gave_up,
+    queue_vision,
+    retry_vision,
+    vision_budget_seconds,
+    vision_order,
+)
 
 log = get_logger(__name__)
 ANALYSIS_BATCH_HIGH = 8  # small: likely deals should surface within seconds
@@ -105,6 +117,62 @@ async def _segment_medians() -> dict[tuple[int, int], Decimal]:
 
 def _chunks(items: list[Any], size: int) -> list[list[Any]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+async def _grouped_for_pool(listing_ids: list[uuid.UUID]) -> list[str]:
+    """Listing ids sorted by (brand, category): a batch of 40 then spans one or two comparables pools instead of
+    nine (``analyze_many`` loads one pool per family), so a bulk re-analysis reads and builds far less."""
+    if not listing_ids:
+        return []
+    out: list[tuple[int, int, str]] = []
+    async with session_scope() as s:
+        for chunk in _chunks(listing_ids, 5000):
+            rows = await s.execute(
+                select(Listing.id, Listing.brand_id, Listing.category_id).where(Listing.id.in_(chunk))
+            )
+            out += [(r.brand_id or 0, r.category_id or 0, str(r.id)) for r in rows]
+    out.sort()
+    return [i for _, _, i in out]
+
+
+BULK_REANALYSIS_STATE = "bulk_reanalysis"
+BULK_REANALYSIS_EVERY = timedelta(hours=20)
+
+
+async def _calibration_signature(s: Any) -> str:
+    """What the daily re-analysis of every active opportunity is for: the fitted calibration, the evidence gate and the
+    negotiation discount (the timestamps and metrics of the fit are left out: they change with every run)."""
+    rows = (
+        await s.execute(
+            select(SystemState.key, SystemState.value).where(
+                SystemState.key.in_([CALIBRATION_KEY, GATE_KEY, NEGOTIATION_KEY])
+            )
+        )
+    ).all()
+    stable: dict[str, Any] = {}
+    for key, value in sorted(rows):
+        value = dict(value or {})
+        for volatile in ("fitted_at", "metrics", "computed_at", "updated_at", "at"):
+            value.pop(volatile, None)
+        stable[key] = value
+    return hashlib.sha256(json.dumps(stable, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def bulk_reanalysis_due(
+    last: dict[str, Any] | None, signature: str, algorithm_version: str, now: datetime
+) -> bool:
+    """Whether every active opportunity is analysed again now. Yes when the calibration, the evidence gate or the
+    algorithm changed since the last time, or the last time was a day ago (the market moves: new sales, new asks).
+    No at a restart or a deploy that changed nothing: that run would only recompute identical analyses and hold
+    the queue for minutes while the photo findings of the listing the user just opened wait."""
+    if not last or not last.get("at"):
+        return True
+    if last.get("signature") != signature or last.get("algorithm_version") != algorithm_version:
+        return True
+    try:
+        return now - datetime.fromisoformat(str(last["at"])) >= BULK_REANALYSIS_EVERY
+    except ValueError:
+        return True
 
 
 def _batch_job_id(ids: list[str]) -> str:
@@ -254,6 +322,128 @@ async def analyze_listing(
     return res["listings"].get(listing_id)
 
 
+@dataclass
+class _Batch:
+    """What one pass over a set of listings produced (several passes are merged when a batch is split)."""
+
+    pending: list[tuple[uuid.UUID, str]] = field(default_factory=list)  # (alert, channel) to deliver
+    ai_kicks: list[tuple[int, uuid.UUID]] = field(
+        default_factory=list
+    )  # (flip, opportunity) for the strong model
+    summary: dict[str, dict[str, int]] = field(default_factory=dict)
+    vision: list[Any] = field(default_factory=list)
+    failed: list[uuid.UUID] = field(default_factory=list)  # listings the analysis could not read, even alone
+    redo: list[uuid.UUID] = field(
+        default_factory=list
+    )  # listings that changed while they were being analysed
+
+    def merge(self, other: _Batch) -> _Batch:
+        self.pending += other.pending
+        self.ai_kicks += other.ai_kicks
+        self.summary |= other.summary
+        self.vision += other.vision
+        self.failed += other.failed
+        self.redo += other.redo
+        return self
+
+
+BATCH_LOCK_TIMEOUT = (
+    "20s"  # a row lock held by someone else this long ends the attempt (retried) instead of hanging
+)
+BATCH_STATEMENT_TIMEOUT = "120s"  # well inside the job's own timeout (300 s)
+DB_RETRIES = 3  # database errors are retried with a backoff this many times, then the batch is split
+
+
+async def _analyze_once(
+    ctx: dict[str, Any], ids: list[uuid.UUID], settings: Settings, started: datetime, after_vision: bool
+) -> _Batch:
+    """One transaction over ``ids``: analysis, alerts, the job records. Raises with nothing written."""
+    job_try = ctx.get("job_try", 1)
+    t0 = time.perf_counter()
+    out = _Batch()
+    async with session_scope() as s:
+        await s.execute(text(f"SET LOCAL lock_timeout = '{BATCH_LOCK_TIMEOUT}'"))
+        await s.execute(text(f"SET LOCAL statement_timeout = '{BATCH_STATEMENT_TIMEOUT}'"))
+        pipeline = AnalysisPipeline(s, settings)
+        outcomes = await pipeline.analyze_many(ids)
+        out.redo = list(pipeline.superseded)
+        catalog = await load_catalog(s) if outcomes else None
+        elapsed_ms = round((time.perf_counter() - t0) * 1000)
+        per_item_ms = round(elapsed_ms / max(1, len(outcomes)))
+        for outcome in outcomes:
+            listing = outcome.listing
+            assert listing is not None and catalog is not None
+            alerts = await evaluate_alerts(s, outcome, listing, catalog)
+            out.pending.extend(alerts)
+            r = outcome.result
+            if outcome.ai_pending and qualifies_for_strong_ai(
+                settings,
+                flip_score=r.flip.score,
+                data_quality=r.data_quality,
+                decision_verdict=r.decision.verdict.value if r.decision else None,
+                risk_adjusted_profit=r.risk_adjusted_profit,
+            ):
+                out.ai_kicks.append((r.flip.score, outcome.opportunity_id))
+            out.summary[str(listing.id)] = {
+                "flip": r.flip.score,
+                "confidence": r.confidence.score,
+                "risk": r.risk.score,
+                "alerts": len(alerts),
+            }
+        s.add_all(
+            AnalysisJob(
+                listing_id=o.listing_id,
+                job_type="analyze",
+                status=JobStatus.SUCCEEDED.value,
+                priority=ctx.get("queue", "default"),
+                attempts=job_try,
+                queued_at=started,
+                started_at=started,
+                finished_at=datetime.now(UTC),
+                duration_ms=per_item_ms,
+            )
+            for o in outcomes
+        )
+        out.vision = vision_order(outcomes, after_vision)
+    return out
+
+
+async def _analyze_isolating(
+    ctx: dict[str, Any], ids: list[uuid.UUID], settings: Settings, started: datetime, after_vision: bool
+) -> _Batch:
+    """``_analyze_once``, but a batch that raises is split in halves until the listing that cannot be analysed is
+    alone: it is recorded as failed and its neighbours are analysed (one poisoned listing used to fail all 40)."""
+    try:
+        return await _analyze_once(ctx, ids, settings, started, after_vision)
+    except Exception as exc:
+        if isinstance(exc, OperationalError | DBAPIError) and ctx.get("job_try", 1) < DB_RETRIES:
+            raise  # a database that is busy or restarting: the caller retries the whole batch with a backoff
+        if len(ids) == 1:
+            log.exception("analysis.failed", listing_id=str(ids[0]))
+            return _Batch(failed=list(ids))
+        log.warning("analysis.batch_split", listings=len(ids), error=type(exc).__name__)
+        half = len(ids) // 2
+        first = await _analyze_isolating(ctx, ids[:half], settings, started, after_vision)
+        return first.merge(await _analyze_isolating(ctx, ids[half:], settings, started, after_vision))
+
+
+async def _record_failed(ids: list[uuid.UUID], started: datetime, job_try: int, reason: str) -> None:
+    async with session_scope() as s:
+        s.add_all(
+            AnalysisJob(
+                listing_id=lid,
+                job_type="analyze",
+                status=JobStatus.FAILED.value,
+                attempts=job_try,
+                queued_at=started,
+                started_at=started,
+                finished_at=datetime.now(UTC),
+                error=reason,
+            )
+            for lid in ids
+        )
+
+
 async def analyze_batch(
     ctx: dict[str, Any], listing_ids: list[str], after_vision: bool = False
 ) -> dict[str, Any]:
@@ -262,92 +452,57 @@ async def analyze_batch(
     job_try = ctx.get("job_try", 1)
     ids = [uuid.UUID(x) for x in listing_ids]
     started = datetime.now(UTC)
-    t0 = time.perf_counter()
-    pending: list[tuple[uuid.UUID, str]] = []
-    ai_kicks: list[tuple[int, uuid.UUID]] = []  # (flip, opportunity) newly waiting for the strong model
-    summary: dict[str, dict[str, int]] = {}
     try:
-        async with session_scope() as s:
-            outcomes = await AnalysisPipeline(s, settings).analyze_many(ids)
-            catalog = await load_catalog(s) if outcomes else None
-            elapsed_ms = round((time.perf_counter() - t0) * 1000)
-            per_item_ms = round(elapsed_ms / max(1, len(outcomes)))
-            for outcome in outcomes:
-                listing = outcome.listing
-                assert listing is not None and catalog is not None
-                alerts = await evaluate_alerts(s, outcome, listing, catalog)
-                pending.extend(alerts)
-                r = outcome.result
-                if outcome.ai_pending and qualifies_for_strong_ai(
-                    settings, flip_score=r.flip.score, data_quality=r.data_quality
-                ):
-                    ai_kicks.append((r.flip.score, outcome.opportunity_id))
-                summary[str(listing.id)] = {
-                    "flip": r.flip.score,
-                    "confidence": r.confidence.score,
-                    "risk": r.risk.score,
-                    "alerts": len(alerts),
-                }
-            s.add_all(
-                AnalysisJob(
-                    listing_id=o.listing_id,
-                    job_type="analyze",
-                    status=JobStatus.SUCCEEDED.value,
-                    priority=ctx.get("queue", "default"),
-                    attempts=job_try,
-                    queued_at=started,
-                    started_at=started,
-                    finished_at=datetime.now(UTC),
-                    duration_ms=per_item_ms,
-                )
-                for o in outcomes
-            )
-            vision = vision_order(outcomes, after_vision)
+        batch = await _analyze_isolating(ctx, ids, settings, started, after_vision)
     except (OperationalError, DBAPIError) as exc:
         log.warning("analysis.db_error", listings=len(ids), attempt=job_try, error=type(exc).__name__)
         raise Retry(defer=backoff_seconds(job_try)) from exc
-    except Exception:
-        log.exception("analysis.failed", listings=len(ids))
-        async with session_scope() as s:
-            s.add_all(
-                AnalysisJob(
-                    listing_id=lid,
-                    job_type="analyze",
-                    status=JobStatus.FAILED.value,
-                    attempts=job_try,
-                    queued_at=started,
-                    started_at=started,
-                    finished_at=datetime.now(UTC),
-                    error="analysis failed (see logs)",
-                )
-                for lid in ids
-            )
-        return {"analyzed": 0, "listings": {}}
-
-    for alert_id, channel in pending:
+    except asyncio.CancelledError:
+        # The worker's own timeout (or a stop): the listings of this batch get a trace instead of silence.
+        await asyncio.shield(_record_failed(ids, started, job_try, "analysis cancelled (timeout)"))
+        raise
+    if batch.failed:
+        await _record_failed(batch.failed, started, job_try, "analysis failed (see logs)")
+    for alert_id, channel in batch.pending:
         await enqueue(
             "deliver_alert_task", str(alert_id), channel, high=True, job_id=f"deliver:{alert_id}:{channel}"
         )
+    for lid in batch.redo:
+        # Changed under the analysis (a capture, a sale): the listing is analysed again from its new state.
+        await enqueue(
+            "analyze_listing", str(lid), False, high=True, job_id=f"analyze:{lid}:{int(time.time())}"
+        )
     # Photo checks best first (risk-adjusted profit, then flip): the top few on the high queue.
-    await queue_vision(vision)
+    await queue_vision(batch.vision)
     # The strong model's review: the best new rows now (best effort, within the quota room); the minute sweep
     # (``ai_sweep_task``) picks up everything else in order, so nothing depends on this call.
-    await kick_ai_review(ai_kicks, settings)
-    if summary:
+    await kick_ai_review(batch.ai_kicks, settings)
+    if batch.summary:
         # Continuous analysis would otherwise empty the feed cache every few seconds; feed TTLs
         # (20-30 s) bound staleness, user actions still invalidate immediately.
         await cache.bump_throttled(NS_FEED, FEED_BUMP_EVERY_SECONDS)
-    return {"analyzed": len(summary), "listings": summary}
+    return {"analyzed": len(batch.summary), "listings": batch.summary}
 
 
 async def vision_task(ctx: dict[str, Any], listing_id: str) -> None:
     deferred: VisionDeferred | None = None
     async with session_scope() as s:
         try:
-            changed = await run_vision(s, uuid.UUID(listing_id))
+            # The check's own deadline is shorter than the worker's job timeout (``vision_job_timeout``): a hung provider
+            # ends here, with its reason on record and the try counted, and not as a cancellation from outside.
+            async with asyncio.timeout(vision_budget_seconds(get_settings())):
+                changed = await run_vision(s, uuid.UUID(listing_id))
         except VisionDeferred as exc:
             # The model did not read the photos. What was measured is stored (and committed below).
             changed, deferred = exc.changed, exc
+        except TimeoutError:
+            get_llm().breaker.failure()  # a provider that does not answer is a failing provider
+            log.warning("vision.timeout", listing_id=listing_id)
+            await s.rollback()  # whatever the cancelled step had half done
+            changed, deferred = (
+                False,
+                VisionDeferred("timeout", 60.0, ImageAnalysis(analyzer="heuristic"), store=False),
+            )
     retry: Retry | None = None
     if deferred is not None:
         try:
@@ -358,7 +513,12 @@ async def vision_task(ctx: dict[str, Any], listing_id: str) -> None:
             # A blocked gallery is not asked again as it is: say why, BEFORE the analysis below reads the listing.
             await mark_model_gave_up(listing_id, deferred.reason)
     if changed:
-        await enqueue("analyze_listing", listing_id, True, job_id=f"analyze:{listing_id}")
+        # The photo findings reach the verdict as fast as a likely deal does: the high queue, never behind the bulk
+        # re-analysis. The id carries the time because arq keeps the key of a job until it ends: a fixed id would drop
+        # this follow-up while an older analysis of the listing is still running, and the photos would never count.
+        await enqueue(
+            "analyze_listing", listing_id, True, high=True, job_id=f"analyze:{listing_id}:{int(time.time())}"
+        )
     if retry is not None:
         raise retry
 
@@ -692,7 +852,7 @@ async def clean_foreign_data_task(ctx: dict[str, Any]) -> dict[str, Any]:
     (at startup and daily; idempotent)."""
     async with session_scope() as s:
         report = await clean_foreign_data(s)
-    ids = [str(i) for i in report.listing_ids]
+    ids = await _grouped_for_pool([i for i in report.listing_ids])
     for chunk in _chunks(ids, ANALYSIS_BATCH_DEFAULT):
         await enqueue("analyze_batch", chunk, high=False, job_id=_batch_job_id(chunk))
     if ids:
@@ -704,18 +864,30 @@ async def clean_foreign_data_task(ctx: dict[str, Any]) -> dict[str, Any]:
 async def fit_price_calibration_task(ctx: dict[str, Any]) -> dict[str, Any]:
     """Daily retroactive accuracy check + calibration of the resale ranges, then re-analysis of
     the active opportunities so every range and score uses it."""
+    now = datetime.now(UTC)
     async with session_scope() as s:
         metrics = await fit_price_calibration(s)
-        ids = [
-            str(i)
-            for i in (
+        signature = await _calibration_signature(s)
+    last = await _get_state(BULK_REANALYSIS_STATE)
+    due = bulk_reanalysis_due(last, signature, get_settings().algorithm_version, now)
+    if due:
+        async with session_scope() as s:
+            active = (
                 await s.execute(select(Opportunity.listing_id).where(Opportunity.is_active.is_(True)))
             ).scalars()
-        ]
-    for chunk in _chunks(ids, ANALYSIS_BATCH_DEFAULT):
-        await enqueue("analyze_batch", chunk, high=False, job_id=_batch_job_id(chunk))
-    await cache.bump(NS_FEED)
-    return {k: metrics.get(k) for k in ("test_sales", "before", "after")}
+            ids = await _grouped_for_pool(list(active))
+        for chunk in _chunks(ids, ANALYSIS_BATCH_DEFAULT):
+            await enqueue("analyze_batch", chunk, high=False, job_id=_batch_job_id(chunk))
+        await _set_state(
+            BULK_REANALYSIS_STATE,
+            {
+                "signature": signature,
+                "algorithm_version": get_settings().algorithm_version,
+                "at": now.isoformat(),
+            },
+        )
+        await cache.bump(NS_FEED)
+    return {k: metrics.get(k) for k in ("test_sales", "before", "after")} | {"reanalysis": due}
 
 
 async def sync_price_evidence_full_task(ctx: dict[str, Any]) -> dict[str, Any]:

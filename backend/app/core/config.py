@@ -151,6 +151,14 @@ class Settings(BaseSettings):
     # Local OCR of labels (RapidOCR, optional dependency): free, offline, no key needed.
     ocr_enabled: bool = True
     ai_auto_analyze_min_flip_score: float = Field(default=80.0, ge=0, le=101)  # 101 = never
+    # Which rows the strong model reviews. "actionable" (default): the ones a review can still change - a buy verdict
+    # (STRONG_BUY, BUY, NEGOTIATE) at any flip score, and WATCHLIST rows at the flip threshold above DEFAULT_MIN_PROFIT;
+    # PASS and insufficient-evidence rows are not queued (the review can only lower a verdict, so it cannot change
+    # them, and the free tier's few requests are not spent on them). "all": every row at the flip threshold, whatever
+    # its verdict (the behaviour before the ingest wave).
+    ai_review_scope: Literal["actionable", "all"] = "actionable"
+    # Rows the user's browser showed this recently are reviewed before the older backlog.
+    ai_review_recent_minutes: int = Field(default=15, ge=0, le=240)
     ai_timeout_seconds: float = 90.0
     # Model routing: the cheap tier for volume, the strong one (``ai_model``) where the stakes are.
     ai_model_cheap: str = "claude-haiku-5-5"

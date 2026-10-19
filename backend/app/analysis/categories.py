@@ -131,6 +131,13 @@ GENERIC = CategoryPlugin(
 _CLOTHING_PARENTS = {"tops", "outerwear", "bottoms"}
 
 
+def category_stem(slug: str) -> str:
+    """A category slug without its plural, to compare two readings of it: "t-shirts" and "t-shirt" are one category,
+    "polo-shirts" and "shirts" are not (a prefix of a slug, as the comparison used to be, matched far too much: the
+    first segment of "t-shirts" is the letter "t")."""
+    return slug.strip().lower().replace(" ", "-").removesuffix("s")
+
+
 def plugin_for(category_slug: str | None, parent_slug: str | None = None) -> CategoryPlugin:
     """The plugin for a category slug (and its parent); the generic one when none fits."""
     for slug in (category_slug, parent_slug):

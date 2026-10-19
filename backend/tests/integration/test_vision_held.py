@@ -277,7 +277,9 @@ async def test_a_refused_gallery_is_asked_once_and_left_with_the_reason_shown(
     ctx, decr = ctx_of(1)
 
     await tasks.vision_task(ctx, str(listing_id))  # no Retry: a block comes back for the same photos
-    assert llm.asked == 1 and decr == []
+    # The whole gallery (1 request), then each half on its own (2), to save what is around a blocked photo: three
+    # requests in all, never the five that were spent on a block that always comes back.
+    assert llm.asked == 3 and decr == []
     stored = await stored_vision(listing_id)
     # Analysed by the rules: the photos do not count as read by a model.
     assert stored["analyzer"] == "heuristic"
@@ -396,7 +398,7 @@ async def test_an_anthropic_refusal_is_given_up_on_at_once_like_a_gemini_one(
     ctx, decr = ctx_of(1)
 
     await tasks.vision_task(ctx, str(listing_id))  # no Retry: not five requests for a block that comes back
-    assert len(fake.calls) == 1 and decr == []
+    assert len(fake.calls) == 3 and decr == []  # the gallery, then its two halves
     stored = await stored_vision(listing_id)
     assert stored["analyzer"] == "heuristic" and stored["model_gave_up"] == "refused"
     assert GAVE_UP_NOTES["refused"] in stored["notes"]

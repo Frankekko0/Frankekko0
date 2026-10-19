@@ -22,6 +22,7 @@ from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.db.models import Listing, Opportunity
 from app.db.session import session_scope
+from app.domain.enums import ListingStatus
 from app.identification.engine import ListingText
 from app.ingestion.catalog import load_catalog
 from app.ingestion.service import get_engine
@@ -144,7 +145,12 @@ async def _analyse(
             opp.analysis_id is None
             or has_valid_review(opp)
             or not qualifies_for_strong_ai(
-                settings, flip_score=opp.flip_score, data_quality=opp.data_quality, is_active=opp.is_active
+                settings,
+                flip_score=opp.flip_score,
+                data_quality=opp.data_quality,
+                is_active=opp.is_active,
+                decision_verdict=opp.decision_verdict,
+                risk_adjusted_profit=opp.risk_adjusted_profit,
             )
         ):
             return "skipped", None
@@ -205,6 +211,19 @@ async def run_vision(db: AsyncSession, listing_id: Any) -> bool:
     ).scalar_one_or_none()
     if listing is None or not listing.images:
         return False
+    # Work that was overtaken while it waited in the queue (a held job can wait hours for a free-tier quota): a listing
+    # that is no longer on sale, or that is a repost of one whose photos a model has read, spends no request.
+    if listing.status not in (ListingStatus.ACTIVE, ListingStatus.RESERVED):
+        log.info("vision.skipped", listing_id=str(listing.id), why="status", status=str(listing.status))
+        return False
+    if listing.duplicate_of_id is not None:
+        root = await db.get(Listing, listing.duplicate_of_id)
+        if root is not None and ((root.identification or {}).get("vision") or {}).get("analyzer") not in (
+            None,
+            "heuristic",
+        ):
+            log.info("vision.skipped", listing_id=str(listing.id), why="duplicate")
+            return False
     llm = get_llm()
     analyzer = get_image_analyzer(llm)
     catalog = await load_catalog(db)

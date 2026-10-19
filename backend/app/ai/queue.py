@@ -25,11 +25,12 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from redis.exceptions import RedisError
-from sqlalchemy import ColumnElement, and_, func, or_, select, update
+from sqlalchemy import ColumnElement, and_, case, false, func, or_, select, update
 
 from app.ai.limiter import get_limiter
 from app.ai.llm import get_llm
@@ -37,7 +38,7 @@ from app.ai.verdicts import LLM_PROVIDERS
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.core.redis import get_redis
-from app.db.models import Opportunity
+from app.db.models import Listing, Opportunity
 from app.db.session import session_scope
 from app.workers.queue import enqueue
 
@@ -73,27 +74,68 @@ def review_job_timeout(settings: Settings) -> float:
     return review_budget_seconds(settings) + JOB_GRACE_SECONDS
 
 
+# Verdicts a review can still change: it only ever lowers, so PASS and insufficient evidence are final already.
+BUY_VERDICTS = ("STRONG_BUY", "BUY", "NEGOTIATE")
+WATCHLIST = "WATCHLIST"
+
+
 def qualifies_for_strong_ai(
-    settings: Settings, *, flip_score: int, data_quality: str | None, is_active: bool = True
+    settings: Settings,
+    *,
+    flip_score: int,
+    data_quality: str | None,
+    is_active: bool = True,
+    decision_verdict: str | None = None,
+    risk_adjusted_profit: float | Decimal | None = None,
 ) -> bool:
-    """The one gate for the strong model's review: a key, an active listing, a usable estimate and a flip score at
-    the threshold. (The decision verdict is not a gate: every listing at the threshold gets its review.)"""
-    return bool(
+    """The one gate for the strong model's review: a key, an active listing, a usable estimate and a verdict the review
+    can change (``AI_REVIEW_SCOPE``): a buy verdict at any flip score, a WATCHLIST at the flip threshold with a
+    risk-adjusted profit above the floor. PASS and insufficient evidence never. Without a verdict (an old row) or with
+    the scope "all", the flip threshold alone decides."""
+    if not (
         settings.ai_api_key
         and is_active
         and data_quality != "insufficient"
-        and flip_score >= settings.ai_auto_analyze_min_flip_score
+        and settings.ai_auto_analyze_min_flip_score <= 100
+    ):
+        return False
+    at_threshold = flip_score >= settings.ai_auto_analyze_min_flip_score
+    if settings.ai_review_scope == "all" or decision_verdict is None:
+        return at_threshold
+    if decision_verdict in BUY_VERDICTS:
+        return True
+    return bool(
+        decision_verdict == WATCHLIST
+        and at_threshold
+        and risk_adjusted_profit is not None
+        and float(risk_adjusted_profit) >= float(settings.default_min_profit)
     )
 
 
 def pending_clause(settings: Settings) -> ColumnElement[bool]:
     """SQL form of the gate plus "no valid review of the current analysis": the rows that wait."""
-    return and_(
+    at_threshold = Opportunity.flip_score >= math.ceil(settings.ai_auto_analyze_min_flip_score)
+    base = and_(
         Opportunity.is_active.is_(True),
         Opportunity.analysis_id.is_not(None),
         Opportunity.data_quality != "insufficient",
-        Opportunity.flip_score >= math.ceil(settings.ai_auto_analyze_min_flip_score),
         Opportunity.ai_for_analysis_id.is_distinct_from(Opportunity.analysis_id),
+    )
+    if settings.ai_auto_analyze_min_flip_score > 100:
+        return and_(base, false())
+    if settings.ai_review_scope == "all":
+        return and_(base, at_threshold)
+    return and_(
+        base,
+        or_(
+            Opportunity.decision_verdict.in_(BUY_VERDICTS),
+            and_(
+                Opportunity.decision_verdict == WATCHLIST,
+                at_threshold,
+                Opportunity.risk_adjusted_profit >= settings.default_min_profit,
+            ),
+            and_(Opportunity.decision_verdict.is_(None), at_threshold),
+        ),
     )
 
 
@@ -240,22 +282,40 @@ async def defer_opportunity(
         log.warning("ai.exhausted", opportunity_id=str(opportunity_id), reason=reason, attempts=attempts)
 
 
+def review_order(settings: Settings, now: datetime) -> list[Any]:
+    """Who is reviewed first: what the user's browser showed in the last minutes (they are looking at it now), then
+    the verdict (a strong buy before a watchlist), then the profit that survives the risk, then the flip score."""
+    recent = Listing.last_seen_at >= now - timedelta(minutes=settings.ai_review_recent_minutes)
+    rank = case(
+        (Opportunity.decision_verdict == "STRONG_BUY", 3),
+        (Opportunity.decision_verdict.in_(BUY_VERDICTS), 2),
+        (Opportunity.decision_verdict == WATCHLIST, 1),
+        else_=0,
+    )
+    return [
+        case((recent, 1), else_=0).desc(),
+        rank.desc(),
+        Opportunity.risk_adjusted_profit.desc().nulls_last(),
+        Opportunity.flip_score.desc(),
+        Opportunity.analyzed_at.desc(),
+    ]
+
+
 async def claim_pending(settings: Settings, n: int, now: datetime | None = None) -> list[uuid.UUID]:
-    """The ``n`` best waiting opportunities (highest flip score, then risk-adjusted profit), each leased for
-    ``LEASE_SECONDS`` so that a concurrent or later sweep does not take it while its job is queued
-    (``FOR UPDATE SKIP LOCKED``: two sweeps never take the same row)."""
+    """The ``n`` best waiting opportunities (see ``review_order``), each leased for ``LEASE_SECONDS`` so that a
+    concurrent or later sweep does not take it while its job is queued (``FOR UPDATE SKIP LOCKED``: two sweeps never
+    take the same row)."""
     now = now or datetime.now(UTC)
     async with session_scope() as s:
         ids = list(
             (
                 await s.execute(
                     select(Opportunity.id)
+                    .join(Listing, Listing.id == Opportunity.listing_id)
                     .where(pending_clause(settings), due_clause(settings, now))
-                    .order_by(
-                        Opportunity.flip_score.desc(), Opportunity.risk_adjusted_profit.desc().nulls_last()
-                    )
+                    .order_by(*review_order(settings, now))
                     .limit(n)
-                    .with_for_update(skip_locked=True)
+                    .with_for_update(skip_locked=True, of=Opportunity)
                 )
             ).scalars()
         )
@@ -311,11 +371,15 @@ async def queue_stats(settings: Settings, now: datetime | None = None) -> dict[s
     }
 
 
-async def kick(candidates: list[tuple[int, uuid.UUID]], settings: Settings | None = None) -> int:
-    """Best effort, after an analysis batch: queue the review of the best new rows without waiting for the next
-    sweep. Within the quota room of this minute (shared with the sweep through ``take_pace``: together they never
-    queue more than the room), and never ahead of a better row already waiting (the sweep keeps the order). A failure
-    here only costs the minute: the sweep finds the rows anyway."""
+async def kick(
+    candidates: list[tuple[int, uuid.UUID]], settings: Settings | None = None, *, interactive: bool = False
+) -> int:
+    """Best effort, after an analysis: queue the review of the best new rows without waiting for the next sweep.
+    Within the quota room of this minute (shared with the sweep through ``take_pace``: together they never queue more
+    than the room). A batch of the workers never goes ahead of a better row already waiting (the sweep keeps the
+    order); ``interactive`` (a capture of the user's browser: they are looking at the item now) does, because the
+    backlog is older than what is on their screen. A failure here only costs the minute: the sweep finds the rows
+    anyway."""
     settings = settings or get_settings()
     llm = get_llm()
     if not candidates or not llm.enabled:
@@ -324,16 +388,18 @@ async def kick(candidates: list[tuple[int, uuid.UUID]], settings: Settings | Non
         room = await quota_room(settings, llm.model_for("strong"))
         if room.n <= 0:
             return 0
-        async with session_scope() as s:
-            best = (
-                await s.execute(
-                    select(func.max(Opportunity.flip_score)).where(
-                        pending_clause(settings),
-                        due_clause(settings, datetime.now(UTC)),
-                        Opportunity.id.not_in([oid for _, oid in candidates]),
+        best = None
+        if not interactive:
+            async with session_scope() as s:
+                best = (
+                    await s.execute(
+                        select(func.max(Opportunity.flip_score)).where(
+                            pending_clause(settings),
+                            due_clause(settings, datetime.now(UTC)),
+                            Opportunity.id.not_in([oid for _, oid in candidates]),
+                        )
                     )
-                )
-            ).scalar()
+                ).scalar()
         picks = [c for c in sorted(candidates, key=lambda c: -c[0]) if best is None or c[0] >= best][: room.n]
         if not picks:
             return 0

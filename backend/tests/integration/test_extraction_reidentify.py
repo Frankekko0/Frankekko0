@@ -17,7 +17,12 @@ pytestmark = pytest.mark.usefixtures("clean_db")
 async def test_a_listing_stored_with_an_unknown_condition_is_read_again(
     session, make_listing: Callable[..., ProviderListing]
 ) -> None:
-    pl = make_listing(condition="Ottime", title="Giacca Zara nera", brand="Zara", category="Uomo > Vestiti > Cappotti e giacche > Giacche")
+    pl = make_listing(
+        condition="Ottime",
+        title="Giacca Zara nera",
+        brand="Zara",
+        category="Uomo > Vestiti > Cappotti e giacche > Giacche",
+    )
     catalog = await load_catalog(session, force=True)
     await IngestionService(session, "test").ingest([pl])
     await session.commit()
@@ -26,7 +31,9 @@ async def test_a_listing_stored_with_an_unknown_condition_is_read_again(
     await session.commit()
 
     dry = await reidentify(session, apply=False)
-    assert dry.scanned == 1 and dry.changed == 1 and {"condition", "category_id", "gender"} <= set(dry.by_field)
+    assert (
+        dry.scanned == 1 and dry.changed == 1 and {"condition", "category_id", "gender"} <= set(dry.by_field)
+    )
     row = (await session.execute(select(Listing))).scalar_one()
     assert row.condition == "unknown"  # a dry run writes nothing
 
@@ -52,7 +59,9 @@ async def test_a_reading_that_finds_nothing_does_not_erase_what_a_photo_analysis
     await session.execute(
         update(Listing).values(
             brand_id=brand_id,
-            identification={"brand": {"value": "moncler", "source": "image", "certainty": "probable", "confidence": 0.9}},
+            identification={
+                "brand": {"value": "moncler", "source": "image", "certainty": "probable", "confidence": 0.9}
+            },
         )
     )
     await session.commit()

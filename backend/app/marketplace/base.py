@@ -74,6 +74,9 @@ class ProviderListing(BaseModel):
     capture_level: CaptureLevel = CaptureLevel.FULL
     # Photos read from the item's own gallery: they replace the stored ones, whatever their number.
     images_authoritative: bool = False
+    # When the capture was read from the page, if the source says (the browser extension does; a queued capture may
+    # reach the server hours later). None = it arrived when it was read. Ingestion clamps it to the recent past.
+    observed_at: datetime | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("currency")
@@ -149,8 +152,8 @@ class ManualListingInput(BaseModel):
     material: str | None = Field(default=None, max_length=120)
     category_path: str | None = Field(default=None, max_length=200)
     # Catalogue links of the category path as "id-slug" ("5492-polo-shirts"): the same on every domain.
-    category_codes: list[Annotated[str, StringConstraints(pattern=r"^\d{1,6}-[a-z0-9][a-z0-9-]{0,80}$")]] = Field(
-        default_factory=list, max_length=12
+    category_codes: list[Annotated[str, StringConstraints(pattern=r"^\d{1,6}-[a-z0-9][a-z0-9-]{0,80}$")]] = (
+        Field(default_factory=list, max_length=12)
     )
     published_at: datetime | None = None
     published_at_kind: Literal["exact", "relative", "reported"] | None = None
@@ -159,6 +162,9 @@ class ManualListingInput(BaseModel):
     source: Literal["manual_form", "extension_item", "bookmarklet"] = "manual_form"
     # Where the extension took the photos from; item_json / gallery_dom are the item's gallery.
     images_source: Literal["item_json", "jsonld", "gallery_dom", "meta", "card"] | None = None
+    # When the browser read the page. A capture queued while the server was unreachable is replayed hours later:
+    # the price, the status and "verified at" belong to this moment, not to the moment of arrival.
+    observed_at: datetime | None = None
 
 
 MAX_BATCH_IMPORT = 200

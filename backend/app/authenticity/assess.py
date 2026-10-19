@@ -2,9 +2,13 @@
 
 The outcome is one of four verdicts, always with a confidence and never "100% authentic":
 
-* ``probably_authentic`` - key photos (label, codes, logo...) were read clearly and are
-  consistent (at least two of them with certainty), nothing points the other way;
-* ``uncertain`` - mixed or weak evidence;
+* ``probably_authentic`` - ONLY with proof from outside the photos that the user entered (the result of an
+  authentication service or app, a verified receipt: ``AuthInput.external_proof``, recorded as declared). Photos
+  never get here: labels, codes, QR codes, holograms, certificates and logos are copied by counterfeiters, so a
+  photo that looks right is not evidence of the original;
+* ``uncertain`` - mixed or weak evidence, including photos whose key details look consistent (said in
+  ``photos_consistent``: they remove nothing from the list of what to ask the seller, and raise the probability by
+  at most ``PHOTO_POSITIVE_CAP``);
 * ``counterfeit_risk`` - concrete red flags (photos, text, price far below the market, seller
   patterns typical of fakes);
 * ``not_verifiable`` - the evidence needed is missing (key photos absent, blurry, cropped or too
@@ -26,6 +30,11 @@ from typing import Any
 
 RULES_FILE = Path(__file__).with_name("authenticity_rules.json")
 MAX_P = 0.97  # never "certainly authentic"
+# Details that look right on the photos can raise the probability of authenticity by this much at most (absolute):
+# a good fake copies the label, the code and the logo. Evidence against has no such limit.
+PHOTO_POSITIVE_CAP = 0.05
+# A proof from outside the photos (entered by the user, with their note) is worth this likelihood ratio.
+EXTERNAL_PROOF_LR = 8.0
 VERDICT_LABELS = {
     "probably_authentic": "Probabilmente autentico",
     "uncertain": "Incerto",
@@ -90,6 +99,11 @@ class AuthInput:
     findings: list[PhotoFinding] = field(default_factory=list)
     quality: list[PhotoQuality] = field(default_factory=list)
     photos_analyzed: bool = False  # a photo analysis ran (otherwise photos are "not checked")
+    # Label kinds whose absence was verified on a photo of the place where they would be (brand_label, care_label).
+    absent_labels: list[str] = field(default_factory=list)
+    # A proof from outside the photos, entered by the user (never inferred): the note they wrote. The only way to
+    # "probably authentic".
+    external_proof: str | None = None
 
 
 @dataclass
@@ -120,6 +134,9 @@ class AuthAssessment:
     missing_photos: list[str]
     seller_message: str | None
     checks: list[str]
+    # The key details looked consistent on the photos. Not a proof (see the module doc): shown as what it is.
+    photos_consistent: bool = False
+    external_proof: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -131,6 +148,8 @@ class AuthAssessment:
             "missing_photos": self.missing_photos,
             "seller_message": self.seller_message,
             "checks": self.checks,
+            "photos_consistent": self.photos_consistent,
+            "external_proof": self.external_proof,
         }
 
 
@@ -244,12 +263,12 @@ def assess(inp: AuthInput, rules: dict[str, Any] | None = None) -> AuthAssessmen
                 if f.certainty == "certain"
                 else lr["photo_consistent_probable"]
             )
-            # Consistent details add up, but only so far: a good fake can look right.
+            # Consistent details add up, but only so far: a good fake can look right. They are summed apart and enter
+            # the probability through a cap (``PHOTO_POSITIVE_CAP``) below.
             room = math.log(lr["max_positive_total"]) - positive
             w = min(math.log(ratio), max(0.0, room))
             if w > 0:
                 positive += w
-                score += w
             ev.append(
                 Evidence(
                     "+", f"{_where(f.photo)}{f.detail or KIND_LABELS.get(f.kind, f.kind)}", w, f.photo, f.box
@@ -266,11 +285,31 @@ def assess(inp: AuthInput, rules: dict[str, Any] | None = None) -> AuthAssessmen
                 )
             )
 
+    # ---- a label missing where it should be (an at-risk brand without its label is a classic fake) -----------
+    if (
+        inp.absent_labels
+        and float(r.get("counterfeit_prior", inp.brand_counterfeit_risk) or 0) >= AT_RISK_PRIOR
+    ):
+        what = ", ".join(
+            KIND_LABELS.get(k, k) for k in ("label", "care_tag") if _LABEL_OF_KIND[k] in inp.absent_labels
+        )
+        add(
+            "-",
+            f"Mancano {what} nel punto in cui dovrebbero stare: chiedi una foto (marca spesso contraffatta)",
+            lr["label_absent_at_risk_brand"],
+        )
+
+    # ---- proof from outside the photos (entered by the user, never inferred) -----------------------------------
+    if inp.external_proof:
+        add("+", f"Prova esterna indicata dall'utente: {inp.external_proof[:120]}", EXTERNAL_PROOF_LR)
+
     # ---- coverage of the key photos ---------------------------------------------------------
     key = r["key_photos"]
     missing = [k for k in key if k not in verified_kinds]
     coverage = (len(key) - len(missing)) / len(key) if key else 0.0
-    p = min(MAX_P, _sigmoid(score))
+    p_without_photos = _sigmoid(score)
+    # Photo details that look right lift the probability a little, never to a certificate: a counterfeiter copies them.
+    p = min(MAX_P, _sigmoid(score + positive), p_without_photos + PHOTO_POSITIVE_CAP)
     negatives = sum(
         1 for e in ev if e.direction == "-" and e.weight <= math.log(lr["photo_concern_probable"])
     )
@@ -298,15 +337,16 @@ def assess(inp: AuthInput, rules: dict[str, Any] | None = None) -> AuthAssessmen
         or (usable == set() and inp.quality)
     ):
         verdict = "not_verifiable"
-    elif (
-        p >= 0.85
-        and negatives == 0
-        and len(certain_kinds & set(key)) >= min(int(r.get("min_certain_key_photos", 2)), len(key))
-    ):
-        # Only details read clearly on the key photos count as proof: a good fake "looks" right.
+    elif inp.external_proof and p >= 0.85 and negatives == 0:
+        # The only way here: a proof from outside the photos that the user entered. Photos never certify.
         verdict = "probably_authentic"
     else:
         verdict = "uncertain"
+    photos_consistent = (
+        verdict == "uncertain"
+        and negatives == 0
+        and len(certain_kinds & set(key)) >= min(int(r.get("min_certain_key_photos", 2)), len(key))
+    )
     confidence = round(
         100 * (0.35 + 0.45 * coverage + 0.2 * min(1.0, len(ev) / 6)) * (1.0 if inp.photos_analyzed else 0.6)
     )
@@ -322,8 +362,16 @@ def assess(inp: AuthInput, rules: dict[str, Any] | None = None) -> AuthAssessmen
         missing_photos=missing_labels,
         seller_message=message,
         checks=list(r.get("checks", [])),
+        photos_consistent=photos_consistent,
+        external_proof=inp.external_proof[:200] if inp.external_proof else None,
     )
 
+
+AT_RISK_PRIOR = (
+    0.3  # the counterfeit prior from which a brand counts as "at risk" (same as the decision engine's)
+)
+# The kind of photo finding that stands for each kind of label whose absence can be verified.
+_LABEL_OF_KIND = {"label": "brand_label", "care_tag": "care_label"}
 
 KIND_LABELS = {
     "label": "etichetta interna con il marchio",
@@ -374,13 +422,10 @@ def photo_evidence(vision: dict[str, Any] | None) -> dict[str, Any]:
         except (TypeError, ValueError):
             continue
     if not findings:
+        # Only concerns: what the model calls "positive signals" is never scored (a good fake looks right).
         findings += [
             PhotoFinding(-1, "overall", "concern", "probable", str(c))
             for c in v.get("authenticity_concerns") or []
-        ]
-        findings += [
-            PhotoFinding(-1, "overall", "consistent", "probable", str(c))
-            for c in v.get("authenticity_positive_signals") or []
         ]
     quality = [
         PhotoQuality(int(q["photo"]), bool(q.get("usable", True)), q.get("reason"))
@@ -400,4 +445,12 @@ def photo_evidence(vision: dict[str, Any] | None) -> dict[str, Any]:
         "foreign_watermarks": int(prov.get("foreign_watermarks", 0) or 0),
         "edited_or_generated": int(prov.get("edited_or_generated", 0) or 0),
         "photos_analyzed": bool(v) and v.get("analyzer") not in (None, "heuristic"),
+        "absent_labels": sorted(
+            {
+                str(lab.get("type"))
+                for lab in v.get("labels") or []
+                if lab.get("state") == "absence_verifiable" and lab.get("photo") is not None
+            }
+            & {"brand_label", "care_label"}
+        ),
     }

@@ -1250,6 +1250,10 @@
     if (fields.published_at && !Number.isNaN(new Date(fields.published_at).getTime())) out.published_at = new Date(fields.published_at).toISOString();
     if (out.published_at && PUBLISHED_AT_KINDS.has(fields.published_at_kind)) out.published_at_kind = fields.published_at_kind;
     if (STATUSES.has(fields.status)) out.status = fields.status;
+    // When the page was read (epoch ms). A capture waits in the queue while the server is unreachable: the server
+    // stamps the price and the status with this moment, not with the one of arrival.
+    const readAt = Number(fields.observed_at);
+    if (Number.isFinite(readAt) && readAt > 0 && !Number.isNaN(new Date(readAt).getTime())) out.observed_at = new Date(readAt).toISOString();
     return out;
   }
 

@@ -20,6 +20,11 @@ from app.acquisition.identity import listing_identity
 from app.acquisition.market_cache import build_market_cache, identify_card
 from app.acquisition.service import import_links
 from app.acquisition.vinted_parser import config_json, load_config
+from app.ai.queue import kick as kick_ai_review
+from app.ai.queue import qualifies_for_strong_ai
+from app.ai.verdicts import has_valid_review
+from app.alerts.service import alerts_for_outcomes
+from app.api.capture_pipeline import prepare_pools
 from app.api.deps import DB, CaptureEconomics, CaptureUser, CurrentUser
 from app.api.v1.items import item_detail
 from app.api.v1.listings import manual_to_provider, persist_observations
@@ -30,9 +35,10 @@ from app.core.logging import get_logger
 from app.core.rate_limit import RateLimit
 from app.core.security import hash_api_key, new_api_key
 from app.db.models import ApiKey, Listing, Opportunity, SystemState
-from app.domain.enums import AcquisitionMode, CaptureLevel
+from app.domain.enums import AcquisitionMode, CaptureLevel, ListingStatus, StatusEvidence
 from app.ingestion.catalog import load_catalog
 from app.ingestion.normalizer import market_currency, market_from_url
+from app.ingestion.service import observation_time
 from app.market.model_stats import lookup_stats
 from app.media.archive import photo_state, photos_wanted, register_upload
 from app.schemas.extension import (
@@ -43,15 +49,20 @@ from app.schemas.extension import (
     CaptureCardsOut,
     CaptureItemIn,
     CaptureItemOut,
+    CardError,
     EvaluationsIn,
+    GoneIn,
     PageStatsIn,
     PageStatsOut,
     QuickEval,
     TrackIn,
 )
 from app.tracking.actions import set_tracked
+from app.tracking.service import TrackingService
+from app.tracking.status import Observation
 from app.tracking.summary import analysis_summary
-from app.workers.vision_queue import queue_vision_safely, vision_order
+from app.workers.queue import enqueue
+from app.workers.vision_queue import queue_vision_if_worth, queue_vision_safely, vision_order
 
 log = get_logger(__name__)
 router = APIRouter(tags=["extension"])
@@ -199,10 +210,71 @@ async def _touch_sync(db: DB, version: str | None, kind: str, count: int) -> Non
         state.value = value
 
 
-async def _after_capture(vision_ids: list[str]) -> None:
-    """Photo checks (best first), queued once the response is on its way. They run on the photos the
-    browser has uploaded; a listing without copies is checked when its photos arrive."""
+async def _after_capture(
+    vision_ids: list[str],
+    ai_kicks: list[tuple[int, uuid.UUID]] | None = None,
+    alerts: list[tuple[uuid.UUID, str]] | None = None,
+) -> None:
+    """Queued once the response is on its way (and the capture is committed): the photo checks (best first), which
+    run on the photos the browser has uploaded - a listing without copies is checked when its photos arrive -, the
+    strong model's review of what the user is looking at now, and the delivery of the alerts the capture raised."""
     await queue_vision_safely(vision_ids)
+    if ai_kicks:
+        await kick_ai_review(ai_kicks, interactive=True)  # best effort: the minute sweep finds the rest
+    for alert_id, channel in alerts or []:
+        try:
+            await enqueue(
+                "deliver_alert_task",
+                str(alert_id),
+                channel,
+                high=True,
+                job_id=f"deliver:{alert_id}:{channel}",
+            )
+        except Exception:  # the alert is stored and shown in the app; only the push/mail/chat copy is late
+            log.warning("capture.alert_delivery_not_queued", alert_id=str(alert_id), channel=channel)
+
+
+async def _signals(
+    db: DB, outcomes: list[Any]
+) -> tuple[list[tuple[int, uuid.UUID]], list[tuple[uuid.UUID, str]]]:
+    """What a capture sets in motion besides its own answer: the strong model's review of the new analyses that
+    qualify, and the alerts (new find, price drop, watchlist, Ultra Deal). The extension is the only source of
+    listings in this deployment: waiting for a worker pass to notice them would be hours late. The alerts are written
+    in the capture's transaction (in a savepoint: a failure there never costs the capture) and delivered after it."""
+    settings = get_settings()
+    kicks = [
+        (o.result.flip.score, o.opportunity_id)
+        for o in outcomes
+        if o.ai_pending
+        and qualifies_for_strong_ai(
+            settings,
+            flip_score=o.result.flip.score,
+            data_quality=o.result.data_quality,
+            decision_verdict=o.result.decision.verdict.value if o.result.decision else None,
+            risk_adjusted_profit=o.result.risk_adjusted_profit,
+        )
+    ]
+    alerts: list[tuple[uuid.UUID, str]] = []
+    if outcomes:
+        try:
+            async with db.begin_nested():
+                alerts = await alerts_for_outcomes(db, outcomes, await load_catalog(db))
+        except Exception:
+            log.exception("capture.alerts_failed")
+    return kicks, alerts
+
+
+async def _bump_if_changed(result: Any, outcomes: list[Any]) -> None:
+    """The dashboards' cache is emptied only when the capture changed what they show: a new listing, a new price or
+    status, an analysis written. A page seen again unchanged leaves the cached feed, stats and plan alone."""
+    if (
+        result.new_ids
+        or result.price_changes
+        or result.status_changes
+        or result.enriched_ids
+        or any(o.written for o in outcomes)
+    ):
+        await cache.bump(NS_FEED)
 
 
 def _vinted_only(items: list[Any]) -> list[Any]:
@@ -210,7 +282,8 @@ def _vinted_only(items: list[Any]) -> list[Any]:
     return [
         i
         for i in items
-        if listing_identity(str(i.url))[0] == "vinted" and market_currency(market_from_url(str(i.url))) == "EUR"
+        if listing_identity(str(i.url))[0] == "vinted"
+        and market_currency(market_from_url(str(i.url))) == "EUR"
     ]
 
 
@@ -230,9 +303,16 @@ async def capture_cards(
     candidates first) are queued after the response is sent."""
     items = _vinted_only(body.items)
     mode = AcquisitionMode.EXTENSION_CARD
-    by_id = {
-        pl.external_id: pl for pl in (manual_to_provider(i, mode.value, CaptureLevel.CARD) for i in items)
-    }
+    errors = list(body.rejected)
+    by_id: dict[str, Any] = {}
+    for item in items:
+        try:
+            pl = manual_to_provider(item, mode.value, CaptureLevel.CARD)
+        except AppError as exc:  # one card this server cannot take (e.g. another currency): the others go on
+            errors.append(CardError(vinted_id=listing_identity(str(item.url))[1], message=exc.message))
+            continue
+        by_id[pl.external_id] = pl
+    failures: dict[str, str] = {}
     result, outcomes = await persist_observations(
         db,
         list(by_id.values()),
@@ -241,15 +321,20 @@ async def capture_cards(
         reuse_recent=True,
         extension_version=body.extension_version,
         parser_version=body.parser_version,
+        failures=failures,
     )
+    errors += [CardError(vinted_id=vid, message=why) for vid, why in failures.items()]
     vision = vision_order(outcomes)
+    ai_kicks, alerts = await _signals(db, outcomes)
     await _touch_sync(db, body.extension_version, "cards", len(by_id))
     await db.commit()
-    await cache.bump(NS_FEED)
+    await _bump_if_changed(result, outcomes)
     ids = [result.ids_by_external[vid] for vid in by_id if vid in result.ids_by_external]
     evaluations = await quick_evaluations(db, user.id, econ, ids)
-    background.add_task(_after_capture, vision)
-    return CaptureCardsOut(received=len(body.items), stored=len(ids), evaluations=evaluations)
+    background.add_task(_after_capture, vision, ai_kicks, alerts)
+    return CaptureCardsOut(
+        received=len(body.items) + len(body.rejected), stored=len(ids), evaluations=evaluations, errors=errors
+    )
 
 
 @router.post(
@@ -270,24 +355,92 @@ async def capture_item(
         [pl],
         mode,
         track=body.track,
+        # The same page opened again, unchanged, within a couple of hours keeps its analysis (and its photo
+        # findings): the stored analysis is returned, nothing is computed or rewritten for it.
+        reuse_recent=True,
         extension_version=body.extension_version,
         parser_version=body.parser_version,
     )
+    ai_kicks, alerts = await _signals(db, outcomes)
     await _touch_sync(db, body.extension_version, "items", 1)
     await db.commit()
-    await cache.bump(NS_FEED)
+    await _bump_if_changed(result, outcomes)
     listing_id = result.ids_by_external[pl.external_id]
-    background.add_task(_after_capture, vision_order(outcomes))
+    background.add_task(_after_capture, vision_order(outcomes), ai_kicks, alerts)
     wanted = (await photos_wanted(db, [listing_id])).get(listing_id, [])
     evaluation = (await quick_evaluations(db, user.id, econ, [listing_id]) or [None])[0]
-    outcome = next((o for o in outcomes if o.listing_id == listing_id), None)
-    analysis = None
-    if outcome is not None:
-        opp = await db.get(Opportunity, outcome.opportunity_id)
-        listing = await db.get(Listing, listing_id)
-        if opp is not None and listing is not None:
-            analysis = analysis_summary(opp, listing)
-    return CaptureItemOut(evaluation=evaluation, analysis=analysis, photos_wanted=wanted)
+    opp = (
+        await db.execute(select(Opportunity).where(Opportunity.listing_id == listing_id))
+    ).scalar_one_or_none()
+    listing = await db.get(Listing, listing_id)
+    analysis = analysis_summary(opp, listing) if opp is not None and listing is not None else None
+    return CaptureItemOut(
+        evaluation=evaluation,
+        analysis=analysis,
+        photos_wanted=wanted,
+        review_pending=bool(opp is not None and _review_pending(opp)),
+    )
+
+
+def _review_pending(opp: Opportunity) -> bool:
+    """The strong model has not yet given its second opinion on the analysis the user is looking at."""
+    return bool(
+        opp.is_active
+        and not has_valid_review(opp)
+        and qualifies_for_strong_ai(
+            get_settings(),
+            flip_score=opp.flip_score,
+            data_quality=opp.data_quality,
+            decision_verdict=opp.decision_verdict,
+            risk_adjusted_profit=opp.risk_adjusted_profit,
+        )
+    )
+
+
+@router.post("/capture/gone", response_model=dict[str, Any], dependencies=[Depends(item_limit)])
+async def capture_gone(
+    body: GoneIn, user: CaptureUser, econ: CaptureEconomics, db: DB, background: BackgroundTasks
+) -> dict[str, Any]:
+    """The user's browser opened a listing page that says the item is gone ("questo articolo non è più
+    disponibile"). Only a listing already known is updated: it becomes ``removed`` (no sale is inferred), its
+    opportunity stops being shown as active, the move is recorded in its history and the dashboards are refreshed.
+    The page was read by the user's browser; nothing is sent to Vinted. An item FlipFinder has never seen is left
+    alone (``known: false``)."""
+    listing = (
+        await db.execute(
+            select(Listing).where(Listing.provider == "vinted", Listing.external_id == body.vinted_id)
+        )
+    ).scalar_one_or_none()
+    if listing is None:
+        return {"known": False, "vinted_id": body.vinted_id}
+    now = datetime.now(UTC)
+    seen = observation_time(body.observed_at, now)
+    if listing.last_seen_at is not None and seen < listing.last_seen_at:
+        # Read before a later capture of the same item (it was on sale again, or was seen after): not applied.
+        return {"known": True, "vinted_id": body.vinted_id, "status": listing.status, "changed": False}
+    updates = await TrackingService(db).observe(
+        {
+            listing.id: Observation(
+                seen, StatusEvidence.NOT_FOUND, ListingStatus.REMOVED, note="Pagina: non disponibile."
+            )
+        },
+        AcquisitionMode.EXTENSION_ITEM,
+    )
+    update = updates[listing.id]
+    if update.changed:
+        await prepare_pools(db, True)  # the market lost an ask: the shared comparables pools are dropped
+    await _touch_sync(db, body.extension_version, "items", 1)
+    await db.commit()
+    if update.changed:
+        await cache.bump(NS_FEED)
+    evaluation = (await quick_evaluations(db, user.id, econ, [listing.id]) or [None])[0]
+    return {
+        "known": True,
+        "vinted_id": body.vinted_id,
+        "status": update.status.value,
+        "changed": update.changed,
+        "evaluation": evaluation.model_dump(mode="json") if evaluation else None,
+    }
 
 
 @router.put(
@@ -330,7 +483,7 @@ async def upload_photo(
         raise InvalidPhotoError(res.error or None)
     await db.commit()
     if res.remaining == 0 and res.listing_id is not None:
-        background.add_task(queue_vision_safely, [str(res.listing_id)])
+        background.add_task(queue_vision_if_worth, [str(res.listing_id)])
     return {"stored": True, "remaining": res.remaining, "sha256": res.sha256}
 
 
@@ -351,7 +504,7 @@ async def photos_complete(
         raise NotFoundError("Annuncio non trovato.")
     listing_id, have, total = state
     if have:
-        background.add_task(queue_vision_safely, [str(listing_id)])
+        background.add_task(queue_vision_if_worth, [str(listing_id)])
     return {"photos": have, "of": total, "queued": bool(have)}
 
 

@@ -17,6 +17,7 @@ from typing import Any
 
 from rapidfuzz import fuzz
 
+from app.analysis.categories import category_stem
 from app.analysis.condition import ConditionReport
 from app.analysis.defects import floor_for_severity
 from app.analysis.labels import LabelReport, materials_in
@@ -193,7 +194,7 @@ def check_title_photos(i: ConsistencyInput) -> Check:
         return _no("title_photos", label, "foto non analizzate dal modello visivo")
     issues: list[str] = []
     seen_cat = _vision_text(i.vision, "category")
-    if seen_cat and i.declared_category and fold(i.declared_category).split("-")[0] not in fold(seen_cat):
+    if seen_cat and i.declared_category and category_stem(i.declared_category) != category_stem(seen_cat):
         parent = fold(i.declared_parent_category or "")
         if not parent or parent not in fold(seen_cat):
             issues.append(f"le foto sembrano mostrare «{seen_cat}», l'annuncio è «{i.declared_category}»")

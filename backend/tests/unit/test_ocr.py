@@ -173,3 +173,69 @@ def test_the_real_engine_reads_a_rendered_label(tmp_path: Path) -> None:
     assert facts_.composition == {"cotton": 67, "polyester": 33}
     assert facts_.codes.get("rn") == "41381" and facts_.country == "Peru"
     assert "Ralph Lauren" in facts_.brands
+
+
+# ------------------------------------------------------------------ V08: no false facts from stray text
+@pytest.mark.parametrize(
+    "lines",
+    [
+        ["ADIDAS", "Originals TM"],  # the trademark sign is not a size M
+        ["SPORTS"],  # nor is the word
+        ["MACHINE WASH COLD T30"],  # nor a washing temperature a size 30
+        ["WASH AT 30 C", "100% POLYESTER"],
+        ["EUR 129,00", "5 05123 456789 1"],  # a hang tag: a price and a barcode
+        ["EU 42", "US 8", "UK 6"],  # sizes of other systems, with no size word
+        ["M"],  # a lone letter beside no label text
+        ["38"],
+        ["W32 L34"],
+    ],
+)
+def test_stray_text_is_not_a_size(lines: list[str]) -> None:
+    assert parse_ocr([(0, [line(t) for t in lines])]).size is None
+
+
+def test_a_size_on_a_line_of_its_own_counts_beside_other_label_text() -> None:
+    f = parse_ocr([(0, [line("M"), line("RN 41381"), line("100% COTTON")])])
+    assert f.size == "M" and f.codes == {"rn": "41381"}
+    assert parse_ocr([(0, [line("TG. 46")])]).size == "46"
+    assert parse_ocr([(0, [line("TAILLE 38"), line("T38")])]).size == "38"
+
+
+def test_the_country_is_read_line_by_line_never_across_two_lines() -> None:
+    assert parse_ocr([(0, [line("MADE IN ITALY"), line("RN 12345")])]).country == "Italy"
+    assert parse_ocr([(0, [line("MADE IN ROMANIA"), line("WASH 30")])]).country == "Romania"
+    assert parse_ocr([(0, [line("MADEINPERU"), line("RN 1234")])]).country == "Peru"
+    assert parse_ocr([(0, [line("MADE IN"), line("VIETNAM")])]).country == "Vietnam"  # the OCR split the line
+    assert parse_ocr([(0, [line("MADE IN"), line("WASH 30 C")])]).country is None
+
+
+def test_a_brand_is_a_label_only_beside_label_text_and_never_from_a_web_address() -> None:
+    assert parse_ocr([(0, [line("SHOP AT NIKE.COM")])]).brands == []
+    assert parse_ocr([(0, [line("www.nike.com")])]).logo_text == []
+    logo = parse_ocr([(0, [line("NIKE")])])
+    assert logo.brands == [] and logo.logo_text == ["Nike"]  # a logo or a bag, not the neck label
+    label = parse_ocr([(2, [line("NIKE"), line("SIZE M"), line("RN 12345")])])
+    assert label.brands == ["Nike"] and label.logo_text == [] and label.brand_photo == 2
+    assert parse_ocr([(0, [line("PUMAS DE LA UNAM")])]).brands == []  # whole words, not a piece of one
+
+
+def test_each_fact_keeps_the_confidence_of_the_line_it_came_from() -> None:
+    f = parse_ocr([(0, [line("SIZE M", 0.93), line("MADE IN ITALY", 0.71), line("100% COTTON", 0.88)])])
+    assert f.confidence == {"composition": 0.88, "country": 0.71, "size": 0.93}
+
+
+def test_a_composition_in_parts_is_not_added_up() -> None:
+    from app.analysis.labels import composition_parts, parse_composition
+
+    text = "SHELL: 100% COTTON LINING: 100% VISCOSE"
+    assert parse_composition(text) == {"cotton": 100}  # the item's own fabric, not cotton 100 + viscose 100
+    assert composition_parts(text) == [{"cotton": 100}, {"viscose": 100}]
+    outer = "OUTER 100% NYLON FILL 90% DOWN 10% FEATHER"
+    assert parse_composition(outer) == {"polyamide": 100}
+    assert parse_composition("67% cotone 33% poliestere") == {
+        "cotton": 67,
+        "polyester": 33,
+    }  # one part: as before
+    assert parse_ocr([(0, [line("SHELL: 100% COTTON"), line("LINING: 100% VISCOSE")])]).composition == {
+        "cotton": 100
+    }

@@ -16,6 +16,9 @@ class VisualFinding(BaseModel):
     certainty: Certainty = Certainty.PROBABLE
     confidence: float = Field(default=0.5, ge=0, le=1)
     evidence: str | None = None
+    # True when a second, independent reading (the local OCR, or a label the model transcribed) says the same:
+    # False when the two disagree; None when there was nothing to compare with.
+    corroborated: bool | None = None
 
 
 DEFECT_KINDS = (
@@ -100,6 +103,9 @@ class LabelObservation(BaseModel):
     text: str | None = None  # what was read, as read
     box: list[float] | None = None
     certainty: Certainty = Certainty.PROBABLE
+    # Where the claim comes from: "model" (read by the model, nothing to compare with), "model+ocr" (the local OCR read
+    # the same photo and agrees) or "ocr" (read by the OCR alone). A state the checks could not back is downgraded.
+    source: str | None = None
 
 
 PhotoRoleName = Literal[
@@ -221,3 +227,15 @@ class ImageAnalysis(BaseModel):
     # Set when the model gave up on this gallery (it blocked it, or the answer never fit): the listing stays on
     # the rules' analysis, and is not asked again, until its photos change.
     model_gave_up: str | None = None
+    # What the validation of the model's answer found (``app.vision.validate``): ``None`` on an analysis stored before
+    # the validation existed (taken as it is, as before). ``complete`` is False when a part of the gallery was not
+    # read (a photo the provider blocked): such an analysis never opens the Strong-buy gates.
+    validation: dict[str, Any] | None = None
+    # Every repair or drop made to the model's answer, in words (bounded), so that nothing is lost silently.
+    parse_issues: list[str] = Field(default_factory=list)
+    # A text in the photos or in the model's answer addresses the reader (an order): the gallery's claims are capped.
+    injection_suspected: bool = False
+    # Photos (0-based) the model was not asked to read, because the provider blocked them: named, never guessed at.
+    excluded_photos: list[int] = Field(default_factory=list)
+    # The provider blocked the gallery as a whole on an earlier try: it is then read in halves, not paid for whole again.
+    gallery_refused: bool = False

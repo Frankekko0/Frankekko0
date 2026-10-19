@@ -20,6 +20,10 @@ class ConfidenceInput:
     condition_known: bool
     seller_known: bool
     demand_observations: int
+    # What the photo analysis could see of the item (None: not evaluated). Thin coverage or poor files lower the
+    # confidence of everything that rests on «no visible defect».
+    inspection_coverage: int | None = None
+    photo_quality: int | None = None
 
 
 @dataclass(frozen=True)
@@ -49,4 +53,10 @@ def compute_confidence(inp: ConfidenceInput) -> ConfidenceResult:
         + 0.15 * components["completeness"]
         + 0.15 * components["demand_data"]
     )
+    if inp.inspection_coverage is not None:
+        quality = inp.photo_quality if inp.photo_quality is not None else 60
+        seen = 0.7 * inp.inspection_coverage / 100 + 0.3 * quality / 100
+        components["photo_view"] = seen
+        # An unseen part is a risk nobody priced: the confidence follows what was seen.
+        score *= 0.6 + 0.4 * seen
     return ConfidenceResult(max(0, min(100, round(score))), {k: round(v, 3) for k, v in components.items()})

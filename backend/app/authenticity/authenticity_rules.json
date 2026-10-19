@@ -1,6 +1,6 @@
 {
   "about": "Regole di autenticità aggiornabili senza toccare il codice. key_photos: foto senza le quali l'esito è 'non verificabile'. checks: cosa controllare (mostrato all'utente e usato nell'analisi delle foto). likelihood_ratios: peso di ogni prova (>1 a favore, <1 contro). counterfeit_prior per brand sostituisce il rischio del catalogo.",
-  "version": "2026.10.7-1",
+  "version": "2026.10.7-2",
   "likelihood_ratios": {
     "price_far_below": 0.35,
     "price_below": 0.75,
@@ -16,7 +16,8 @@
     "photo_concern_probable": 0.55,
     "photo_consistent_certain": 1.8,
     "photo_consistent_probable": 1.25,
-    "max_positive_total": 4.0
+    "max_positive_total": 4.0,
+    "label_absent_at_risk_brand": 0.45
   },
   "default": {
     "key_photos": [

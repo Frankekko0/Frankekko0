@@ -64,12 +64,16 @@ RN_CA = re.compile(r"\b(RN|CA)\s?(\d{4,7})\b", re.IGNORECASE)
 BARCODE = re.compile(r"\b(\d{12,13})\b")
 
 
-def parse_composition(text: str | None) -> dict[str, int]:
-    """``{"cotton": 67, "polyester": 33}`` from "67% cotone 33% poliestere" (any of the languages).
+# Words that start one part of a composition ("SHELL 100% cotton, LINING 100% viscose").
+_PARTS = re.compile(
+    r"\b(?:shell|outer|outside|main|body|fabric|exterior|esterno|principale|tessuto|fill|filling|padding|"
+    r"imbottitura|lining|fodera|doublure|futter|trim|contrast|rib)\b"
+)
 
-    Labels write the percentage before the fibre ("67% cotton") or after it ("cotton 67%"); when a
-    text could be read both ways, the reading whose shares add up closest to 100 is the right one."""
-    folded = fold(text or "").replace("ß", "ss")
+
+def _reading(folded: str) -> dict[str, int]:
+    """The fibres of one text: the percentage before the fibre ("67% cotton") or after it ("cotton 67%"); when a text
+    could be read both ways, the reading whose shares add up closest to 100 is the right one."""
     readings: list[dict[str, int]] = []
     for rx, order in ((_PCT_BEFORE, (0, 1)), (_PCT_AFTER, (1, 0))):
         out: dict[str, int] = {}
@@ -83,6 +87,27 @@ def parse_composition(text: str | None) -> dict[str, int]:
     if not readings:
         return {}
     return min(readings, key=lambda r: abs(sum(r.values()) - 100))
+
+
+def composition_parts(text: str | None) -> list[dict[str, int]]:
+    """The parts of a composition that lists several ("shell", "lining", "fill"), each as its own fibres; one part when
+    the text has no parts. Shares of different parts are never added up: 100% cotton + 100% viscose is not 200%."""
+    folded = fold(text or "").replace("ß", "ss")
+    cuts = [m.start() for m in _PARTS.finditer(folded)]
+    if len(cuts) >= 2:
+        segments = [folded[a:b] for a, b in zip(cuts, [*cuts[1:], len(folded)], strict=True)]
+        parts = [r for seg in segments if (r := _reading(seg))]
+        if len(parts) >= 2 and all(90 <= sum(r.values()) <= 110 for r in parts):
+            return parts
+    whole = _reading(folded)
+    return [whole] if whole else []
+
+
+def parse_composition(text: str | None) -> dict[str, int]:
+    """``{"cotton": 67, "polyester": 33}`` from "67% cotone 33% poliestere" (any of the languages). For a text with
+    several parts (shell, lining...) the first one: the fabric of the item itself."""
+    parts = composition_parts(text)
+    return parts[0] if parts else {}
 
 
 def materials_in(text: str | None) -> list[str]:
@@ -124,6 +149,8 @@ class LabelReport:
     codes: dict[str, str] = field(default_factory=dict)  # rn / ca / barcode / sku
     brand_text: str | None = None
     unread: list[str] = field(default_factory=list)  # label kinds worth asking a photo of
+    # Where the two readings (the model's and the local OCR) say different things, in words.
+    notes: list[str] = field(default_factory=list)
 
     def state_of(self, label_type: str) -> str | None:
         return next((s.state for s in self.states if s.type == label_type), None)
@@ -137,6 +164,7 @@ class LabelReport:
             "codes": self.codes,
             "brand_text": self.brand_text,
             "unread": self.unread,
+            "notes": self.notes,
         }
 
 
@@ -163,24 +191,31 @@ def build_label_report(vision: dict[str, Any] | None, plugin: CategoryPlugin) ->
         if cur is None or STATE_ORDER[st.state] < STATE_ORDER[cur.state]:
             best[st.type] = st
 
+    notes: list[str] = []
     if analysed:
+        explicit: set[str] = set()
         for lab in v.get("labels") or []:
             if lab.get("type") in plugin.label_types or lab.get("type") in ("paper_tag", "proof_of_purchase"):
+                explicit.add(lab["type"])
                 offer(
                     LabelState(
                         lab["type"], lab["state"], lab.get("photo"), lab.get("text"), lab.get("certainty")
                     )
                 )
-        # Facts the analysis read are labels too, even when it did not list them as such.
-        size, c1 = _finding_text(v, "size_label")
-        if size:
-            offer(LabelState("size_label", "present_readable", None, size, c1))
-        comp, c2 = _finding_text(v, "composition")
-        if comp:
-            offer(LabelState("composition", "present_readable", None, comp, c2))
-        code, c3 = _finding_text(v, "product_code")
-        if code:
-            offer(LabelState("sku_code", "present_readable", None, code, c3))
+        # A fact the analysis read is a label too when it did not list that label at all. When it did (even as "not
+        # visible" or "unreadable"), the explicit state is the evidence and a bare reading never outranks it.
+        for key, ltype in (
+            ("size_label", "size_label"),
+            ("composition", "composition"),
+            ("product_code", "sku_code"),
+        ):
+            text, certainty = _finding_text(v, key)
+            if text and ltype not in explicit:
+                offer(LabelState(ltype, "present_readable", None, text, certainty))
+        # Two independent readings of the size: where they differ, both are shown and neither is preferred.
+        mine, _ = _finding_text(v, "size_label")
+        if mine and ocr.get("size") and fold(mine) != fold(str(ocr["size"])):
+            notes.append(f"Taglia letta in due modi: il modello «{mine}», l'OCR «{ocr['size']}».")
     # What the local OCR read: always only "probable" (it makes mistakes), and available without a model.
     if ocr.get("size"):
         offer(LabelState("size_label", "present_readable", ocr.get("size_photo"), ocr["size"], "probable"))
@@ -208,6 +243,8 @@ def build_label_report(vision: dict[str, Any] | None, plugin: CategoryPlugin) ->
             )
         )
     brand, _ = _finding_text(v, "brand") if analysed else (None, None)
+    if brand and ocr.get("brands") and fold(brand) not in {fold(b) for b in ocr["brands"]}:
+        notes.append(f"Marchio letto in due modi: il modello «{brand}», l'OCR «{ocr['brands'][0]}».")
     brand = brand or (ocr["brands"][0] if ocr.get("brands") else None)
 
     missing_state = "not_visible" if analysed else "insufficient_information"
@@ -242,4 +279,5 @@ def build_label_report(vision: dict[str, Any] | None, plugin: CategoryPlugin) ->
         codes=codes,
         brand_text=brand,
         unread=unread,
+        notes=notes,
     )

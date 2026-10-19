@@ -173,9 +173,40 @@ def test_new_with_tags_needs_the_tag_in_a_photo() -> None:
     assert any(c["code"] == "declared_tags_not_shown" for c in no_tag.contradictions)
     with_tag = vision(
         photo_roles=FULL_SET,
-        labels=[LabelObservation(type="paper_tag", state="present_readable", photo=4, text="NWT")],
+        labels=[
+            LabelObservation(
+                type="paper_tag",
+                state="present_readable",
+                photo=4,
+                text="ZARA 29,90 EUR 4421/301",
+                certainty="certain",
+            )
+        ],
     )
     assert build_condition_report(with_tag, "new_with_tags", CLOTHING, 6).condition_class == "new_with_tags"
+    # A claim written on the photo, or a reading nobody confirmed, is not a hang tag.
+    claim = vision(
+        photo_roles=FULL_SET,
+        labels=[
+            LabelObservation(
+                type="paper_tag", state="present_readable", photo=4, text="NEW WITH TAGS", certainty="certain"
+            )
+        ],
+    )
+    assert build_condition_report(claim, "good", CLOTHING, 6).condition_class != "new_with_tags"
+    unsure = vision(
+        photo_roles=FULL_SET,
+        labels=[
+            LabelObservation(
+                type="paper_tag",
+                state="present_readable",
+                photo=4,
+                text="ZARA 29,90 EUR",
+                certainty="probable",
+            )
+        ],
+    )
+    assert build_condition_report(unsure, "good", CLOTHING, 6).condition_class != "new_with_tags"
     assert (
         build_condition_report(clean, "new_without_tags", CLOTHING, 6).condition_class
         == "new_without_tags_unverifiable"

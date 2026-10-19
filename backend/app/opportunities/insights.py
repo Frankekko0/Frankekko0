@@ -238,8 +238,15 @@ def condition_check(inp: InsightInput) -> dict[str, Any]:
 def effective_condition(
     declared: str, vision: dict[str, Any] | None, declared_defect_severity: str | None = None
 ) -> str:
-    """The worst of the declared condition, what the photos show (certain/probable evidence) and what the
-    seller's own description admits (a hole, a stain: see ``floor_for_severity``). Only ever lowers."""
+    """The worst of the declared condition, what the photos show and what the seller's own description admits (a hole,
+    a stain: see ``floor_for_severity``). Only ever lowers.
+
+    What the photos show is one model, the dossier's (``app.analysis.condition.class_by_defects``): the accumulated
+    score of the certain and probable defects with the ceiling of the worst single one, so a price is never set on a
+    better condition than the dossier reports. Fair or poor price as "satisfactory", good as "good". The model's own
+    estimate (a value on the marketplace's scale) can lower it further when it is certain or probable. A potential
+    defect (may be a shadow or a fold) lowers nothing."""
+    from app.analysis.condition import class_by_defects
     from app.analysis.defects import floor_for_severity
     from app.ingestion.normalizer import normalize_condition
 
@@ -257,12 +264,12 @@ def effective_condition(
     est = vision.get("condition_estimate") or {}
     if est.get("certainty") in ("certain", "probable") and est.get("value"):
         seen = normalize_condition(str(est["value"]))
-    severe = [d for d in vision.get("defects", []) if d.get("certainty") in ("certain", "probable")]
     if seen in rank and rank[seen] > worst:
         worst = rank[seen]
-    if any(d.get("severity") == "severe" for d in severe):
+    by_defects = class_by_defects(vision)
+    if by_defects in ("fair", "poor"):
         worst = max(worst, rank["satisfactory"])
-    elif any(d.get("severity") == "moderate" for d in severe):
+    elif by_defects == "good":
         worst = max(worst, rank["good"])
     return CONDITION_ORDER[worst]
 

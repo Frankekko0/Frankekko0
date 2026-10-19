@@ -131,7 +131,7 @@ async def test_a_bad_answer_is_not_cached_not_done_and_asked_again(
     model_with(monkeypatch, fake)
 
     first = await run(listing_id)
-    assert isinstance(first, VisionDeferred) and first.reason == "no_answer" and first.asked
+    assert isinstance(first, VisionDeferred) and first.reason == "bad_answer" and first.asked
     local = await stored_vision(listing_id)
     # The local measures are kept (hashes, quality) but are not a photo analysis: still "not checked".
     assert local["analyzer"] == "heuristic" and local["labels"] == []
@@ -147,7 +147,7 @@ async def test_a_bad_answer_is_not_cached_not_done_and_asked_again(
     assert (await VisionCacheStore().stats())["entries"] == 1
 
     third = await run(listing_id)  # a model analysis of the same photos is served from the cache
-    assert third is True and len(fake.calls) == 2
+    assert third is False and len(fake.calls) == 2  # ... and a cache read changes nothing, so queues nothing
 
 
 async def test_a_cap_holds_the_call_back_without_asking_and_without_using_a_try(

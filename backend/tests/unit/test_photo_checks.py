@@ -64,6 +64,7 @@ class FakeLLM:
         content: list[dict[str, Any]],
         schema: dict[str, Any],
         purpose: str,
+        max_tokens: int = 16000,
         raise_on_defer: bool = False,
         report_unusable: bool = False,
     ) -> dict[str, Any]:
@@ -76,10 +77,12 @@ def test_ai_findings_keep_photo_number_and_highlighted_detail() -> None:
     pattern().save(sharp, "JPEG")
     blurry = io.BytesIO()
     pattern(blur=3).save(blurry, "JPEG")
+    other = io.BytesIO()
+    pattern(seed=2).save(other, "JPEG")  # an exact copy of photo 1 would not be sent twice
     uploaded = [
         photo(0, sharp.getvalue()),
         photo(1, blurry.getvalue()),
-        photo(2, sharp.getvalue()),
+        photo(2, other.getvalue()),
     ]
     llm = FakeLLM(
         {
@@ -93,8 +96,9 @@ def test_ai_findings_keep_photo_number_and_highlighted_detail() -> None:
             "color": None,
             "condition_estimate": None,
             "defects": [],
+            "labels": [],
+            "photo_roles": [{"photo": 1, "role": "front"}, {"photo": 3, "role": "label"}],
             "authenticity_concerns": [],
-            "authenticity_positive_signals": [],
             "has_label_photo": True,
             "photo_findings": [
                 {

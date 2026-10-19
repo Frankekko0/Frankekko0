@@ -80,10 +80,20 @@ def test_a_cut_off_answer_is_asked_once_more_not_five_times() -> None:
 
 
 def test_the_other_failures_keep_their_tries() -> None:
-    for reason in ("api_error", "connection", "bad_answer", "no_answer"):
+    for reason in ("api_error", "connection"):
         assert not gives_up(deferred(reason), VISION_MAX_TRIES - 1)
         assert gives_up(deferred(reason), VISION_MAX_TRIES)
     assert not gives_up(deferred("rpm"), VISION_MAX_TRIES)  # a cap never uses a try
+
+
+def test_an_answer_that_is_no_analysis_is_asked_once_more_not_five_times() -> None:
+    """V01/V09: each try spends a request of the day's quota; an empty or partial answer is not worth five."""
+    from app.vision.analyzer import MAX_BAD_ANSWER_TRIES
+
+    assert MAX_BAD_ANSWER_TRIES == 2 < VISION_MAX_TRIES
+    for reason in ("bad_answer", "no_answer"):
+        assert not gives_up(deferred(reason), 1)
+        assert gives_up(deferred(reason), 2)
 
 
 async def test_retry_reports_that_it_gave_up_and_does_not_raise() -> None:

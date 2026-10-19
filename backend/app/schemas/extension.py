@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.marketplace.base import ManualListingInput
 from app.schemas.common import Money, Ratio, Schema
@@ -73,18 +74,62 @@ class QuickEval(Schema):
     analyzed_at: datetime | None
 
 
+class CardError(BaseModel):
+    """A card of a capture that was not stored, and why (the others of the same request were)."""
+
+    vinted_id: str | None = None
+    message: str
+
+
 class CaptureCardsIn(BaseModel):
     page_type: PageType = "catalog"
     page_url: str = Field(default="", max_length=2000)
     items: list[ManualListingInput] = Field(min_length=1, max_length=100)
     extension_version: str | None = Field(default=None, max_length=20)
     parser_version: str | None = Field(default=None, max_length=24)
+    # Cards that did not pass validation (filled by the validator below, never read from the request).
+    rejected: list[CardError] = Field(default_factory=list, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _one_bad_card_is_not_the_page(cls, data: object) -> object:
+        """A card that does not validate (a price of zero, a title that is too short...) is left out and named in the
+        answer; the other cards of the request are stored. Only when no card is valid does the request fail."""
+        if not isinstance(data, dict) or not isinstance(data.get("items"), list) or len(data["items"]) < 2:
+            return data
+        good: list[object] = []
+        rejected: list[dict[str, str | None]] = []
+        for raw in data["items"]:
+            try:
+                ManualListingInput.model_validate(raw)
+            except ValidationError as exc:
+                first = exc.errors()[0]
+                where = ".".join(str(p) for p in first.get("loc", ()))
+                rejected.append(
+                    {
+                        "vinted_id": _vinted_id(raw),
+                        "message": f"Scheda non valida ({where}): {first['msg']}"[:300],
+                    }
+                )
+            else:
+                good.append(raw)
+        if not good or not rejected:
+            return data
+        return {**data, "items": good, "rejected": rejected}
+
+
+def _vinted_id(raw: object) -> str | None:
+    url = raw.get("url") if isinstance(raw, dict) else None
+    found = re.search(r"/items/(\d{1,20})", url) if isinstance(url, str) else None
+    return found.group(1) if found else None
 
 
 class CaptureCardsOut(BaseModel):
     received: int
     stored: int
     evaluations: list[QuickEval]
+    # Cards left out (invalid, or the server could not process them): the rest of the request was stored.
+    errors: list[CardError] = []
 
 
 class CaptureItemIn(BaseModel):
@@ -103,6 +148,19 @@ class CaptureItemOut(BaseModel):
     # Photos of this item the server has no copy of yet (``image_key``, ``position``, ``url``): the
     # extension uploads the ones its page has loaded. The server never downloads from Vinted.
     photos_wanted: list[dict[str, object]] = []
+    # True while the strong model's second opinion on this item is still to come: the verdict shown is the rules'
+    # (the model can only lower it), so it is provisional until the review lands.
+    review_pending: bool = False
+
+
+class GoneIn(BaseModel):
+    """The user's browser opened a listing page that says the item is no longer there."""
+
+    vinted_id: str = Field(pattern=r"^\d{1,20}$")
+    # When the page was read (the extension queues what it cannot send; the server clamps it to the last 48 hours).
+    observed_at: datetime | None = None
+    extension_version: str | None = Field(default=None, max_length=20)
+    parser_version: str | None = Field(default=None, max_length=24)
 
 
 class TrackIn(BaseModel):

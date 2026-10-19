@@ -73,6 +73,8 @@ from app.vision.types import ImageAnalysis
 SHORT_ALIAS_LEN = 3
 # Below this a brand is a guess: it is shown, it lowers the confidence, and it filters nothing.
 FIRM_BRAND = 0.8
+# A brand read in the photos is adopted only with a label or the OCR confirming it, and when probable from this confidence.
+IMAGE_BRAND_MIN = 0.7
 SUB_LINES = {
     "polo ralph lauren": "Polo Ralph Lauren",
     "polo by ralph lauren": "Polo Ralph Lauren",
@@ -618,12 +620,20 @@ class IdentificationEngine:
                 self._misspelled(res, *fz)
             elif vision and vision.brand and (vb := self._match_brand(fold(vision.brand.value))):
                 conf = vision.brand.confidence
-                if vision.brand.certainty == Certainty.CERTAIN or conf >= FIRM_BRAND:
+                # A brand the photos suggest is a lead, not a fact: a logo is easy to misjudge and a fake copies it. It
+                # is adopted (and may then name the listing's brand, hence its comparables) only when a label or the OCR
+                # confirms the same name AND the model is sure (certain, or probable with confidence >= 0.7). Anything
+                # less is kept as an inferred guess (``brand_guess``): shown, never used to filter the comparables.
+                confirmed = vision.brand.corroborated is True
+                if confirmed and (
+                    vision.brand.certainty == Certainty.CERTAIN
+                    or (vision.brand.certainty == Certainty.PROBABLE and conf >= IMAGE_BRAND_MIN)
+                ):
                     res.brand = Attribute(vb[0].slug, vision.brand.certainty, "image", conf)
                     chosen = (vb[0], vb[1])
                     res.evidence.append(f"Brand '{vb[0].name}' riconosciuto dalle foto")
                 else:
-                    self._set_guess(res, vb[0], "image", conf, "letto dalle foto con poca sicurezza")
+                    self._set_guess(res, vb[0], "image", conf, "letto dalle foto senza una lettura sicura")
 
         if chosen:
             brand, alias = chosen

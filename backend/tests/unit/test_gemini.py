@@ -344,3 +344,94 @@ def test_the_half_open_trial_slot_is_given_back_when_the_call_is_refused() -> No
     assert b.allow() and not b.allow()  # one trial only
     b.release()
     assert b.allow()
+
+
+# ------------------------------------------------------------------ V09: blocks are named, bounded and not retried
+class _Scripted(GeminiClient):
+    """A client whose provider answer is scripted: what ``structured`` does with it is the point."""
+
+    def __init__(self, data: dict[str, Any]) -> None:
+        super().__init__(
+            Settings(
+                ai_provider="gemini",
+                ai_api_key="k",
+                ai_model="gemini-2.5-flash",
+                ai_model_cheap="gemini-2.5-flash-lite",
+            ),
+            budget=_Budget(),  # type: ignore[arg-type]
+        )
+        self.data = data
+        self.bodies: list[dict[str, Any]] = []
+
+    async def _generate(self, **kw: Any) -> Any:
+        from decimal import Decimal
+
+        self.bodies.append(kw["body"])
+        return self.data, Decimal("0")
+
+
+def _answer(
+    parts: list[dict[str, Any]] | None, finish: str = "STOP", block: str | None = None
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "candidates": [{"content": {"parts": parts or []}, "finishReason": finish}],
+        "usageMetadata": {},
+    }
+    if block:
+        out["promptFeedback"] = {"blockReason": block}
+    return out
+
+
+@pytest.mark.parametrize(
+    ("data", "reason"),
+    [
+        (_answer([], "SAFETY"), "refused"),
+        (_answer([], "PROHIBITED_CONTENT"), "refused"),
+        (_answer([], "BLOCKLIST"), "refused"),
+        (_answer([], "SPII"), "refused"),  # a parcel label or an ID card in the photos
+        (_answer([], "RECITATION"), "refused"),
+        (_answer([], "OTHER"), "refused"),
+        (_answer([], "IMAGE_SAFETY"), "refused"),
+        (_answer([], "IMAGE_PROHIBITED_CONTENT"), "refused"),
+        (_answer([], "STOP", block="OTHER"), "refused"),
+        (_answer([{"text": '{"a": nu'}], "MAX_TOKENS"), "truncated"),
+        (_answer([{"text": "not json"}]), "bad_answer"),
+        (_answer([{"text": "[1]"}]), "bad_answer"),
+        (
+            {"usageMetadata": {}},
+            "bad_answer",
+        ),  # no candidate at all: asked again, but the analyzer caps it at two
+    ],
+)
+async def test_the_finish_reasons_of_a_block_are_a_refusal_not_a_bad_answer(
+    data: dict[str, Any], reason: str
+) -> None:
+    from app.ai.llm import AiDeferred
+
+    c = _Scripted(data)
+    with pytest.raises(AiDeferred) as e:
+        await c.structured(
+            system="s",
+            content=[],
+            schema={"type": "object"},
+            purpose="vision",
+            raise_on_defer=True,
+            report_unusable=True,
+        )
+    assert e.value.reason == reason
+
+
+async def test_the_vision_schema_sent_to_gemini_bounds_every_list_and_anthropics_is_left_alone() -> None:
+    from app.vision.analyzer import VISION_SCHEMA
+
+    c = _Scripted(_answer([{"text": "{}"}]))
+    await c.structured(system="s", content=[], schema=VISION_SCHEMA, purpose="vision", max_tokens=6144)
+    sent = c.bodies[0]["generationConfig"]
+    assert sent["maxOutputTokens"] == 6144
+    props = sent["responseSchema"]["properties"]
+    assert props["defects"]["maxItems"] == 20 and props["photo_findings"]["maxItems"] == 40
+    assert all("maxItems" in props[k] for k in ("labels", "photo_roles", "photo_checks", "unobserved_parts"))
+    assert "maxItems" not in str(VISION_SCHEMA)  # Anthropic's structured output accepts no maxItems
+    # Other purposes are not capped.
+    await c.structured(system="s", content=[], schema=VISION_SCHEMA, purpose="analysis")
+    assert "maxItems" not in str(c.bodies[1]["generationConfig"]["responseSchema"])
