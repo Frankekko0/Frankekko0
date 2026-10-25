@@ -56,7 +56,14 @@ Differenze rispetto al brief, da decidere:
 
 ## 4. Test eseguiti
 
-- Backend: vedi la sezione "Risultato della suite" in fondo.
+- Backend (`pytest`, PostgreSQL 16 e Redis reali, migrazioni da zero): **2347 superati, 2 falliti** su 2349.
+  I 2 falliscono anche da soli e non dipendono dai file aggiunti qui: sono regressioni dei commit WIP.
+  - `tests/api/test_ai_queue_api.py::test_usage_shows_the_request_caps_and_the_queue`: in coda per l'analisi AI ci sono 4 annunci invece di 6.
+  - `tests/integration/test_vision_priority.py::test_a_capture_queues_no_photo_check_until_the_browser_has_uploaded_the_photos`: solo 1 annuncio su 5 risulta promettente, il test ne attende almeno 3.
+  Entrambi indicano che, dopo le modifiche WIP a prezzi ed estrazione, meno annunci superano le soglie
+  per la coda AI e per le foto. Va deciso se è giusto il nuovo comportamento (e si aggiornano i test) o
+  se è una regressione (e si corregge il motore). Finché non è chiarito, la catena di cattura e
+  analisi non è da considerare verificata.
 - Frontend: `tsc --noEmit` pulito, `vitest` 39/39.
 - Estensione: `node --test` 52/52.
 - Collaudo del flusso minimo: `tests/unit/test_cowork_smoke.py` 7/7.
