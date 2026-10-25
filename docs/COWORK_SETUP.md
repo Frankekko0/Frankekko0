@@ -56,14 +56,14 @@ Differenze rispetto al brief, da decidere:
 
 ## 4. Test eseguiti
 
-- Backend (`pytest`, PostgreSQL 16 e Redis reali, migrazioni da zero): **2347 superati, 2 falliti** su 2349.
-  I 2 falliscono anche da soli e non dipendono dai file aggiunti qui: sono regressioni dei commit WIP.
-  - `tests/api/test_ai_queue_api.py::test_usage_shows_the_request_caps_and_the_queue`: in coda per l'analisi AI ci sono 4 annunci invece di 6.
-  - `tests/integration/test_vision_priority.py::test_a_capture_queues_no_photo_check_until_the_browser_has_uploaded_the_photos`: solo 1 annuncio su 5 risulta promettente, il test ne attende almeno 3.
-  Entrambi indicano che, dopo le modifiche WIP a prezzi ed estrazione, meno annunci superano le soglie
-  per la coda AI e per le foto. Va deciso se è giusto il nuovo comportamento (e si aggiornano i test) o
-  se è una regressione (e si corregge il motore). Finché non è chiarito, la catena di cattura e
-  analisi non è da considerare verificata.
+- Backend (`pytest`, PostgreSQL 16 e Redis reali, migrazioni da zero): **2349 superati su 2349**.
+  I 2 fallimenti trovati alla prima esecuzione venivano dai commit WIP ed erano nei test, non nel motore:
+  - coda AI (`740f9af`): la revisione del modello ora riguarda solo i verdetti che può cambiare (PASS e
+    WATCHLIST sotto la soglia di profitto restano fuori, per scelta documentata in `test_ai_review_scope.py`);
+    il vecchio test contava ancora tutte le righe sopra il Flip Score;
+  - priorità foto (`7df0c6f`): il mercato di prova era datato al 1/10/2026 mentre la cattura analizza con
+    l'ora reale; con la regola "prezzi richiesti non rivisti da 21 giorni non contano" il test falliva con il
+    passare dei giorni. Ora il mercato di quel test è datato all'ora reale.
 - Frontend: `tsc --noEmit` pulito, `vitest` 39/39.
 - Estensione: `node --test` 52/52.
 - Collaudo del flusso minimo: `tests/unit/test_cowork_smoke.py` 7/7.

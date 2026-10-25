@@ -1,7 +1,7 @@
 """Ingestion, duplicate detection, analysis pipeline, alerts and database constraints."""
 
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal as D
 
 import pytest
@@ -33,8 +33,11 @@ from tests.conftest import NOW
 pytestmark = pytest.mark.usefixtures("clean_db")
 
 
-async def build_market(session, make_listing: Callable[..., ProviderListing]) -> None:
-    """30 sold + 15 active Ralph Lauren Custom Slim Fit polos around 26-34 EUR, plus one outlier."""
+async def build_market(session, make_listing: Callable[..., ProviderListing], now: datetime = NOW) -> None:
+    """30 sold + 15 active Ralph Lauren Custom Slim Fit polos around 26-34 EUR, plus one outlier.
+
+    ``now``: the clock the market is dated from. Tests that analyse at the wall clock (a capture through the API)
+    pass it, or the asks age with the calendar and drop out as stale (``ACTIVE_FRESH_DAYS``)."""
     sold_prices = [
         24,
         25,
@@ -68,15 +71,17 @@ async def build_market(session, make_listing: Callable[..., ProviderListing]) ->
         30,
     ]
     listings = [
-        make_listing(price=p, status="sold", published_days_ago=10 + i % 20, sold_after_days=3 + i % 5)
+        make_listing(
+            price=p, status="sold", published_days_ago=10 + i % 20, sold_after_days=3 + i % 5, now=now
+        )
         for i, p in enumerate(sold_prices)
     ]
     listings += [
-        make_listing(price=p, published_days_ago=1 + i)
+        make_listing(price=p, published_days_ago=1 + i, now=now)
         for i, p in enumerate([34, 35, 36, 33, 38, 39, 35, 37, 36, 34, 40, 35, 36, 37, 38])
     ]
-    listings.append(make_listing(price=140, published_days_ago=4))  # absurd ask: must be ignored
-    await IngestionService(session, "test").ingest(listings, now=NOW)
+    listings.append(make_listing(price=140, published_days_ago=4, now=now))  # absurd ask: must be ignored
+    await IngestionService(session, "test").ingest(listings, now=now)
     await session.commit()
 
 

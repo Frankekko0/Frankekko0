@@ -1,6 +1,7 @@
 """Photo (vision) checks: queued after the capture response, best candidates first."""
 
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -125,7 +126,7 @@ async def test_a_capture_queues_no_photo_check_until_the_browser_has_uploaded_th
     from app.db.session import session_scope
 
     async with session_scope() as s:
-        await build_market(s, make_listing)
+        await build_market(s, make_listing, now=datetime.now(UTC))  # the capture analyses at the wall clock
     calls: list[dict[str, Any]] = []
 
     async def fake_enqueue(function: str, *args: Any, **kw: Any) -> bool:

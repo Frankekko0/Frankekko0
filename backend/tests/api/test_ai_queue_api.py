@@ -43,8 +43,11 @@ async def test_usage_shows_the_request_caps_and_the_queue(
     assert body["limits"]["cheap"]["model"] == body["models"]["cheap"]
     queue = body["analyst_queue"]
     assert queue["min_flip_score"] == 80.0
-    assert queue["pending"] == len(ids) and queue["exhausted"] == 1 and queue["reviewed"] == 0
-    assert queue["ready"] == len(ids) - 1 and queue["deferred"] == 0
+    # The review's scope is the verdict (AI_REVIEW_SCOPE=actionable), not the flip score alone: the PASS ("dear") and the
+    # watchlist with a risk-adjusted profit under the floor ("watch") do not wait for it, whatever their flip score.
+    in_scope = len(ids) - 2
+    assert queue["pending"] == in_scope and queue["exhausted"] == 1 and queue["reviewed"] == 0
+    assert queue["ready"] == in_scope - 1 and queue["deferred"] == 0
     assert queue["last_errors"] == {"bad_answer": 1}
 
 
