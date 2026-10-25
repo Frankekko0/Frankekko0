@@ -1,0 +1,320 @@
+{
+  "_nota": "Dati di prova inventati per collaudare il flusso: non sono annunci né vendite reali.",
+  "profile_confirmed": true,
+  "cost_profile": {
+    "buyer_protection_fixed": "0.70",
+    "buyer_protection_pct": "0.05",
+    "shipping_in": "3.49",
+    "packaging": "0.50",
+    "advertising": "0",
+    "shipping_out": "0",
+    "selling_fee_pct": "0"
+  },
+  "items": [
+    {
+      "id": "TEST-001",
+      "title": "Felpa Carhartt WIP Chase grigia M",
+      "url": "https://www.vinted.it/items/900000001-felpa-carhartt-chase",
+      "captured_at": "2026-10-25T10:00:00+00:00",
+      "price": "12.50",
+      "shipping": "2.99",
+      "buyer_protection": "1.33",
+      "restoration": "0",
+      "brand": "Carhartt WIP",
+      "size": "M",
+      "condition": "very_good",
+      "photo_count": 6,
+      "description": "Felpa Chase grigia taglia M, indossata poche volte, nessun difetto visibile, etichette presenti.",
+      "identification_confidence": 85,
+      "brand_counterfeit_risk": 0.05,
+      "sell_through": 0.5,
+      "median_days_to_sell": 5,
+      "comparables": [
+        {
+          "source": "test",
+          "date": "2026-10-01",
+          "price": "30.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-03",
+          "price": "32.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-07",
+          "price": "34.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-10",
+          "price": "35.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-14",
+          "price": "38.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-20",
+          "price": "40.00",
+          "sold": true
+        }
+      ]
+    },
+    {
+      "id": "TEST-002",
+      "title": "Stesso annuncio di TEST-001 da un altro dominio",
+      "url": "https://www.vinted.fr/items/900000001-sweat-carhartt",
+      "captured_at": "2026-10-25T10:05:00+00:00",
+      "price": "10.00"
+    },
+    {
+      "id": "TEST-003",
+      "title": "Maglia calcio vintage senza link",
+      "url": "",
+      "captured_at": "2026-10-25T10:10:00+00:00",
+      "price": "12.00"
+    },
+    {
+      "id": "TEST-004",
+      "title": "Air Jordan 1 High a prezzo troppo basso",
+      "url": "https://www.vinted.it/items/900000004-air-jordan-1",
+      "captured_at": "2026-10-25T10:15:00+00:00",
+      "price": "15.00",
+      "shipping": "4.49",
+      "restoration": "0",
+      "brand": "Jordan",
+      "size": "43",
+      "condition": "new_with_tags",
+      "photo_count": 2,
+      "description": "Nuove",
+      "identification_confidence": 60,
+      "brand_counterfeit_risk": 0.5,
+      "counterfeit_suspected": true,
+      "sell_through": 0.6,
+      "median_days_to_sell": 3,
+      "comparables": [
+        {
+          "source": "test",
+          "date": "2026-10-05",
+          "price": "120.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-12",
+          "price": "135.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-18",
+          "price": "150.00",
+          "sold": true
+        }
+      ]
+    },
+    {
+      "id": "TEST-005",
+      "title": "T-shirt Nike basic, margine troppo basso",
+      "url": "https://www.vinted.it/items/900000005-tshirt-nike",
+      "captured_at": "2026-10-25T10:20:00+00:00",
+      "price": "18.00",
+      "shipping": "2.99",
+      "restoration": "0",
+      "brand": "Nike",
+      "size": "L",
+      "condition": "good",
+      "photo_count": 4,
+      "description": "T-shirt Nike nera taglia L, buone condizioni, lavata e piegata.",
+      "identification_confidence": 80,
+      "brand_counterfeit_risk": 0.05,
+      "sell_through": 0.4,
+      "median_days_to_sell": 8,
+      "comparables": [
+        {
+          "source": "test",
+          "date": "2026-10-02",
+          "price": "20.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-09",
+          "price": "22.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-16",
+          "price": "24.00",
+          "sold": true
+        }
+      ]
+    },
+    {
+      "id": "TEST-006",
+      "title": "Giacca The North Face, solo prezzi richiesti",
+      "url": "https://www.vinted.it/items/900000006-giacca-tnf",
+      "captured_at": "2026-10-25T10:25:00+00:00",
+      "price": "12.00",
+      "shipping": "3.49",
+      "restoration": "0",
+      "brand": "The North Face",
+      "size": "S",
+      "condition": "good",
+      "photo_count": 5,
+      "description": "Giacca leggera The North Face taglia S, piccolo segno sulla manica sinistra.",
+      "identification_confidence": 75,
+      "brand_counterfeit_risk": 0.2,
+      "comparables": [
+        {
+          "source": "test",
+          "date": "2026-10-20",
+          "price": "40.00",
+          "sold": false
+        },
+        {
+          "source": "test",
+          "date": "2026-10-21",
+          "price": "45.00",
+          "sold": false
+        },
+        {
+          "source": "test",
+          "date": "2026-10-22",
+          "price": "50.00",
+          "sold": false
+        }
+      ]
+    },
+    {
+      "id": "TEST-007",
+      "title": "Sneakers New Balance da pulire, costo di pulizia non noto",
+      "url": "https://www.vinted.it/items/900000007-new-balance-574",
+      "captured_at": "2026-10-25T10:30:00+00:00",
+      "price": "9.00",
+      "shipping": "3.49",
+      "restoration": null,
+      "brand": "New Balance",
+      "size": "42",
+      "condition": "satisfactory",
+      "photo_count": 5,
+      "description": "New Balance 574 taglia 42, suola consumata e tomaia sporca, da pulire.",
+      "identification_confidence": 80,
+      "brand_counterfeit_risk": 0.05,
+      "sell_through": 0.5,
+      "median_days_to_sell": 6,
+      "comparables": [
+        {
+          "source": "test",
+          "date": "2026-10-04",
+          "price": "30.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-11",
+          "price": "33.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-19",
+          "price": "36.00",
+          "sold": true
+        }
+      ]
+    },
+    {
+      "id": "TEST-008",
+      "title": "Polo Lacoste, buon margine ma domanda debole",
+      "url": "https://www.vinted.it/items/900000008-polo-lacoste",
+      "captured_at": "2026-10-25T10:35:00+00:00",
+      "price": "10.00",
+      "shipping": "2.99",
+      "buyer_protection": "1.20",
+      "restoration": "0",
+      "brand": "Lacoste",
+      "size": "XL",
+      "condition": "very_good",
+      "photo_count": 5,
+      "description": "Polo Lacoste bianca taglia XL, ottime condizioni, coccodrillo ricamato integro.",
+      "identification_confidence": 85,
+      "brand_counterfeit_risk": 0.05,
+      "sell_through": 0.1,
+      "median_days_to_sell": 40,
+      "comparables": [
+        {
+          "source": "test",
+          "date": "2026-09-01",
+          "price": "26.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-09-15",
+          "price": "27.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-01",
+          "price": "28.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-15",
+          "price": "30.00",
+          "sold": true
+        }
+      ]
+    },
+    {
+      "id": "TEST-009",
+      "title": "Giubbotto Stone Island, spesa oltre il limite per articolo",
+      "url": "https://www.vinted.it/items/900000009-stone-island",
+      "captured_at": "2026-10-25T10:40:00+00:00",
+      "price": "22.00",
+      "shipping": "4.49",
+      "restoration": "0",
+      "brand": "Stone Island",
+      "size": "M",
+      "condition": "very_good",
+      "photo_count": 7,
+      "description": "Giubbotto Stone Island taglia M con badge e certilogo fotografati, ottime condizioni.",
+      "identification_confidence": 85,
+      "brand_counterfeit_risk": 0.05,
+      "sell_through": 0.5,
+      "median_days_to_sell": 7,
+      "comparables": [
+        {
+          "source": "test",
+          "date": "2026-10-03",
+          "price": "55.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-10",
+          "price": "60.00",
+          "sold": true
+        },
+        {
+          "source": "test",
+          "date": "2026-10-17",
+          "price": "70.00",
+          "sold": true
+        }
+      ]
+    }
+  ]
+}
